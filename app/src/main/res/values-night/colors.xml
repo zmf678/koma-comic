@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="surface_bg">#121316</color>
+    <color name="surface_card">#22252B</color>
+    <color name="surface_pill">#23262E</color>
+    <color name="text_primary">#ECEEF2</color>
+    <color name="text_secondary">#9FA5B0</color>
+    <color name="rail_bg">#181A1F</color>
+</resources>

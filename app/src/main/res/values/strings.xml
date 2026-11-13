@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">ARK Reader</string>
+    <string name="nav_home">首页</string>
+    <string name="nav_bookshelf">书架</string>
+    <string name="nav_warehouse">仓库</string>
+    <string name="nav_settings">设置</string>
+    <string name="search_hint">搜索</string>
+    <string name="tab_all">全部</string>
+    <string name="tab_favorite">收藏</string>
+    <string name="tab_history">历史</string>
+    <string name="continue_reading">继续阅读</string>
+    <string name="empty_comics_tip">暂无漫画\n点击右上角或前往「仓库」添加本地/WebDAV目录</string>
+</resources>

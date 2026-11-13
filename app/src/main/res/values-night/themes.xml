@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.ArkReader" parent="Theme.Material3.DayNight.NoActionBar">
+        <item name="colorPrimary">#8CB4F0</item>
+        <item name="colorPrimaryContainer">#2D4568</item>
+        <item name="colorOnPrimaryContainer">#E1ECFC</item>
+        <item name="android:windowBackground">@color/surface_bg</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
+
+    <style name="Theme.ArkReader.Red" parent="Theme.ArkReader">
+        <item name="colorPrimary">#F28B82</item>
+        <item name="colorPrimaryContainer">#6B2624</item>
+    </style>
+    <style name="Theme.ArkReader.Orange" parent="Theme.ArkReader">
+        <item name="colorPrimary">#F6AE70</item>
+        <item name="colorPrimaryContainer">#693811</item>
+    </style>
+    <style name="Theme.ArkReader.Yellow" parent="Theme.ArkReader">
+        <item name="colorPrimary">#F0CB6B</item>
+        <item name="colorPrimaryContainer">#5F470C</item>
+    </style>
+    <style name="Theme.ArkReader.Green" parent="Theme.ArkReader">
+        <item name="colorPrimary">#7CD49E</item>
+        <item name="colorPrimaryContainer">#1F5234</item>
+    </style>
+    <style name="Theme.ArkReader.Cyan" parent="Theme.ArkReader">
+        <item name="colorPrimary">#6CD3E2</item>
+        <item name="colorPrimaryContainer">#144F59</item>
+    </style>
+    <style name="Theme.ArkReader.Blue" parent="Theme.ArkReader">
+        <item name="colorPrimary">#8CB4F0</item>
+        <item name="colorPrimaryContainer">#2D4568</item>
+    </style>
+    <style name="Theme.ArkReader.Purple" parent="Theme.ArkReader">
+        <item name="colorPrimary">#C4A7F2</item>
+        <item name="colorPrimaryContainer">#472C70</item>
+    </style>
+    <style name="Theme.ArkReader.Pink" parent="Theme.ArkReader">
+        <item name="colorPrimary">#F29BC1</item>
+        <item name="colorPrimaryContainer">#682545</item>
+    </style>
+</resources>
