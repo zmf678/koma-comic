@@ -109,7 +109,7 @@ class ComicDetailActivity : AppCompatActivity() {
                 if (bmp != null) {
                     binding.ivCover.setImageBitmap(bmp)
                 } else {
-                    binding.ivCover.setImageResource(R.drawable.ic_ark_logo)
+                    binding.ivCover.setImageResource(R.drawable.ic_koma_logo)
                 }
             }
         }

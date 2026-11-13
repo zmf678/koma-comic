@@ -1,6 +1,10 @@
-# ARK Reader
+# 漫格漫画 (KomaComic)
 
-**ARK Reader** 是一款面向 Android 平板与手机打造的纯本地 & WebDAV 开源漫画阅读器。设计上专注本地漫画收藏、大屏横竖屏自适应阅读以及轻量零打扰体验：无广告、无使用期限弹窗、无第三方分析或统计 SDK。
+<p>
+  <img src="app/src/main/res/drawable-nodpi/ic_koma_logo.png" alt="KomaComic Icon" width="96" />
+</p>
+
+**漫格漫画（KomaComic）** 是一款面向 Android 平板与手机打造的纯本地 & WebDAV 开源漫画阅读器。名字取自漫画「分镜格（Koma）」，专注本地漫画收藏、大屏横竖屏自适应双页阅读以及轻量零打扰体验：无广告、无使用期限弹窗、无第三方分析或统计 SDK。
 
 > 包名：`com.arkreader.comic` · 最低系统要求：Android 9.0 (API 28) · 目标 SDK：Android 14 (API 34)
 
@@ -39,7 +43,7 @@
 ## 项目结构
 
 ```text
-ark-reader/
+koma-comic/
 ├── app/
 │   ├── build.gradle.kts
 │   └── src/

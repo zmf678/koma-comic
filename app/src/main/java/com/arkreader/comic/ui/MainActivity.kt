@@ -458,7 +458,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun loadCoverAsync(cacheKey: String, imageView: ImageView) {
         imageView.tag = cacheKey
-        imageView.setImageResource(R.drawable.ic_ark_logo)
+        imageView.setImageResource(R.drawable.ic_koma_logo)
         if (cacheKey.isBlank()) return
         lifecycleScope.launch {
             val bmp: Bitmap? = withContext(Dispatchers.IO) {

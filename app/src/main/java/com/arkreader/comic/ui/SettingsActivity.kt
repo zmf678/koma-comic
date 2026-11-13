@@ -99,9 +99,9 @@ class SettingsActivity : AppCompatActivity() {
             Toast.makeText(this, "缓存已清理", Toast.LENGTH_SHORT).show()
             renderSettings()
         }
-        addActionRow("关于 ARK Reader", "开源本地 & WebDAV 漫画阅读器 (v1.0.0)") {
+        addActionRow("关于 漫格漫画 (KomaComic)", "开源本地 & WebDAV 漫画阅读器 (v1.0.0)") {
             MaterialAlertDialogBuilder(this)
-                .setTitle("关于 ARK Reader")
+                .setTitle("关于 漫格漫画 (KomaComic)")
                 .setMessage("纯本地、无广告、无时限的平板与手机漫画阅读器。\n支持文件夹 / ZIP / CBZ / PDF / EPUB 与 WebDAV。")
                 .setPositiveButton("确定", null)
                 .show()
