@@ -4,6 +4,7 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.util.LruCache
+import android.webkit.CookieManager
 import java.io.File
 import java.io.FileOutputStream
 import java.net.HttpURLConnection
@@ -96,7 +97,8 @@ class CoverCache(context: Context) {
 
     private fun fetchHttpBytes(urlStr: String, headers: Map<String, String>): ByteArray? {
         return runCatching {
-            val conn = (URL(urlStr).openConnection() as HttpURLConnection).apply {
+            val url = URL(urlStr)
+            val conn = (url.openConnection() as HttpURLConnection).apply {
                 connectTimeout = 15000
                 readTimeout = 20000
                 instanceFollowRedirects = true
@@ -104,6 +106,14 @@ class CoverCache(context: Context) {
                     "User-Agent",
                     "Mozilla/5.0 (Linux; Android 13; Tablet) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
                 )
+                val cookies = runCatching { CookieManager.getInstance().getCookie(urlStr) }.getOrNull()
+                if (!cookies.isNullOrBlank()) {
+                    setRequestProperty("Cookie", cookies)
+                }
+                val hasReferer = headers.keys.any { it.equals("Referer", ignoreCase = true) }
+                if (!hasReferer && url.host.isNotBlank()) {
+                    setRequestProperty("Referer", "${url.protocol}://${url.host}/")
+                }
                 headers.forEach { (k, v) -> setRequestProperty(k, v) }
             }
             val code = conn.responseCode

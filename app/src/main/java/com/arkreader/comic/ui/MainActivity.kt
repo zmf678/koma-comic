@@ -36,9 +36,11 @@ import com.arkreader.comic.databinding.ItemComicListBinding
 import com.arkreader.comic.engine.LocalScanner
 import com.google.android.material.chip.Chip
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
@@ -55,7 +57,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var binding: ActivityMainBinding
     private val app get() = ArkReaderApp.instance
 
-    private var currentNavMode = NAV_HOME // 0=Home, 1=Collections
+    private var currentNavMode = NAV_HOME // 0=Home, 1=Collections, 2=Warehouse, 3=Settings
     private var activeHomeFilterTag = ""
     private val unlockedShelfIds = mutableSetOf<Long>()
     private val shelfPassTimes = mutableMapOf<Long, Long>()
@@ -63,6 +65,8 @@ class MainActivity : AppCompatActivity() {
     private var scanJob: Job? = null
     private var sourceLoadJob: Job? = null
     private var searchDebounceJob: Job? = null
+    private lateinit var warehousePanel: MainWarehousePanel
+    private lateinit var settingsPanel: MainSettingsPanel
 
     private var onlinePage = 1
     private var onlineMaxPage: Int? = null
@@ -92,49 +96,118 @@ class MainActivity : AppCompatActivity() {
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
+        if (savedInstanceState != null) {
+            currentNavMode = savedInstanceState.getInt(STATE_NAV_MODE, NAV_HOME)
+            activeHomeFilterTag = savedInstanceState.getString(STATE_HOME_FILTER, "")
+        }
+
+        warehousePanel = MainWarehousePanel(
+            activity = this,
+            binding = binding.panelWarehouse,
+            onComicsChanged = {
+                if (currentNavMode == NAV_HOME || currentNavMode == NAV_BOOKSHELF) reloadComics()
+            },
+            onScanAllRequested = { scanAllWarehouses() }
+        )
+        settingsPanel = MainSettingsPanel(
+            activity = this,
+            binding = binding.panelSettings,
+            onGridPrefsChanged = { applyGridLayoutManager() }
+        )
+
         setupNavigation()
         setupSearchAndFilters()
         setupRecycler()
         setupFab()
     }
 
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        outState.putInt(STATE_NAV_MODE, currentNavMode)
+        outState.putString(STATE_HOME_FILTER, activeHomeFilterTag)
+    }
+
     override fun onResume() {
         super.onResume()
-        val selectedId = if (currentNavMode == NAV_HOME) R.id.menu_home else R.id.menu_bookshelf
+        val selectedId = selectedMenuIdForMode(currentNavMode)
         binding.navRail?.menu?.findItem(selectedId)?.isChecked = true
         binding.bottomNav?.menu?.findItem(selectedId)?.isChecked = true
         applyGridLayoutManager()
         relockQuickShelvesIfNeeded()
-        if (currentNavMode == NAV_HOME) rebuildHomeChips() else rebuildCollectionChips()
-        reloadComics()
+        applyNavModePanels(currentNavMode)
+        when (currentNavMode) {
+            NAV_HOME -> {
+                rebuildHomeChips()
+                reloadComics()
+            }
+            NAV_BOOKSHELF -> {
+                rebuildCollectionChips()
+                reloadComics()
+            }
+            NAV_WAREHOUSE -> warehousePanel.refresh()
+            NAV_SETTINGS -> settingsPanel.refresh()
+        }
+    }
+
+    private fun selectedMenuIdForMode(mode: Int): Int = when (mode) {
+        NAV_BOOKSHELF -> R.id.menu_bookshelf
+        NAV_WAREHOUSE -> R.id.menu_warehouse
+        NAV_SETTINGS -> R.id.menu_settings
+        else -> R.id.menu_home
+    }
+
+    private fun applyNavModePanels(mode: Int) {
+        val showComics = mode == NAV_HOME || mode == NAV_BOOKSHELF
+        binding.panelComics.visibility = if (showComics) View.VISIBLE else View.GONE
+        binding.panelWarehouse.root.visibility = if (mode == NAV_WAREHOUSE) View.VISIBLE else View.GONE
+        binding.panelSettings.root.visibility = if (mode == NAV_SETTINGS) View.VISIBLE else View.GONE
+        binding.fabContinue.visibility = if (showComics) View.VISIBLE else View.GONE
+    }
+
+    private fun switchToNavMode(mode: Int) {
+        currentNavMode = mode
+        val selectedId = selectedMenuIdForMode(mode)
+        binding.navRail?.menu?.findItem(selectedId)?.isChecked = true
+        binding.bottomNav?.menu?.findItem(selectedId)?.isChecked = true
+        sourceLoadJob?.cancel()
+        isLoadingMoreOnline = false
+        applyNavModePanels(mode)
+        when (mode) {
+            NAV_HOME -> {
+                binding.chipScroll.visibility = View.VISIBLE
+                binding.chipGroupHome.visibility = View.VISIBLE
+                rebuildHomeChips()
+                reloadComics()
+            }
+            NAV_BOOKSHELF -> {
+                binding.chipScroll.visibility = View.VISIBLE
+                binding.chipGroupHome.visibility = View.VISIBLE
+                rebuildCollectionChips()
+                reloadComics()
+            }
+            NAV_WAREHOUSE -> warehousePanel.refresh()
+            NAV_SETTINGS -> settingsPanel.refresh()
+        }
     }
 
     private fun setupNavigation() {
         val navListener: (Int) -> Boolean = { itemId ->
             when (itemId) {
                 R.id.menu_home -> {
-                    currentNavMode = NAV_HOME
-                    binding.chipScroll.visibility = View.VISIBLE
-                    binding.chipGroupHome.visibility = View.VISIBLE
-                    rebuildHomeChips()
-                    reloadComics()
+                    switchToNavMode(NAV_HOME)
                     true
                 }
                 R.id.menu_bookshelf -> {
-                    currentNavMode = NAV_BOOKSHELF
-                    binding.chipScroll.visibility = View.VISIBLE
-                    binding.chipGroupHome.visibility = View.VISIBLE
-                    rebuildCollectionChips()
-                    reloadComics()
+                    switchToNavMode(NAV_BOOKSHELF)
                     true
                 }
                 R.id.menu_warehouse -> {
-                    startActivity(Intent(this, WarehouseActivity::class.java))
-                    false
+                    switchToNavMode(NAV_WAREHOUSE)
+                    true
                 }
                 R.id.menu_settings -> {
-                    startActivity(Intent(this, SettingsActivity::class.java))
-                    false
+                    switchToNavMode(NAV_SETTINGS)
+                    true
                 }
                 else -> false
             }
@@ -348,6 +421,8 @@ class MainActivity : AppCompatActivity() {
 
     private fun reloadComics() {
         sourceLoadJob?.cancel()
+        isLoadingMoreOnline = false
+        if (currentNavMode != NAV_HOME && currentNavMode != NAV_BOOKSHELF) return
         if (currentNavMode == NAV_HOME && activeHomeFilterTag.startsWith("src:")) {
             val sourceKey = activeHomeFilterTag.removePrefix("src:")
             loadOnlineSourcePage(sourceKey, reset = true)
@@ -384,19 +459,23 @@ class MainActivity : AppCompatActivity() {
 
         binding.tvSectionCount.text = list.size.toString()
         comicAdapter.submitList(list.map { DisplayComicItem.Local(it) })
-        binding.tvEmpty.visibility = if (list.isEmpty()) View.VISIBLE else View.GONE
-        if (list.isEmpty() && currentNavMode == NAV_BOOKSHELF) {
-            binding.tvEmpty.text = "该作品集暂无漫画，可在动漫源长按或进入详情「加入作品集」"
-        } else if (list.isEmpty() && app.db.getWarehouses().isEmpty()) {
-            binding.tvEmpty.text = "尚未添加本地仓库，可在「仓库」中添加本地目录或 WebDAV"
-        } else if (list.isEmpty()) {
-            binding.tvEmpty.text = "当前分类暂无漫画"
+        if (list.isEmpty()) {
+            binding.tvEmpty.visibility = View.VISIBLE
+            binding.tvEmpty.text = when {
+                currentNavMode == NAV_BOOKSHELF -> "该作品集暂无漫画，可在动漫源长按或进入详情「加入作品集」"
+                app.db.getWarehouses().isEmpty() -> "尚未添加本地仓库，可在「仓库」中添加本地目录或 WebDAV"
+                else -> "当前分类暂无漫画"
+            }
+        } else {
+            binding.tvEmpty.visibility = View.GONE
         }
     }
 
     private fun loadOnlineSourcePage(sourceKey: String, reset: Boolean) {
         val srcName = app.db.getComicSource(sourceKey)?.name ?: sourceKey
-        binding.tvSectionTitle.text = if (currentQuery.isNotBlank()) "$srcName · 搜索" else srcName
+        val expectedTag = "src:$sourceKey"
+        val expectedQuery = currentQuery
+        binding.tvSectionTitle.text = if (expectedQuery.isNotBlank()) "$srcName · 搜索" else srcName
         val nextPage = if (reset) 1 else onlinePage + 1
         if (reset) {
             onlineItems.clear()
@@ -409,33 +488,44 @@ class MainActivity : AppCompatActivity() {
         }
         isLoadingMoreOnline = true
         sourceLoadJob = lifecycleScope.launch {
-            val res = runCatching {
-                if (currentQuery.isNotBlank()) {
-                    app.veneraRuntime.searchComics(sourceKey, currentQuery, nextPage)
-                } else {
-                    app.veneraRuntime.loadExplorePage(sourceKey, nextPage)
-                }
+            val res = try {
+                Result.success(
+                    if (expectedQuery.isNotBlank()) {
+                        app.veneraRuntime.searchComics(sourceKey, expectedQuery, nextPage)
+                    } else {
+                        app.veneraRuntime.loadExplorePage(sourceKey, nextPage)
+                    }
+                )
+            } catch (ce: CancellationException) {
+                throw ce
+            } catch (t: Throwable) {
+                Result.failure(t)
+            }
+            if (!coroutineContext.isActive || isDestroyed || isFinishing) return@launch
+            if (currentNavMode != NAV_HOME || activeHomeFilterTag != expectedTag || currentQuery != expectedQuery) {
+                return@launch
             }
             isLoadingMoreOnline = false
             res.onSuccess { (items, maxP) ->
-                if (!isDestroyed) {
-                    if (reset) onlineItems.clear()
-                    val existingIds = onlineItems.asSequence().map { it.id }.toHashSet()
-                    items.forEach { if (existingIds.add(it.id)) onlineItems.add(it) }
-                    onlinePage = nextPage
-                    onlineMaxPage = maxP ?: nextPage
-                    binding.tvSectionCount.text = onlineItems.size.toString()
-                    comicAdapter.submitList(onlineItems.map { DisplayComicItem.Online(it) })
-                    binding.tvEmpty.visibility = if (onlineItems.isEmpty()) View.VISIBLE else View.GONE
-                    if (onlineItems.isEmpty()) {
-                        binding.tvEmpty.text = "「$srcName」暂无匹配漫画"
-                    }
+                if (reset) onlineItems.clear()
+                val existingIds = onlineItems.asSequence().map { it.id }.toHashSet()
+                items.forEach { if (existingIds.add(it.id)) onlineItems.add(it) }
+                onlinePage = nextPage
+                onlineMaxPage = maxP ?: nextPage
+                binding.tvSectionCount.text = onlineItems.size.toString()
+                comicAdapter.submitList(onlineItems.map { DisplayComicItem.Online(it) })
+                binding.tvEmpty.visibility = if (onlineItems.isEmpty()) View.VISIBLE else View.GONE
+                if (onlineItems.isEmpty()) {
+                    binding.tvEmpty.text = "「$srcName」暂无匹配漫画"
                 }
             }.onFailure { err ->
-                if (!isDestroyed && reset) {
+                if (err is CancellationException) return@onFailure
+                if (reset && onlineItems.isEmpty()) {
                     binding.tvSectionCount.text = "0"
                     binding.tvEmpty.visibility = View.VISIBLE
                     binding.tvEmpty.text = "加载「$srcName」失败: ${err.message}\n可切换「本地全部」或在「源管理」中切换动漫源"
+                } else if (!reset) {
+                    Toast.makeText(this@MainActivity, "加载更多失败: ${err.message}", Toast.LENGTH_SHORT).show()
                 }
             }
         }
@@ -577,7 +667,7 @@ class MainActivity : AppCompatActivity() {
                 1 -> reloadComics()
                 2 -> startActivity(Intent(this, SourceManageActivity::class.java))
                 3 -> scanAllWarehouses()
-                4 -> startActivity(Intent(this, WarehouseActivity::class.java))
+                4 -> switchToNavMode(NAV_WAREHOUSE)
                 5, 6 -> startActivity(Intent(this, BookshelfManageActivity::class.java))
             }
             true
@@ -605,7 +695,7 @@ class MainActivity : AppCompatActivity() {
                 }
             }
             Toast.makeText(this@MainActivity, "扫描完成，共索引 $total 部漫画", Toast.LENGTH_SHORT).show()
-            reloadComics()
+            if (currentNavMode == NAV_WAREHOUSE) warehousePanel.refresh() else reloadComics()
         }
     }
 
@@ -778,6 +868,10 @@ class MainActivity : AppCompatActivity() {
     companion object {
         private const val NAV_HOME = 0
         private const val NAV_BOOKSHELF = 1
+        private const val NAV_WAREHOUSE = 2
+        private const val NAV_SETTINGS = 3
+        private const val STATE_NAV_MODE = "state_nav_mode"
+        private const val STATE_HOME_FILTER = "state_home_filter"
         private const val TAG_LOCAL_ALL = "local:all"
         private const val TAG_LOCAL_FAV = "local:fav"
         private const val TAG_LOCAL_HISTORY = "local:history"

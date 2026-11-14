@@ -47,6 +47,15 @@
             android:layout_height="wrap_content" />
 
         <ImageButton
+            android:id="@+id/btnSourceAccount"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="账号登录"
+            android:src="@drawable/ic_person"
+            app:tint="@color/text_primary" />
+
+        <ImageButton
             android:id="@+id/btnSourceConfig"
             android:layout_width="40dp"
             android:layout_height="40dp"

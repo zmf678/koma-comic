@@ -770,25 +770,25 @@ class DatabaseHelper(context: Context) : SQLiteOpenHelper(context, DB_NAME, null
                 comicId = existing.id
                 val cv = ContentValues().apply {
                     put("title", title)
-                    if (subTitle.isNotEmpty()) put("path", subTitle)
-                    if (coverKey.isNotEmpty()) put("cover_key", coverKey)
+                    if (coverKey.isNotEmpty()) put("cover_cache_key", coverKey)
+                    if (chapters.isNotEmpty()) put("total_chapters", chapters.size)
+                    put("updated_at", now)
                 }
                 writableDatabase.update("comics", cv, "id = ?", arrayOf(comicId.toString()))
             } else {
                 val cv = ContentValues().apply {
                     put("warehouse_id", 0L)
                     put("title", title)
-                    put("path", subTitle.ifEmpty { sourceKey })
                     put("source_uri", comicUri)
                     put("format", ComicFormat.ONLINE.name)
-                    put("entry_prefix", sourceKey)
-                    put("cover_key", coverKey)
-                    put("total_pages", chapters.size)
+                    put("cover_cache_key", coverKey)
+                    put("total_chapters", chapters.size)
                     put("last_read_chapter_id", 0L)
+                    put("last_read_page", 0)
                     put("last_read_at", 0L)
+                    put("updated_at", now)
                     put("is_favorite", 0)
                     put("reader_config_id", 1L)
-                    put("added_at", now)
                 }
                 comicId = writableDatabase.insert("comics", null, cv)
             }

@@ -23,6 +23,7 @@ class ZoomableImageView @JvmOverloads constructor(
 
     var onSingleTapAt: ((relX: Float, relY: Float) -> Unit)? = null
     var verticalFitWidthMode: Boolean = false
+    var doubleTapZoomEnabled: Boolean = true
 
     private val matrixValues = FloatArray(9)
     private val imageMatrixInternal = Matrix()
@@ -58,6 +59,7 @@ class ZoomableImageView @JvmOverloads constructor(
         }
 
         override fun onDoubleTap(e: MotionEvent): Boolean {
+            if (!doubleTapZoomEnabled) return false
             val nextScale = if (currentScale > 1.5f) 1f else 2.2f
             val factor = nextScale / currentScale
             currentScale = nextScale

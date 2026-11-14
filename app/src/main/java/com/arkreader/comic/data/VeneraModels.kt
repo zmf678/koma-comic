@@ -61,7 +61,20 @@ data class RepoSourceItem(
 data class SourceSettingField(
     val key: String,
     val title: String,
-    val type: String, // "input" | "select" | "switch"
+    val type: String, // "input" | "select" | "switch" | "callback"
     val defaultValue: String = "",
-    val options: List<Pair<String, String>> = emptyList()
+    val options: List<Pair<String, String>> = emptyList(),
+    val buttonText: String = ""
 )
+
+data class SourceAccountCap(
+    val hasPasswordLogin: Boolean = false,
+    val hasWebViewLogin: Boolean = false,
+    val webViewLoginUrl: String = "",
+    val cookieFields: List<String> = emptyList(),
+    val registerWebsite: String = "",
+    val isLoggedIn: Boolean = false
+) {
+    val supportsAnyLogin: Boolean
+        get() = hasPasswordLogin || hasWebViewLogin || cookieFields.isNotEmpty()
+}

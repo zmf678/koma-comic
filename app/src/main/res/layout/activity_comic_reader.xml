@@ -218,4 +218,595 @@
             </LinearLayout>
         </LinearLayout>
     </LinearLayout>
+
+    <!-- Right-side dark card-grouped reader settings drawer overlay -->
+    <FrameLayout
+        android:id="@+id/readerSettingsOverlay"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="#66000000"
+        android:clickable="true"
+        android:focusable="true"
+        android:visibility="gone">
+
+        <ScrollView
+            android:id="@+id/readerSettingsPanel"
+            android:layout_width="344dp"
+            android:layout_height="match_parent"
+            android:layout_gravity="end"
+            android:background="@drawable/bg_reader_settings_panel"
+            android:clickable="true"
+            android:clipToPadding="false"
+            android:focusable="true"
+            android:paddingHorizontal="14dp"
+            android:paddingTop="32dp"
+            android:paddingBottom="24dp"
+            android:scrollbars="none">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal"
+                    android:paddingHorizontal="6dp"
+                    android:paddingBottom="14dp">
+
+                    <TextView
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="设置"
+                        android:textColor="#FFFFFFFF"
+                        android:textSize="18sp"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:id="@+id/btnBrightnessAuto"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:background="@drawable/bg_reader_seg_unselected"
+                        android:paddingHorizontal="10dp"
+                        android:paddingVertical="4dp"
+                        android:text="跟随系统亮度"
+                        android:textColor="#B8C0D0"
+                        android:textSize="11sp" />
+                </LinearLayout>
+
+                <!-- Card 1: Brightness -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginBottom="10dp"
+                    android:background="@drawable/bg_reader_settings_card"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal"
+                    android:paddingHorizontal="14dp"
+                    android:paddingVertical="14dp">
+
+                    <TextView
+                        android:layout_width="64dp"
+                        android:layout_height="wrap_content"
+                        android:text="亮度"
+                        android:textColor="#FFE5E8F0"
+                        android:textSize="14sp" />
+
+                    <ImageView
+                        android:id="@+id/ivBrightnessLow"
+                        android:layout_width="18dp"
+                        android:layout_height="18dp"
+                        android:src="@drawable/ic_brightness_low"
+                        app:tint="#B8C0D0" />
+
+                    <SeekBar
+                        android:id="@+id/sbBrightness"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_marginHorizontal="4dp"
+                        android:layout_weight="1"
+                        android:max="100"
+                        android:progressBackgroundTint="#4A5266"
+                        android:progressTint="#3898FF"
+                        android:thumbTint="#FFFFFFFF" />
+
+                    <ImageView
+                        android:id="@+id/ivBrightnessHigh"
+                        android:layout_width="18dp"
+                        android:layout_height="18dp"
+                        android:src="@drawable/ic_brightness_high"
+                        app:tint="#E5E8F0" />
+                </LinearLayout>
+
+                <!-- Card 2: Reading Mode + Apply to All -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginBottom="10dp"
+                    android:background="@drawable/bg_reader_settings_card"
+                    android:orientation="vertical"
+                    android:paddingHorizontal="14dp"
+                    android:paddingVertical="12dp">
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal">
+
+                        <TextView
+                            android:layout_width="64dp"
+                            android:layout_height="wrap_content"
+                            android:text="阅读模式"
+                            android:textColor="#FFE5E8F0"
+                            android:textSize="14sp" />
+
+                        <LinearLayout
+                            android:id="@+id/btnModeLtr"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:background="@drawable/bg_reader_seg_unselected"
+                            android:gravity="center"
+                            android:orientation="vertical"
+                            android:paddingVertical="8dp">
+
+                            <ImageView
+                                android:id="@+id/ivModeLtr"
+                                android:layout_width="22dp"
+                                android:layout_height="18dp"
+                                android:src="@drawable/ic_mode_ltr"
+                                app:tint="#B8C0D0" />
+
+                            <TextView
+                                android:id="@+id/tvModeLtr"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:layout_marginTop="3dp"
+                                android:maxLines="1"
+                                android:text="普通模式"
+                                android:textColor="#B8C0D0"
+                                android:textSize="11sp" />
+                        </LinearLayout>
+
+                        <LinearLayout
+                            android:id="@+id/btnModeRtl"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="6dp"
+                            android:layout_weight="1"
+                            android:background="@drawable/bg_reader_seg_unselected"
+                            android:gravity="center"
+                            android:orientation="vertical"
+                            android:paddingVertical="8dp">
+
+                            <ImageView
+                                android:id="@+id/ivModeRtl"
+                                android:layout_width="22dp"
+                                android:layout_height="18dp"
+                                android:src="@drawable/ic_mode_rtl"
+                                app:tint="#B8C0D0" />
+
+                            <TextView
+                                android:id="@+id/tvModeRtl"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:layout_marginTop="3dp"
+                                android:maxLines="1"
+                                android:text="日漫模式"
+                                android:textColor="#B8C0D0"
+                                android:textSize="11sp" />
+                        </LinearLayout>
+
+                        <LinearLayout
+                            android:id="@+id/btnModeVertical"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="6dp"
+                            android:layout_weight="1"
+                            android:background="@drawable/bg_reader_seg_unselected"
+                            android:gravity="center"
+                            android:orientation="vertical"
+                            android:paddingVertical="8dp">
+
+                            <ImageView
+                                android:id="@+id/ivModeVertical"
+                                android:layout_width="22dp"
+                                android:layout_height="18dp"
+                                android:src="@drawable/ic_mode_vertical"
+                                app:tint="#B8C0D0" />
+
+                            <TextView
+                                android:id="@+id/tvModeVertical"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:layout_marginTop="3dp"
+                                android:maxLines="1"
+                                android:text="滚动模式"
+                                android:textColor="#B8C0D0"
+                                android:textSize="11sp" />
+                        </LinearLayout>
+                    </LinearLayout>
+
+                    <View
+                        android:layout_width="match_parent"
+                        android:layout_height="1dp"
+                        android:layout_marginVertical="10dp"
+                        android:background="#1FFFFFFF" />
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal">
+
+                        <LinearLayout
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_marginEnd="10dp"
+                            android:layout_weight="1"
+                            android:orientation="vertical">
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="阅读模式设置全部生效"
+                                android:textColor="#FFE5E8F0"
+                                android:textSize="14sp" />
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:layout_marginTop="2dp"
+                                android:text="打开后对采用默认配置的漫画均生效"
+                                android:textColor="#8D95A5"
+                                android:textSize="11sp" />
+                        </LinearLayout>
+
+                        <com.google.android.material.materialswitch.MaterialSwitch
+                            android:id="@+id/swApplyModeAll"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content" />
+                    </LinearLayout>
+                </LinearLayout>
+
+                <!-- Card 3: Quality, Page Layout, Spread Match, Background -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginBottom="10dp"
+                    android:background="@drawable/bg_reader_settings_card"
+                    android:orientation="vertical"
+                    android:paddingHorizontal="14dp"
+                    android:paddingVertical="12dp">
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal">
+
+                        <TextView
+                            android:layout_width="52dp"
+                            android:layout_height="wrap_content"
+                            android:text="画质"
+                            android:textColor="#FFE5E8F0"
+                            android:textSize="14sp" />
+
+                        <TextView
+                            android:id="@+id/btnQualityUltra"
+                            android:layout_width="0dp"
+                            android:layout_height="34dp"
+                            android:layout_weight="1"
+                            android:background="@drawable/bg_reader_seg_unselected"
+                            android:gravity="center"
+                            android:maxLines="1"
+                            android:text="超清"
+                            android:textColor="#B8C0D0"
+                            android:textSize="13sp" />
+
+                        <TextView
+                            android:id="@+id/btnQualityHigh"
+                            android:layout_width="0dp"
+                            android:layout_height="34dp"
+                            android:layout_marginStart="6dp"
+                            android:layout_weight="1"
+                            android:background="@drawable/bg_reader_seg_unselected"
+                            android:gravity="center"
+                            android:maxLines="1"
+                            android:text="高清"
+                            android:textColor="#B8C0D0"
+                            android:textSize="13sp" />
+
+                        <TextView
+                            android:id="@+id/btnQualitySmooth"
+                            android:layout_width="0dp"
+                            android:layout_height="34dp"
+                            android:layout_marginStart="6dp"
+                            android:layout_weight="1"
+                            android:background="@drawable/bg_reader_seg_unselected"
+                            android:gravity="center"
+                            android:maxLines="1"
+                            android:text="流畅"
+                            android:textColor="#B8C0D0"
+                            android:textSize="13sp" />
+                    </LinearLayout>
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="10dp"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal">
+
+                        <TextView
+                            android:layout_width="52dp"
+                            android:layout_height="wrap_content"
+                            android:text="模式"
+                            android:textColor="#FFE5E8F0"
+                            android:textSize="14sp" />
+
+                        <TextView
+                            android:id="@+id/btnPageSingle"
+                            android:layout_width="0dp"
+                            android:layout_height="34dp"
+                            android:layout_weight="1"
+                            android:background="@drawable/bg_reader_seg_unselected"
+                            android:gravity="center"
+                            android:maxLines="1"
+                            android:text="单页"
+                            android:textColor="#B8C0D0"
+                            android:textSize="13sp" />
+
+                        <TextView
+                            android:id="@+id/btnPageDouble"
+                            android:layout_width="0dp"
+                            android:layout_height="34dp"
+                            android:layout_marginStart="6dp"
+                            android:layout_weight="1"
+                            android:background="@drawable/bg_reader_seg_unselected"
+                            android:gravity="center"
+                            android:maxLines="1"
+                            android:text="双页"
+                            android:textColor="#B8C0D0"
+                            android:textSize="13sp" />
+
+                        <TextView
+                            android:id="@+id/btnPageAuto"
+                            android:layout_width="0dp"
+                            android:layout_height="34dp"
+                            android:layout_marginStart="6dp"
+                            android:layout_weight="1"
+                            android:background="@drawable/bg_reader_seg_unselected"
+                            android:gravity="center"
+                            android:maxLines="1"
+                            android:text="自动"
+                            android:textColor="#B8C0D0"
+                            android:textSize="13sp" />
+                    </LinearLayout>
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="10dp"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal">
+
+                        <TextView
+                            android:layout_width="52dp"
+                            android:layout_height="wrap_content"
+                            android:text="跨页"
+                            android:textColor="#FFE5E8F0"
+                            android:textSize="14sp" />
+
+                        <TextView
+                            android:id="@+id/btnSpreadOdd"
+                            android:layout_width="0dp"
+                            android:layout_height="34dp"
+                            android:layout_weight="1"
+                            android:background="@drawable/bg_reader_seg_unselected"
+                            android:gravity="center"
+                            android:maxLines="1"
+                            android:text="首页单页"
+                            android:textColor="#B8C0D0"
+                            android:textSize="13sp" />
+
+                        <TextView
+                            android:id="@+id/btnSpreadEven"
+                            android:layout_width="0dp"
+                            android:layout_height="34dp"
+                            android:layout_marginStart="6dp"
+                            android:layout_weight="1"
+                            android:background="@drawable/bg_reader_seg_unselected"
+                            android:gravity="center"
+                            android:maxLines="1"
+                            android:text="首页双页"
+                            android:textColor="#B8C0D0"
+                            android:textSize="13sp" />
+                    </LinearLayout>
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="10dp"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal">
+
+                        <TextView
+                            android:layout_width="52dp"
+                            android:layout_height="wrap_content"
+                            android:text="背景"
+                            android:textColor="#FFE5E8F0"
+                            android:textSize="14sp" />
+
+                        <TextView
+                            android:id="@+id/btnBgBlack"
+                            android:layout_width="0dp"
+                            android:layout_height="32dp"
+                            android:layout_weight="1"
+                            android:background="@drawable/bg_reader_seg_unselected"
+                            android:gravity="center"
+                            android:maxLines="1"
+                            android:text="纯黑"
+                            android:textColor="#B8C0D0"
+                            android:textSize="12sp" />
+
+                        <TextView
+                            android:id="@+id/btnBgDarkGray"
+                            android:layout_width="0dp"
+                            android:layout_height="32dp"
+                            android:layout_marginStart="5dp"
+                            android:layout_weight="1"
+                            android:background="@drawable/bg_reader_seg_unselected"
+                            android:gravity="center"
+                            android:maxLines="1"
+                            android:text="深灰"
+                            android:textColor="#B8C0D0"
+                            android:textSize="12sp" />
+
+                        <TextView
+                            android:id="@+id/btnBgLightGray"
+                            android:layout_width="0dp"
+                            android:layout_height="32dp"
+                            android:layout_marginStart="5dp"
+                            android:layout_weight="1"
+                            android:background="@drawable/bg_reader_seg_unselected"
+                            android:gravity="center"
+                            android:maxLines="1"
+                            android:text="浅灰"
+                            android:textColor="#B8C0D0"
+                            android:textSize="12sp" />
+
+                        <TextView
+                            android:id="@+id/btnBgWhite"
+                            android:layout_width="0dp"
+                            android:layout_height="32dp"
+                            android:layout_marginStart="5dp"
+                            android:layout_weight="1"
+                            android:background="@drawable/bg_reader_seg_unselected"
+                            android:gravity="center"
+                            android:maxLines="1"
+                            android:text="纯白"
+                            android:textColor="#B8C0D0"
+                            android:textSize="12sp" />
+                    </LinearLayout>
+                </LinearLayout>
+
+                <!-- Card 4: Switches -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginBottom="10dp"
+                    android:background="@drawable/bg_reader_settings_card"
+                    android:orientation="vertical"
+                    android:paddingHorizontal="14dp"
+                    android:paddingVertical="8dp">
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal"
+                        android:paddingVertical="4dp">
+
+                        <TextView
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:text="允许双击缩放画面"
+                            android:textColor="#FFE5E8F0"
+                            android:textSize="14sp" />
+
+                        <com.google.android.material.materialswitch.MaterialSwitch
+                            android:id="@+id/swDoubleTapZoom"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content" />
+                    </LinearLayout>
+
+                    <View
+                        android:layout_width="match_parent"
+                        android:layout_height="1dp"
+                        android:layout_marginVertical="4dp"
+                        android:background="#1FFFFFFF" />
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal"
+                        android:paddingVertical="4dp">
+
+                        <LinearLayout
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_marginEnd="10dp"
+                            android:layout_weight="1"
+                            android:orientation="vertical">
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="智能裁剪页面白边"
+                                android:textColor="#FFE5E8F0"
+                                android:textSize="14sp" />
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:layout_marginTop="2dp"
+                                android:text="自动裁切漫画四周多余留白"
+                                android:textColor="#8D95A5"
+                                android:textSize="11sp" />
+                        </LinearLayout>
+
+                        <com.google.android.material.materialswitch.MaterialSwitch
+                            android:id="@+id/swTrimMargins"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content" />
+                    </LinearLayout>
+
+                    <View
+                        android:layout_width="match_parent"
+                        android:layout_height="1dp"
+                        android:layout_marginVertical="4dp"
+                        android:background="#1FFFFFFF" />
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal"
+                        android:paddingVertical="4dp">
+
+                        <TextView
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:text="展示页码"
+                            android:textColor="#FFE5E8F0"
+                            android:textSize="14sp" />
+
+                        <com.google.android.material.materialswitch.MaterialSwitch
+                            android:id="@+id/swShowPageNumber"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content" />
+                    </LinearLayout>
+                </LinearLayout>
+
+                <TextView
+                    android:id="@+id/btnOpenMoreReaderConfig"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:background="@drawable/bg_reader_settings_card"
+                    android:gravity="center"
+                    android:paddingVertical="12dp"
+                    android:text="更多阅读与点击区域设置..."
+                    android:textColor="#FF6DB4FF"
+                    android:textSize="13.5sp" />
+            </LinearLayout>
+        </ScrollView>
+    </FrameLayout>
 </FrameLayout>

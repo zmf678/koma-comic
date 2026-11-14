@@ -5,6 +5,7 @@ import com.arkreader.comic.data.DoublePageMode
 import com.arkreader.comic.data.ReaderConfig
 import com.arkreader.comic.engine.NaturalSort
 import com.arkreader.comic.engine.PageSlot
+import com.arkreader.comic.engine.SourceRepoClient
 import com.arkreader.comic.engine.SpreadSlotBuilder
 import com.arkreader.comic.engine.VeneraScriptParser
 import org.junit.Assert.assertEquals
@@ -157,5 +158,73 @@ class CoreEngineTest {
         assertEquals("ep1", details.chapters[0].id)
         assertEquals("连载 - 第1话", details.chapters[0].title)
         assertEquals("vol1", details.chapters[2].id)
+    }
+
+    @Test
+    fun veneraObjectMetaMultipartAndRepoUrlResolutionWork() {
+        val objectConfigScript = """
+            const config = {
+                "name": "测试站点",
+                "key": "test_site",
+                "version": "1.2.3",
+                "url": "https://cdn.jsdelivr.net/gh/zmf678/venera-sources@main/test_site.js"
+            };
+            class TestSource extends ComicSource {}
+        """.trimIndent()
+        val meta = VeneraScriptParser.parseScriptMeta(objectConfigScript)
+        assertNotNull(meta)
+        assertEquals("test_site", meta!!.key)
+        assertEquals("测试站点", meta.name)
+        assertEquals("1.2.3", meta.version)
+
+        val multiPartJson = """
+            {
+              "headers": {
+                "Referer": "https://img.test.example/"
+              },
+              "comics": {
+                "热门推荐": [
+                  {
+                    "id": "c100",
+                    "title": "漫画A",
+                    "subtitle": "作者甲",
+                    "cover": "https://img.test.example/a.jpg",
+                    "tags": ["热血", "连载"]
+                  }
+                ],
+                "最新更新": [
+                  {
+                    "id": "c200",
+                    "title": "漫画B",
+                    "author": "作者乙",
+                    "cover": "https://img.test.example/b.jpg"
+                  }
+                ]
+              },
+              "maxPage": 5
+            }
+        """.trimIndent()
+        val (comics, maxPage) = VeneraScriptParser.parseComicsListResult("test_site", multiPartJson)
+        assertEquals(2, comics.size)
+        assertEquals(5, maxPage)
+        val byId = comics.associateBy { it.id }
+        val c100 = byId["c100"]
+        val c200 = byId["c200"]
+        assertNotNull(c100)
+        assertNotNull(c200)
+        assertEquals("https://img.test.example/", c100!!.headers["Referer"])
+        assertEquals("作者甲", c100.subTitle)
+        assertEquals(listOf("热血", "连载"), c100.tags)
+        assertEquals("作者乙", c200!!.subTitle)
+
+        val indexCandidates = SourceRepoClient.resolveIndexCandidateUrls("https://github.com/zmf678/venera-sources")
+        assertTrue(indexCandidates.any { it == "https://cdn.jsdelivr.net/gh/zmf678/venera-sources@main/index.json" })
+        assertTrue(indexCandidates.any { it == "https://raw.githubusercontent.com/zmf678/venera-sources/main/index.json" })
+
+        val scriptCandidates = SourceRepoClient.resolveScriptCandidateUrls(
+            "https://github.com/zmf678/venera-sources/blob/main/copy_manga.js"
+        )
+        assertTrue(scriptCandidates.any { it == "https://cdn.jsdelivr.net/gh/zmf678/venera-sources@main/copy_manga.js" })
+        assertTrue(scriptCandidates.any { it == "https://raw.githubusercontent.com/zmf678/venera-sources/main/copy_manga.js" })
     }
 }

@@ -43,4 +43,20 @@ class PrefsManager(context: Context) {
     var activeBookshelfId: Long
         get() = sp.getLong("active_bookshelf_id", 0L)
         set(value) = sp.edit().putLong("active_bookshelf_id", value).apply()
+
+    var readerBrightness: Int
+        get() = sp.getInt("reader_brightness", -1) // -1 follow system, 0..100 custom
+        set(value) = sp.edit().putInt("reader_brightness", value).apply()
+
+    var applyReaderModeToAll: Boolean
+        get() = sp.getBoolean("apply_reader_mode_to_all", false)
+        set(value) = sp.edit().putBoolean("apply_reader_mode_to_all", value).apply()
+
+    var allowDoubleTapZoom: Boolean
+        get() = sp.getBoolean("allow_double_tap_zoom", true)
+        set(value) = sp.edit().putBoolean("allow_double_tap_zoom", value).apply()
+
+    var readerQuality: Int
+        get() = sp.getInt("reader_quality", 0) // 0超清, 1高清, 2流畅
+        set(value) = sp.edit().putInt("reader_quality", value.coerceIn(0, 2)).apply()
 }

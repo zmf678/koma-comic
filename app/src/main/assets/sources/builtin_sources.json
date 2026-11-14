@@ -1,10 +1,17 @@
 [
   {
+    "key": "copy_manga",
+    "name": "拷贝漫画",
+    "version": "2.3.1",
+    "fileName": "sources/copy_manga.js",
+    "description": "拷贝漫画（支持主号及多账号登录、节点测速、风控指纹管理）"
+  },
+  {
     "key": "zaimanhua",
     "name": "再漫画",
-    "version": "1.0.0",
+    "version": "1.2.6",
     "fileName": "sources/zaimanhua.js",
-    "description": "中文在线漫画源（内置精简版，支持热门排行、更新列表、搜索与章节阅读）"
+    "description": "中文在线漫画源（支持更新列表、分类、搜索、账号登录与章节阅读）"
   },
   {
     "key": "manga_dex",

@@ -5,6 +5,9 @@
 
     window.__veneraSources = {};
     window.__veneraPending = {};
+    window.__veneraAsyncCallbacks = {};
+    window.__veneraAsyncSeq = 0;
+    window.__currentSourceKey = "";
 
     function abToBase64(buffer) {
         if (typeof buffer === "string") return btoa(unescape(encodeURIComponent(buffer)));
@@ -52,25 +55,73 @@
         return v;
     }
 
-    window.sendMessage = function (message) {
-        if (!message || typeof message !== "object") return null;
-        if (message.method === "delay") {
-            return new Promise((resolve) => globalThis.setTimeout(resolve, Number(message.time) || 0));
+    window.__veneraResolveAsync = function (cbId, rawJson) {
+        const entry = window.__veneraAsyncCallbacks[cbId];
+        if (!entry) return;
+        delete window.__veneraAsyncCallbacks[cbId];
+        try {
+            const parsed = rawJson ? JSON.parse(rawJson) : null;
+            if (parsed && parsed.__ab__ !== undefined) {
+                entry.resolve(base64ToAb(parsed.__ab__));
+            } else {
+                entry.resolve(parsed);
+            }
+        } catch (err) {
+            entry.reject(err);
         }
+    };
+
+    window.__veneraRejectAsync = function (cbId, errMsg) {
+        const entry = window.__veneraAsyncCallbacks[cbId];
+        if (!entry) return;
+        delete window.__veneraAsyncCallbacks[cbId];
+        entry.reject(new Error(String(errMsg || "Async call failed")));
+    };
+
+    function prepareSafeMessage(message) {
         const safeMsg = Object.assign({}, message);
         if (safeMsg.value !== undefined) safeMsg.value = encodePayloadValue(safeMsg.value);
         if (safeMsg.key !== undefined && (safeMsg.key instanceof ArrayBuffer || safeMsg.key instanceof Uint8Array)) {
             safeMsg.key = encodePayloadValue(safeMsg.key);
         }
         if (safeMsg.iv !== undefined) safeMsg.iv = encodePayloadValue(safeMsg.iv);
+        if (safeMsg.data !== undefined && (safeMsg.data instanceof ArrayBuffer || safeMsg.data instanceof Uint8Array)) {
+            safeMsg.data = encodePayloadValue(safeMsg.data);
+        }
+        if (safeMsg.image !== undefined && (safeMsg.image instanceof ArrayBuffer || safeMsg.image instanceof Uint8Array)) {
+            safeMsg.image = encodePayloadValue(safeMsg.image);
+        }
+        return safeMsg;
+    }
 
+    function sendAsyncMessage(message) {
+        if (!message || typeof message !== "object") return Promise.resolve(null);
+        const cbId = "cb_" + (++window.__veneraAsyncSeq);
+        const safeMsg = prepareSafeMessage(message);
+        return new Promise((resolve, reject) => {
+            window.__veneraAsyncCallbacks[cbId] = { resolve, reject };
+            try {
+                window._veneraNative.dispatchAsync(cbId, JSON.stringify(safeMsg));
+            } catch (e) {
+                delete window.__veneraAsyncCallbacks[cbId];
+                reject(e);
+            }
+        });
+    }
+
+    window.sendMessage = function (message) {
+        if (!message || typeof message !== "object") return null;
+        if (message.method === "delay") {
+            return new Promise((resolve) => globalThis.setTimeout(resolve, Number(message.time) || 0));
+        }
+        if (message.method === "http" || message.method === "http_bytes") {
+            return sendAsyncMessage(message);
+        }
+        const safeMsg = prepareSafeMessage(message);
         const raw = window._veneraNative.dispatch(JSON.stringify(safeMsg));
         const res = raw ? JSON.parse(raw) : null;
         if (res && res.__ab__ !== undefined) {
             return base64ToAb(res.__ab__);
-        }
-        if (message.method === "http" || message.method === "http_bytes") {
-            return Promise.resolve(res);
         }
         if (message.method === "cookie" && message.function === "get") {
             return Promise.resolve(res || []);
@@ -82,6 +133,9 @@
         version: "1.18.0",
         locale: "zh_CN",
         platform: "android",
+        toast: function (msg) {
+            window.UI.showMessage(msg);
+        },
     };
 
     window.UI = {
@@ -89,6 +143,74 @@
             try {
                 window._veneraNative.dispatch(JSON.stringify({ method: "ui", function: "toast", message: String(msg || "") }));
             } catch (_) {}
+        },
+        showLoading: function (msg) {
+            try {
+                window._veneraNative.dispatch(JSON.stringify({ method: "ui", function: "showLoading", message: String(msg || "") }));
+            } catch (_) {}
+            return { cancel: function () {} };
+        },
+        hideLoading: function () {
+            try {
+                window._veneraNative.dispatch(JSON.stringify({ method: "ui", function: "hideLoading" }));
+            } catch (_) {}
+        },
+        cancelLoading: function () {
+            try {
+                window._veneraNative.dispatch(JSON.stringify({ method: "ui", function: "hideLoading" }));
+            } catch (_) {}
+        },
+        launchUrl: function (url) {
+            try {
+                window._veneraNative.dispatch(JSON.stringify({ method: "ui", function: "launchUrl", url: String(url || "") }));
+            } catch (_) {}
+        },
+        showDialog: async function (title, content, actions) {
+            const actionList = Array.isArray(actions) ? actions : [];
+            const res = await sendAsyncMessage({
+                method: "ui_dialog",
+                title: String(title || "提示"),
+                message: String(content || ""),
+                actions: actionList.map((a) => ({
+                    text: String((a && a.text) || "确定"),
+                    style: String((a && a.style) || "normal"),
+                })),
+            });
+            const idx = res && typeof res.clickedIndex === "number" ? res.clickedIndex : -1;
+            if (idx >= 0 && actionList[idx] && typeof actionList[idx].callback === "function") {
+                return await actionList[idx].callback();
+            }
+            return null;
+        },
+        showInputDialog: async function (title, validator, image) {
+            while (true) {
+                const res = await sendAsyncMessage({
+                    method: "ui_input",
+                    title: String(title || "输入"),
+                    image: image || null,
+                });
+                if (!res || res.cancelled) return null;
+                const val = res.value !== undefined && res.value !== null ? String(res.value) : "";
+                if (typeof validator === "function") {
+                    const err = validator(val);
+                    if (err) {
+                        window.UI.showMessage(err);
+                        continue;
+                    }
+                }
+                return val;
+            }
+        },
+        showSelectDialog: async function (title, options, initialIndex) {
+            const opts = Array.isArray(options) ? options.map(String) : [];
+            const res = await sendAsyncMessage({
+                method: "ui_select",
+                title: String(title || "选择"),
+                options: opts,
+                initialIndex: typeof initialIndex === "number" ? initialIndex : -1,
+            });
+            if (!res || res.index === null || res.index === undefined) return null;
+            return Number(res.index);
         },
     };
 
@@ -138,7 +260,7 @@
             if (bodyData instanceof ArrayBuffer || bodyData instanceof Uint8Array) {
                 bodyData = { __ab__: abToBase64(bodyData) };
             }
-            const res = await sendMessage({
+            const res = await sendAsyncMessage({
                 method: "http",
                 http_method: String(method || "GET").toUpperCase(),
                 url: String(url),
@@ -149,18 +271,26 @@
             return res;
         },
         async fetchBytes(method, url, headers, data) {
-            const res = await sendMessage({
+            let bodyData = data;
+            if (bodyData instanceof ArrayBuffer || bodyData instanceof Uint8Array) {
+                bodyData = { __ab__: abToBase64(bodyData) };
+            }
+            const res = await sendAsyncMessage({
                 method: "http_bytes",
                 http_method: String(method || "GET").toUpperCase(),
                 url: String(url),
                 headers: headers || {},
-                data: data == null ? null : data,
+                data: bodyData == null ? null : bodyData,
             });
             if (res && res.error) throw new Error(res.error);
             if (res && res.bodyBase64) {
                 res.body = base64ToAb(res.bodyBase64);
             }
             return res;
+        },
+        request(opts) {
+            const o = opts || {};
+            return this.sendRequest(o.method || "GET", o.url || "", o.headers || {}, o.data !== undefined ? o.data : o.body);
         },
         get(url, headers) { return this.sendRequest("GET", url, headers, null); },
         post(url, headers, data) { return this.sendRequest("POST", url, headers, data); },
@@ -204,6 +334,7 @@
         }
         get text() { return (this._el.textContent || ""); }
         get innerHTML() { return this._el.innerHTML || ""; }
+        get outerHTML() { return this._el.outerHTML || ""; }
         get localName() { return (this._el.localName || "").toLowerCase(); }
         get id() { return this._el.id || ""; }
         get classNames() { return Array.from(this._el.classList || []); }
@@ -222,6 +353,12 @@
         }
         get nodes() {
             return Array.from(this._el.childNodes || []).map((n) => new HtmlNode(n));
+        }
+        get firstChild() {
+            return this._el.firstChild ? new HtmlNode(this._el.firstChild) : null;
+        }
+        get lastChild() {
+            return this._el.lastChild ? new HtmlNode(this._el.lastChild) : null;
         }
         get parent() {
             return this._el.parentElement ? new HtmlElement(this._el.parentElement) : null;
@@ -245,6 +382,28 @@
                 return Array.from(this._el.querySelectorAll(q)).map((c) => new HtmlElement(c));
             } catch (_) {
                 return [];
+            }
+        }
+        getElementsByTagName(tag) {
+            try {
+                return Array.from(this._el.getElementsByTagName(tag)).map((c) => new HtmlElement(c));
+            } catch (_) {
+                return [];
+            }
+        }
+        getElementsByClassName(cls) {
+            try {
+                return Array.from(this._el.getElementsByClassName(cls)).map((c) => new HtmlElement(c));
+            } catch (_) {
+                return [];
+            }
+        }
+        getElementById(id) {
+            try {
+                const found = this._el.querySelector("#" + CSS.escape(String(id)));
+                return found ? new HtmlElement(found) : null;
+            } catch (_) {
+                return null;
             }
         }
         toString() {
@@ -287,6 +446,20 @@
                 return [];
             }
         }
+        getElementsByTagName(tag) {
+            try {
+                return Array.from(this._doc.getElementsByTagName(tag)).map((c) => new HtmlElement(c));
+            } catch (_) {
+                return [];
+            }
+        }
+        getElementsByClassName(cls) {
+            try {
+                return Array.from(this._doc.getElementsByClassName(cls)).map((c) => new HtmlElement(c));
+            } catch (_) {
+                return [];
+            }
+        }
         getElementById(id) {
             const found = this._doc.getElementById(id);
             return found ? new HtmlElement(found) : null;
@@ -308,20 +481,46 @@
         constructor(opts) { Object.assign(this, opts || {}); }
     };
 
+    window.Comment = class Comment {
+        constructor(opts) { Object.assign(this, opts || {}); }
+    };
+
     window.ComicSource = class ComicSource {
+        constructor() {
+            this.key = window.__currentSourceKey || "";
+        }
         get isLogged() {
-            const token = this.loadData("token");
-            return !!(token && String(token).length > 0);
+            const keys = ["__logged_in__", "token", "account_token_0", "uid", "cookies", "komga_auth", "access_token", "account"];
+            for (const k of keys) {
+                const val = this.loadData(k);
+                if (val === true || val === 1) return true;
+                if (typeof val === "string" && val.length > 0 && val !== "false" && val !== "0") return true;
+                if (Array.isArray(val) && val.length > 0) return true;
+                if (val && typeof val === "object" && Object.keys(val).length > 0) return true;
+            }
+            return false;
         }
         loadSetting(key) {
             const val = sendMessage({ method: "storage", function: "loadSetting", sourceKey: this.key || "", key: String(key) });
             if (val !== null && val !== undefined) return val;
-            if (this.settings && this.settings[key] && this.settings[key].default !== undefined) {
-                return this.settings[key].default;
+            if (this.settings && this.settings[key] !== undefined) {
+                const entry = this.settings[key];
+                if (entry !== null && typeof entry === "object") {
+                    if (entry.default !== undefined) return entry.default;
+                } else {
+                    return entry;
+                }
             }
             return null;
         }
+        saveSetting(key, value) {
+            sendMessage({ method: "storage", function: "saveSetting", sourceKey: this.key || "", key: String(key), value: value });
+        }
         saveData(key, value) {
+            if (value === null || value === undefined) {
+                this.deleteData(key);
+                return;
+            }
             sendMessage({ method: "storage", function: "saveData", sourceKey: this.key || "", key: String(key), value: value });
         }
         loadData(key) {
@@ -330,6 +529,133 @@
         deleteData(key) {
             sendMessage({ method: "storage", function: "deleteData", sourceKey: this.key || "", key: String(key) });
         }
+        translate(key) {
+            const k = String(key || "");
+            const t = this.translation;
+            if (t && typeof t === "object") {
+                const loc = (window.APP && window.APP.locale) || "zh_CN";
+                if (t[loc] && t[loc][k] !== undefined) return t[loc][k];
+                if (t["zh_CN"] && t["zh_CN"][k] !== undefined) return t["zh_CN"][k];
+                if (t["en"] && t["en"][k] !== undefined) return t["en"][k];
+            }
+            return k;
+        }
+    };
+
+    window.__defaultOptionsFor = function (optionList) {
+        if (!Array.isArray(optionList)) return [];
+        return optionList.map(function (opt) {
+            if (!opt) return "";
+            if (opt.default !== undefined && opt.default !== null) return String(opt.default);
+            const arr = Array.isArray(opt.options) ? opt.options : [];
+            if (!arr.length) return "";
+            const first = arr[0];
+            if (first && typeof first === "object") {
+                return String(first.value !== undefined ? first.value : "");
+            }
+            const s = String(first);
+            const dashIdx = s.indexOf("-");
+            return dashIdx >= 0 ? s.slice(0, dashIdx) : s;
+        });
+    };
+
+    window.__extractSourceImageHeaders = function (src) {
+        try {
+            const h = typeof src.headers === "function" ? src.headers() : src.headers;
+            if (!h || typeof h !== "object") return {};
+            const out = {};
+            if (h.Referer || h.referer) out.Referer = String(h.Referer || h.referer);
+            if (h["User-Agent"] || h["user-agent"]) out["User-Agent"] = String(h["User-Agent"] || h["user-agent"]);
+            return out;
+        } catch (_) {
+            return {};
+        }
+    };
+
+    window.__normalizeComicsResult = function (r, page, isSinglePage, fallbackHeaders) {
+        const out = [];
+        const seen = new Set();
+        const extraHeaders = fallbackHeaders && typeof fallbackHeaders === "object" ? fallbackHeaders : {};
+
+        function pushComic(c, partName) {
+            if (!c || typeof c !== "object") return;
+            const rawId = c.id && c.id !== 0 ? c.id : (c.comic_id && c.comic_id !== 0 ? c.comic_id : (c.path_word || c.id));
+            const id = rawId !== undefined && rawId !== null ? String(rawId).trim() : "";
+            const title = String(c.title || c.name || "").trim();
+            if (!id || !title || seen.has(id)) return;
+            seen.add(id);
+            let sub = c.subTitle || c.subtitle || c.authors || "";
+            if (!sub && c.author) {
+                if (Array.isArray(c.author)) {
+                    sub = c.author.map((a) => (a && typeof a === "object" ? a.name : a)).filter(Boolean).join(", ");
+                } else if (typeof c.author === "string") {
+                    sub = c.author;
+                }
+            }
+            if (!sub && partName) sub = String(partName);
+            const mergedHeaders = Object.assign({}, extraHeaders, c.headers || {});
+            out.push({
+                id: id,
+                title: title,
+                subTitle: String(sub || ""),
+                cover: String(c.cover || c.pic || c.img || c.image || ""),
+                tags: Array.isArray(c.tags) ? c.tags : [],
+                description: String(c.description || c.desc || c.last_update_chapter_name || c.last_name || ""),
+                headers: mergedHeaders,
+            });
+        }
+
+        function collect(node, partName) {
+            if (!node) return;
+            if (Array.isArray(node)) {
+                for (const el of node) {
+                    if (el && typeof el === "object" && Array.isArray(el.comics)) {
+                        collect(el.comics, el.title || partName);
+                    } else {
+                        pushComic(el, partName);
+                    }
+                }
+                return;
+            }
+            if (node instanceof Map) {
+                node.forEach((v, k) => collect(v, String(k)));
+                return;
+            }
+            if (typeof node === "object") {
+                if (Array.isArray(node.comics)) {
+                    collect(node.comics, partName);
+                    return;
+                }
+                if (Array.isArray(node.list)) {
+                    collect(node.list, partName);
+                    return;
+                }
+                if (Array.isArray(node.data)) {
+                    collect(node.data, partName);
+                    return;
+                }
+                if (Array.isArray(node.parts)) {
+                    collect(node.parts, partName);
+                    return;
+                }
+                for (const k of Object.keys(node)) {
+                    if (k === "headers" || k === "maxPage" || k === "max_page" || k === "next") continue;
+                    collect(node[k], k);
+                }
+            }
+        }
+
+        collect(r, "");
+        let maxPage = null;
+        if (isSinglePage) {
+            maxPage = 1;
+        } else if (r && typeof r === "object" && !Array.isArray(r)) {
+            const mp = r.maxPage !== undefined ? r.maxPage : r.max_page;
+            if (mp !== undefined && mp !== null && Number(mp) > 0) {
+                maxPage = Number(mp);
+            }
+        }
+        return { comics: out, maxPage: maxPage };
     };
 
     window.__serializeVenera = function (val) {

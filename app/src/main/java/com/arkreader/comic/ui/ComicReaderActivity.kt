@@ -17,7 +17,9 @@ import android.view.WindowManager
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.SeekBar
+import android.widget.TextView
 import android.widget.Toast
+import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
@@ -28,6 +30,7 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import androidx.viewpager2.widget.ViewPager2
 import com.arkreader.comic.ArkReaderApp
+import com.arkreader.comic.R
 import com.arkreader.comic.data.Bookmark
 import com.arkreader.comic.data.Chapter
 import com.arkreader.comic.data.ClickFlipMode
@@ -88,7 +91,18 @@ class ComicReaderActivity : AppCompatActivity() {
         val initialRawPage = intent.getIntExtra(EXTRA_PAGE_INDEX, 0)
 
         binding.vpHorizontal.registerOnPageChangeCallback(vpCallback)
+        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                if (binding.readerSettingsOverlay.visibility == View.VISIBLE) {
+                    closeReaderSettingsPanel()
+                } else {
+                    isEnabled = false
+                    onBackPressedDispatcher.onBackPressed()
+                }
+            }
+        })
         setupOverlayControls()
+        setupReaderSettingsDrawer()
         loadComicAndConfig(initialRawPage)
     }
 
@@ -184,9 +198,9 @@ class ComicReaderActivity : AppCompatActivity() {
 
     private fun setupOverlayControls() {
         binding.btnBack.setOnClickListener { finish() }
-        binding.btnReaderMore.setOnClickListener { showQuickReaderDialog() }
+        binding.btnReaderMore.setOnClickListener { openReaderSettingsPanel() }
         binding.btnBookmark.setOnClickListener { showBookmarkDialog() }
-        binding.btnReaderSettings.setOnClickListener { showQuickReaderDialog() }
+        binding.btnReaderSettings.setOnClickListener { openReaderSettingsPanel() }
         binding.btnChapterList.setOnClickListener { showChapterPickerDialog() }
         binding.btnPrevChapter.setOnClickListener { switchChapter(-1) }
         binding.btnNextChapter.setOnClickListener { switchChapter(1) }
@@ -283,12 +297,16 @@ class ComicReaderActivity : AppCompatActivity() {
             ReaderOrientation.PORTRAIT -> ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
             ReaderOrientation.LANDSCAPE -> ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
         }
+        applyBrightness()
         updatePageIndicatorVisibility()
 
         val marginPx = (readerConfig.sideMarginDp * resources.displayMetrics.density).toInt()
         binding.rvVertical.setPadding(marginPx, 0, marginPx, 0)
         binding.vpHorizontal.setPadding(marginPx, 0, marginPx, 0)
         updateOverlayActionPills()
+        if (binding.readerSettingsOverlay.visibility == View.VISIBLE) {
+            syncReaderSettingsPanelState()
+        }
     }
 
     private fun updatePageIndicatorVisibility() {
@@ -447,12 +465,19 @@ class ComicReaderActivity : AppCompatActivity() {
         }
     }
 
+    private fun qualityScaleFactor(): Float = when (app.prefs.readerQuality) {
+        1 -> 0.72f
+        2 -> 0.50f
+        else -> 1.0f
+    }
+
     private suspend fun renderSlotBitmap(slotIndex: Int): Bitmap? {
         bitmapCache.get(slotIndex)?.let { return it }
         val src = pageSource ?: return null
         val slot = slots.getOrNull(slotIndex) ?: return null
-        val reqW = resources.displayMetrics.widthPixels.coerceAtLeast(1080)
-        val reqH = resources.displayMetrics.heightPixels.coerceAtLeast(1080)
+        val qScale = qualityScaleFactor()
+        val reqW = (resources.displayMetrics.widthPixels.coerceAtLeast(1080) * qScale).toInt().coerceAtLeast(540)
+        val reqH = (resources.displayMetrics.heightPixels.coerceAtLeast(1080) * qScale).toInt().coerceAtLeast(540)
 
         val result: Bitmap? = when (slot) {
             is PageSlot.Single -> {
@@ -664,56 +689,261 @@ class ComicReaderActivity : AppCompatActivity() {
             .show()
     }
 
-    private fun showQuickReaderDialog() {
-        val options = arrayOf(
-            "翻页方式: ${readerConfig.scrollMode.label}",
-            "单双页模式: ${readerConfig.doublePageMode.label}",
-            "合并顺序: ${if (readerConfig.mergeRightToLeft) "右→左 (日漫)" else "左→右"}",
-            "更改跨页匹配: ${if (readerConfig.firstPageSingle) "首页单页起" else "成对跨页起"}",
-            "去白边: ${if (readerConfig.trimMargins) "开" else "关"}",
-            "背景色: ${readerConfig.bgColor.label}",
-            "管理与自定义更多配置..."
-        )
-        MaterialAlertDialogBuilder(this)
-            .setTitle("阅读设置 (${readerConfig.name})")
-            .setItems(options) { _, which ->
-                when (which) {
-                    0 -> {
-                        val modes = ScrollMode.values()
-                        readerConfig = readerConfig.copy(scrollMode = modes[(readerConfig.scrollMode.ordinal + 1) % modes.size])
-                        app.db.upsertReaderConfig(readerConfig)
-                        rebuildSlotsAndRender(getCurrentRawPage())
-                    }
-                    1 -> {
-                        val modes = DoublePageMode.values()
-                        readerConfig = readerConfig.copy(doublePageMode = modes[(readerConfig.doublePageMode.ordinal + 1) % modes.size])
-                        app.db.upsertReaderConfig(readerConfig)
-                        bitmapCache.evictAll()
-                        rebuildSlotsAndRender(getCurrentRawPage())
-                    }
-                    2 -> {
-                        readerConfig = readerConfig.copy(mergeRightToLeft = !readerConfig.mergeRightToLeft)
-                        app.db.upsertReaderConfig(readerConfig)
-                        bitmapCache.evictAll()
-                        rebuildSlotsAndRender(getCurrentRawPage())
-                    }
-                    3 -> toggleCrossPageMatch()
-                    4 -> {
-                        readerConfig = readerConfig.copy(trimMargins = !readerConfig.trimMargins)
-                        app.db.upsertReaderConfig(readerConfig)
-                        bitmapCache.evictAll()
-                        rebuildSlotsAndRender(getCurrentRawPage())
-                    }
-                    5 -> {
-                        val bgs = ReaderBgColor.values()
-                        readerConfig = readerConfig.copy(bgColor = bgs[(readerConfig.bgColor.ordinal + 1) % bgs.size])
-                        app.db.upsertReaderConfig(readerConfig)
-                        applyReaderConfigStyle()
-                    }
-                    6 -> startActivity(Intent(this, ReaderConfigActivity::class.java))
+    private fun applyBrightness() {
+        val lp = window.attributes
+        val b = app.prefs.readerBrightness
+        lp.screenBrightness = if (b < 0) {
+            WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
+        } else {
+            b.coerceIn(5, 100) / 100f
+        }
+        window.attributes = lp
+    }
+
+    private fun persistReaderConfig(updated: ReaderConfig, syncGlobalMode: Boolean = false) {
+        readerConfig = updated
+        app.db.upsertReaderConfig(readerConfig)
+        if (syncGlobalMode && app.prefs.applyReaderModeToAll) {
+            val defaultCfg = app.db.getReaderConfigs().firstOrNull()
+            if (defaultCfg != null && defaultCfg.id != readerConfig.id) {
+                app.db.upsertReaderConfig(
+                    defaultCfg.copy(
+                        scrollMode = readerConfig.scrollMode,
+                        doublePageMode = readerConfig.doublePageMode,
+                        mergeRightToLeft = readerConfig.mergeRightToLeft
+                    )
+                )
+            }
+        }
+    }
+
+    private fun openReaderSettingsPanel() {
+        if (!this::readerConfig.isInitialized) return
+        setToolbarVisible(false)
+        syncReaderSettingsPanelState()
+        binding.readerSettingsOverlay.visibility = View.VISIBLE
+        binding.readerSettingsPanel.translationX = 80f
+        binding.readerSettingsPanel.alpha = 0f
+        binding.readerSettingsPanel.animate()
+            .translationX(0f)
+            .alpha(1f)
+            .setDuration(180)
+            .start()
+    }
+
+    private fun closeReaderSettingsPanel() {
+        binding.readerSettingsOverlay.visibility = View.GONE
+    }
+
+    private fun setupReaderSettingsDrawer() {
+        binding.readerSettingsOverlay.setOnClickListener { closeReaderSettingsPanel() }
+        binding.readerSettingsPanel.setOnClickListener { /* consume click */ }
+
+        binding.btnBrightnessAuto.setOnClickListener {
+            app.prefs.readerBrightness = -1
+            applyBrightness()
+            syncReaderSettingsPanelState()
+        }
+        binding.ivBrightnessLow.setOnClickListener {
+            val cur = if (app.prefs.readerBrightness < 0) 50 else app.prefs.readerBrightness
+            app.prefs.readerBrightness = (cur - 15).coerceIn(5, 100)
+            applyBrightness()
+            syncReaderSettingsPanelState()
+        }
+        binding.ivBrightnessHigh.setOnClickListener {
+            val cur = if (app.prefs.readerBrightness < 0) 50 else app.prefs.readerBrightness
+            app.prefs.readerBrightness = (cur + 15).coerceIn(5, 100)
+            applyBrightness()
+            syncReaderSettingsPanelState()
+        }
+        binding.sbBrightness.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                if (fromUser) {
+                    app.prefs.readerBrightness = progress.coerceIn(5, 100)
+                    applyBrightness()
+                    syncBrightnessBadge()
                 }
             }
-            .show()
+            override fun onStartTrackingTouch(seekBar: SeekBar?) {}
+            override fun onStopTrackingTouch(seekBar: SeekBar?) {}
+        })
+
+        binding.btnModeLtr.setOnClickListener {
+            if (!this::readerConfig.isInitialized) return@setOnClickListener
+            persistReaderConfig(
+                readerConfig.copy(scrollMode = ScrollMode.LTR, mergeRightToLeft = false),
+                syncGlobalMode = true
+            )
+            bitmapCache.evictAll()
+            rebuildSlotsAndRender(getCurrentRawPage())
+            syncReaderSettingsPanelState()
+        }
+        binding.btnModeRtl.setOnClickListener {
+            if (!this::readerConfig.isInitialized) return@setOnClickListener
+            persistReaderConfig(
+                readerConfig.copy(scrollMode = ScrollMode.RTL, mergeRightToLeft = true),
+                syncGlobalMode = true
+            )
+            bitmapCache.evictAll()
+            rebuildSlotsAndRender(getCurrentRawPage())
+            syncReaderSettingsPanelState()
+        }
+        binding.btnModeVertical.setOnClickListener {
+            if (!this::readerConfig.isInitialized) return@setOnClickListener
+            persistReaderConfig(
+                readerConfig.copy(scrollMode = ScrollMode.VERTICAL),
+                syncGlobalMode = true
+            )
+            bitmapCache.evictAll()
+            rebuildSlotsAndRender(getCurrentRawPage())
+            syncReaderSettingsPanelState()
+        }
+
+        val selectQuality: (Int) -> Unit = { q ->
+            if (app.prefs.readerQuality != q) {
+                app.prefs.readerQuality = q
+                bitmapCache.evictAll()
+                binding.rvVertical.adapter?.notifyDataSetChanged()
+                binding.vpHorizontal.adapter?.notifyDataSetChanged()
+                syncReaderSettingsPanelState()
+            }
+        }
+        binding.btnQualityUltra.setOnClickListener { selectQuality(0) }
+        binding.btnQualityHigh.setOnClickListener { selectQuality(1) }
+        binding.btnQualitySmooth.setOnClickListener { selectQuality(2) }
+
+        val selectDoublePage: (DoublePageMode) -> Unit = { mode ->
+            if (this::readerConfig.isInitialized && readerConfig.doublePageMode != mode) {
+                persistReaderConfig(readerConfig.copy(doublePageMode = mode), syncGlobalMode = true)
+                bitmapCache.evictAll()
+                rebuildSlotsAndRender(getCurrentRawPage())
+                syncReaderSettingsPanelState()
+            }
+        }
+        binding.btnPageSingle.setOnClickListener { selectDoublePage(DoublePageMode.NORMAL) }
+        binding.btnPageDouble.setOnClickListener { selectDoublePage(DoublePageMode.MERGE) }
+        binding.btnPageAuto.setOnClickListener { selectDoublePage(DoublePageMode.AUTO_LANDSCAPE) }
+
+        val selectSpreadOdd: (Boolean) -> Unit = { firstSingle ->
+            if (this::readerConfig.isInitialized && readerConfig.firstPageSingle != firstSingle) {
+                val targetDouble = if (readerConfig.doublePageMode == DoublePageMode.NORMAL) {
+                    DoublePageMode.AUTO_LANDSCAPE
+                } else {
+                    readerConfig.doublePageMode
+                }
+                persistReaderConfig(readerConfig.copy(doublePageMode = targetDouble, firstPageSingle = firstSingle))
+                bitmapCache.evictAll()
+                rebuildSlotsAndRender(getCurrentRawPage())
+                syncReaderSettingsPanelState()
+            }
+        }
+        binding.btnSpreadOdd.setOnClickListener { selectSpreadOdd(true) }
+        binding.btnSpreadEven.setOnClickListener { selectSpreadOdd(false) }
+
+        val selectBg: (ReaderBgColor) -> Unit = { bg ->
+            if (this::readerConfig.isInitialized && readerConfig.bgColor != bg) {
+                persistReaderConfig(readerConfig.copy(bgColor = bg))
+                bitmapCache.evictAll()
+                applyReaderConfigStyle()
+                rebuildSlotsAndRender(getCurrentRawPage())
+                syncReaderSettingsPanelState()
+            }
+        }
+        binding.btnBgBlack.setOnClickListener { selectBg(ReaderBgColor.BLACK) }
+        binding.btnBgDarkGray.setOnClickListener { selectBg(ReaderBgColor.DARK_GRAY) }
+        binding.btnBgLightGray.setOnClickListener { selectBg(ReaderBgColor.LIGHT_GRAY) }
+        binding.btnBgWhite.setOnClickListener { selectBg(ReaderBgColor.WHITE) }
+
+        binding.btnOpenMoreReaderConfig.setOnClickListener {
+            closeReaderSettingsPanel()
+            startActivity(Intent(this, ReaderConfigActivity::class.java))
+        }
+    }
+
+    private fun syncBrightnessBadge() {
+        val isAuto = app.prefs.readerBrightness < 0
+        binding.btnBrightnessAuto.setBackgroundResource(
+            if (isAuto) R.drawable.bg_reader_seg_selected else R.drawable.bg_reader_seg_unselected
+        )
+        binding.btnBrightnessAuto.setTextColor(if (isAuto) 0xFF3898FF.toInt() else 0xFFB8C0D0.toInt())
+    }
+
+    private fun stylePill(tv: TextView, selected: Boolean) {
+        tv.setBackgroundResource(if (selected) R.drawable.bg_reader_seg_selected else R.drawable.bg_reader_seg_unselected)
+        tv.setTextColor(if (selected) 0xFF3898FF.toInt() else 0xFFB8C0D0.toInt())
+    }
+
+    private fun styleModeCard(container: View, icon: ImageView, label: TextView, selected: Boolean) {
+        container.setBackgroundResource(if (selected) R.drawable.bg_reader_seg_selected else R.drawable.bg_reader_seg_unselected)
+        val tint = if (selected) 0xFF3898FF.toInt() else 0xFFB8C0D0.toInt()
+        icon.setColorFilter(tint)
+        label.setTextColor(tint)
+    }
+
+    private fun syncReaderSettingsPanelState() {
+        if (!this::readerConfig.isInitialized) return
+        val b = app.prefs.readerBrightness
+        binding.sbBrightness.progress = if (b < 0) 65 else b.coerceIn(5, 100)
+        syncBrightnessBadge()
+
+        styleModeCard(binding.btnModeLtr, binding.ivModeLtr, binding.tvModeLtr, readerConfig.scrollMode == ScrollMode.LTR)
+        styleModeCard(binding.btnModeRtl, binding.ivModeRtl, binding.tvModeRtl, readerConfig.scrollMode == ScrollMode.RTL)
+        styleModeCard(
+            binding.btnModeVertical,
+            binding.ivModeVertical,
+            binding.tvModeVertical,
+            readerConfig.scrollMode == ScrollMode.VERTICAL
+        )
+
+        binding.swApplyModeAll.setOnCheckedChangeListener(null)
+        binding.swApplyModeAll.isChecked = app.prefs.applyReaderModeToAll
+        binding.swApplyModeAll.setOnCheckedChangeListener { _, isChecked ->
+            app.prefs.applyReaderModeToAll = isChecked
+            if (isChecked) persistReaderConfig(readerConfig, syncGlobalMode = true)
+        }
+
+        val q = app.prefs.readerQuality
+        stylePill(binding.btnQualityUltra, q == 0)
+        stylePill(binding.btnQualityHigh, q == 1)
+        stylePill(binding.btnQualitySmooth, q == 2)
+
+        stylePill(binding.btnPageSingle, readerConfig.doublePageMode == DoublePageMode.NORMAL)
+        stylePill(binding.btnPageDouble, readerConfig.doublePageMode == DoublePageMode.MERGE)
+        stylePill(
+            binding.btnPageAuto,
+            readerConfig.doublePageMode == DoublePageMode.AUTO_LANDSCAPE || readerConfig.doublePageMode == DoublePageMode.SPLIT
+        )
+
+        stylePill(binding.btnSpreadOdd, readerConfig.firstPageSingle)
+        stylePill(binding.btnSpreadEven, !readerConfig.firstPageSingle)
+
+        stylePill(binding.btnBgBlack, readerConfig.bgColor == ReaderBgColor.BLACK)
+        stylePill(binding.btnBgDarkGray, readerConfig.bgColor == ReaderBgColor.DARK_GRAY)
+        stylePill(binding.btnBgLightGray, readerConfig.bgColor == ReaderBgColor.LIGHT_GRAY)
+        stylePill(binding.btnBgWhite, readerConfig.bgColor == ReaderBgColor.WHITE)
+
+        binding.swDoubleTapZoom.setOnCheckedChangeListener(null)
+        binding.swDoubleTapZoom.isChecked = app.prefs.allowDoubleTapZoom
+        binding.swDoubleTapZoom.setOnCheckedChangeListener { _, isChecked ->
+            app.prefs.allowDoubleTapZoom = isChecked
+            binding.rvVertical.adapter?.notifyDataSetChanged()
+            binding.vpHorizontal.adapter?.notifyDataSetChanged()
+        }
+
+        binding.swTrimMargins.setOnCheckedChangeListener(null)
+        binding.swTrimMargins.isChecked = readerConfig.trimMargins
+        binding.swTrimMargins.setOnCheckedChangeListener { _, isChecked ->
+            persistReaderConfig(readerConfig.copy(trimMargins = isChecked))
+            bitmapCache.evictAll()
+            rebuildSlotsAndRender(getCurrentRawPage())
+        }
+
+        binding.swShowPageNumber.setOnCheckedChangeListener(null)
+        binding.swShowPageNumber.isChecked = readerConfig.showPageNumber
+        binding.swShowPageNumber.setOnCheckedChangeListener { _, isChecked ->
+            persistReaderConfig(readerConfig.copy(showPageNumber = isChecked))
+            updatePageIndicatorVisibility()
+        }
     }
 
     private inner class PageSlotAdapter(
@@ -739,6 +969,7 @@ class ComicReaderActivity : AppCompatActivity() {
         override fun onBindViewHolder(holder: PageVH, position: Int) {
             val view = holder.imageView
             view.tag = position
+            view.doubleTapZoomEnabled = app.prefs.allowDoubleTapZoom
             view.setImageDrawable(null)
             view.onSingleTapAt = { rx, ry -> handleTapAt(rx, ry) }
             if (isVertical) {
