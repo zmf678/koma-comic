@@ -727,6 +727,14 @@ class DatabaseHelper(context: Context) : SQLiteOpenHelper(context, DB_NAME, null
         writableDatabase.update("comic_sources", cv, "source_key = ?", arrayOf(sourceKey))
     }
 
+    fun setAllComicSourcesEnabled(enabled: Boolean) {
+        val cv = ContentValues().apply {
+            put("enabled", if (enabled) 1 else 0)
+            put("updated_at", System.currentTimeMillis())
+        }
+        writableDatabase.update("comic_sources", cv, null, null)
+    }
+
     fun updateComicSourceSettings(sourceKey: String, settingsJson: String) {
         val cv = ContentValues().apply {
             put("settings_json", settingsJson)

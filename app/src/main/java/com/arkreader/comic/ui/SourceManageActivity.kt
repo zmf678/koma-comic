@@ -95,6 +95,21 @@ class SourceManageActivity : AppCompatActivity() {
         binding.btnImportFile.setOnClickListener {
             pickJsFileLauncher.launch(arrayOf("*/*"))
         }
+        binding.etSearchSources.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
+                applySourceFilter()
+            }
+            override fun afterTextChanged(s: Editable?) {}
+        })
+        binding.btnEnableAllSources.setOnClickListener {
+            app.db.setAllComicSourcesEnabled(true)
+            reload()
+        }
+        binding.btnDisableAllSources.setOnClickListener {
+            app.db.setAllComicSourcesEnabled(false)
+            reload()
+        }
     }
 
     override fun onResume() {
@@ -103,7 +118,25 @@ class SourceManageActivity : AppCompatActivity() {
     }
 
     private fun reload() {
-        adapter.submitList(app.db.getComicSources())
+        val all = app.db.getComicSources()
+        val enabledCount = all.count { it.enabled }
+        binding.toolbar.title = "在线漫画源 ($enabledCount/${all.size})"
+        applySourceFilter(all)
+    }
+
+    private fun applySourceFilter(cached: List<ComicSourceEntity>? = null) {
+        val all = cached ?: app.db.getComicSources()
+        val q = binding.etSearchSources.text?.toString()?.trim()?.lowercase().orEmpty()
+        val filtered = if (q.isEmpty()) {
+            all
+        } else {
+            all.filter {
+                it.name.lowercase().contains(q) ||
+                    it.sourceKey.lowercase().contains(q) ||
+                    it.url.lowercase().contains(q)
+            }
+        }
+        adapter.submitList(filtered)
     }
 
     private fun showRepoSubscribeDialog() {

@@ -241,12 +241,19 @@ class MainActivity : AppCompatActivity() {
             return chip
         }
 
-        enabledSources.forEach { src ->
-            addFilterChip("src:${src.sourceKey}", src.name)
-        }
         addFilterChip(TAG_LOCAL_ALL, getString(R.string.tab_all))
         addFilterChip(TAG_LOCAL_FAV, getString(R.string.tab_favorite))
         addFilterChip(TAG_LOCAL_HISTORY, getString(R.string.tab_history))
+
+        if (enabledSources.size > 5) {
+            val pickSourceChip = Chip(this, null, com.google.android.material.R.attr.chipStyle).apply {
+                id = View.generateViewId()
+                text = "选源 (${enabledSources.size})"
+                isCheckable = false
+                setOnClickListener { showQuickSourcePicker(enabledSources) }
+            }
+            group.addView(pickSourceChip)
+        }
 
         val manageChip = Chip(this, null, com.google.android.material.R.attr.chipStyle).apply {
             id = View.generateViewId()
@@ -258,6 +265,22 @@ class MainActivity : AppCompatActivity() {
         }
         group.addView(manageChip)
 
+        // Show currently selected source near the front when scrolled far into the 148-source catalog
+        val activeSrcKey = activeHomeFilterTag.removePrefix("src:")
+        val orderedSources = if (activeHomeFilterTag.startsWith("src:")) {
+            val active = enabledSources.find { it.sourceKey == activeSrcKey }
+            if (active != null && enabledSources.indexOf(active) >= 12) {
+                listOf(active) + enabledSources.filter { it.sourceKey != activeSrcKey }
+            } else {
+                enabledSources
+            }
+        } else {
+            enabledSources
+        }
+        orderedSources.forEach { src ->
+            addFilterChip("src:${src.sourceKey}", src.name)
+        }
+
         group.setOnCheckedStateChangeListener { grp, checkedIds ->
             val checkedId = checkedIds.firstOrNull() ?: return@setOnCheckedStateChangeListener
             val selectedChip = grp.findViewById<Chip>(checkedId) ?: return@setOnCheckedStateChangeListener
@@ -266,6 +289,62 @@ class MainActivity : AppCompatActivity() {
                 activeHomeFilterTag = tag
                 reloadComics()
             }
+        }
+    }
+
+    private fun showQuickSourcePicker(sources: List<com.arkreader.comic.data.ComicSourceEntity>) {
+        val dp = resources.displayMetrics.density
+        val box = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+            setPadding((16 * dp).toInt(), (8 * dp).toInt(), (16 * dp).toInt(), 0)
+        }
+        val etSearch = EditText(this).apply {
+            hint = "搜索已启用漫画源（共 ${sources.size} 个）"
+            isSingleLine = true
+        }
+        val filtered = sources.toMutableList()
+        val listView = android.widget.ListView(this).apply {
+            layoutParams = android.widget.LinearLayout.LayoutParams(
+                android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+                (380 * dp).toInt()
+            )
+        }
+        fun renderList(): android.widget.ArrayAdapter<String> {
+            val labels = filtered.map { "${it.name} (${it.sourceKey})" }
+            return android.widget.ArrayAdapter(this, android.R.layout.simple_list_item_1, labels)
+        }
+        listView.adapter = renderList()
+        etSearch.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
+                val q = s?.toString()?.trim()?.lowercase().orEmpty()
+                filtered.clear()
+                if (q.isEmpty()) {
+                    filtered.addAll(sources)
+                } else {
+                    filtered.addAll(sources.filter {
+                        it.name.lowercase().contains(q) || it.sourceKey.lowercase().contains(q)
+                    })
+                }
+                listView.adapter = renderList()
+            }
+            override fun afterTextChanged(s: Editable?) {}
+        })
+        box.addView(etSearch)
+        box.addView(listView)
+
+        val dialog = MaterialAlertDialogBuilder(this)
+            .setTitle("快速切换漫画源 (${sources.size})")
+            .setView(box)
+            .setNegativeButton("取消", null)
+            .show()
+
+        listView.setOnItemClickListener { _, _, position, _ ->
+            val chosen = filtered.getOrNull(position) ?: return@setOnItemClickListener
+            dialog.dismiss()
+            activeHomeFilterTag = "src:${chosen.sourceKey}"
+            rebuildHomeChips()
+            reloadComics()
         }
     }
 

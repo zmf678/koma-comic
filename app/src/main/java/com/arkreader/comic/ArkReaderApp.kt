@@ -35,27 +35,34 @@ class ArkReaderApp : Application() {
             val existing = db.getComicSources().associateBy { it.sourceKey }
             val jsonText = assets.open("sources/builtin_sources.json").bufferedReader().use { it.readText() }
             val arr = JSONArray(jsonText)
-            for (i in 0 until arr.length()) {
-                val obj = arr.optJSONObject(i) ?: continue
-                val key = obj.optString("key")
-                val name = obj.optString("name", key)
-                val version = obj.optString("version", "1.0.0")
-                val fileName = obj.optString("fileName")
-                if (key.isEmpty() || fileName.isEmpty()) continue
-                val prev = existing[key]
-                if (prev != null && (!prev.builtIn || prev.version == version)) continue
-                val script = assets.open(fileName).bufferedReader().use { it.readText() }
-                db.upsertComicSource(
-                    ComicSourceEntity(
-                        sourceKey = key,
-                        name = name,
-                        version = version,
-                        script = script,
-                        enabled = prev?.enabled ?: true,
-                        builtIn = true,
-                        sortOrder = i
+            val writable = db.writableDatabase
+            writable.beginTransaction()
+            try {
+                for (i in 0 until arr.length()) {
+                    val obj = arr.optJSONObject(i) ?: continue
+                    val key = obj.optString("key")
+                    val name = obj.optString("name", key)
+                    val version = obj.optString("version", "1.0.0")
+                    val fileName = obj.optString("fileName")
+                    if (key.isEmpty() || fileName.isEmpty()) continue
+                    val prev = existing[key]
+                    if (prev != null && (!prev.builtIn || (prev.version == version && prev.sortOrder == i))) continue
+                    val script = assets.open(fileName).bufferedReader().use { it.readText() }
+                    db.upsertComicSource(
+                        ComicSourceEntity(
+                            sourceKey = key,
+                            name = name,
+                            version = version,
+                            script = script,
+                            enabled = prev?.enabled ?: true,
+                            builtIn = true,
+                            sortOrder = i
+                        )
                     )
-                )
+                }
+                writable.setTransactionSuccessful()
+            } finally {
+                writable.endTransaction()
             }
         }
     }
