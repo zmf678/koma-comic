@@ -16,9 +16,9 @@
 
 ### 1. 内置 Venera 兼容动漫源 & 作品集系统
 - **内置在线动漫源 + 标准 Venera 源仓库订阅**：
-  - 内置轻量无依赖 JS 运行时 (`WebView` + 原生 Cookie/AES/Hash 桥接)，直接兼容 Venera / Venera-Next 标准 `ComicSource` JS 脚本与 `index.json` 源仓库订阅。
-  - 开箱内置开源免费源：**再漫画**、**MangaDex**、**XKCD 极客**，支持在「源管理」中一键订阅社区 `index.json` 仓库或导入自定义 `.js` 脚本。
-  - 首页顶部即可切换各个动漫源、本地全部、收藏与最近阅读，支持在线搜索、分页浏览、详情同步与长按/详情页一键 **加入作品集**。
+  - 内置轻量无依赖 JS 运行时 (`WebView` / Windows `WebView2` + 原生 Cookie/AES/Hash 桥接)，直接兼容 Venera / Venera-Next 标准 `ComicSource` JS 脚本与 `index.json` 源仓库订阅。
+  - **开箱内置 148 个社区开源漫画源**（含拷贝漫画、再漫画、包子漫画、动漫之家、漫画柜、动漫屋、MangaDex、Picacg、漫蛙、禁漫天堂、紳士漫畫等，来自 `zmf678/venera-sources`）并支持在「源管理」中一键全启/全停、搜索与同步更新。
+  - 首页顶部即可切换各个动漫源、本地全部、收藏与最近阅读，支持在线搜索、分页浏览、详情同步与一键 **加入作品集**。
 - **作品集与隐私加密**：
   - 自定义作品集分组，支持从「本地全部」隐藏隐私作品集。
   - 支持 **数字 PIN 密码锁** 与系统 **`BiometricPrompt` 指纹/生物识别锁**（可选切出后台 2 秒自动重锁）。
@@ -57,6 +57,10 @@ koma-comic/
 │       │   └── res/                                # 平板/手机自适应布局、主题配色与图标资源
 │       └── test/java/com/arkreader/comic/
 │           └── CoreEngineTest.kt                   # 核心引擎与源解析单元测试
+├── windows/                                        # Windows 原生桌面端 (WinForms + WebView2 + HTTP/Crypto 桥接)
+│   ├── Program.cs
+│   ├── build-windows.ps1
+│   └── wwwroot/
 ├── build.gradle.kts
 ├── gradle.properties
 ├── settings.gradle.kts
@@ -67,7 +71,23 @@ koma-comic/
 
 ## 编译与安装
 
-### 环境依赖
+### Windows 原生桌面版
+
+#### 环境要求
+- Windows 10 / 11 (x64)，内置 .NET Framework 4.x 与 Microsoft Edge WebView2 运行时
+
+#### 一键构建便携版
+```powershell
+powershell -ExecutionPolicy Bypass -File windows/build-windows.ps1
+# 或通过 Gradle 任务：
+gradle assembleWindows
+```
+输出目录：`build/windows/KomaComic-windows-x64/KomaComic.exe`  
+发布压缩包：`build/release/KomaComic-v1.2.0-windows-x64.zip`
+
+---
+
+### Android 端环境依赖
 - **JDK**: Java 17 或 Java 21
 - **Android SDK**: Compile / Target SDK 34 (`platforms;android-34`, `build-tools;34.0.0`)
 - **Gradle**: 8.7+

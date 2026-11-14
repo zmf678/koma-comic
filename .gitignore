@@ -18,3 +18,8 @@ captures/
 .DS_Store
 Thumbs.db
 *.log
+
+# Windows desktop build cache & generated ico
+windows/.nuget/
+windows/obj/
+windows/KomaComic.ico

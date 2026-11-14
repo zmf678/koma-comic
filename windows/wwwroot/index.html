@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>KomaComic (漫格漫画) Desktop</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body class="theme-dark">
+  <div id="appShell" class="app-shell">
+    <!-- Left Navigation Rail -->
+    <aside class="nav-rail" aria-label="主导航">
+      <div class="rail-brand" title="KomaComic (漫格漫画)">
+        <img src="/assets/ic_koma_logo.png" alt="KomaComic" class="brand-logo" />
+        <span class="brand-name">Koma</span>
+      </div>
+      <nav class="rail-nav">
+        <button class="rail-btn active" data-tab="home" title="首页">
+          <span class="rail-icon">⌂</span>
+          <span class="rail-label">首页</span>
+        </button>
+        <button class="rail-btn" data-tab="collections" title="作品集">
+          <span class="rail-icon">❐</span>
+          <span class="rail-label">作品集</span>
+        </button>
+        <button class="rail-btn" data-tab="warehouse" title="仓库">
+          <span class="rail-icon">◫</span>
+          <span class="rail-label">仓库</span>
+        </button>
+        <button class="rail-btn" data-tab="settings" title="设置">
+          <span class="rail-icon">⚙</span>
+          <span class="rail-label">设置</span>
+        </button>
+      </nav>
+      <div class="rail-footer">
+        <button id="btnToggleThemeRail" class="rail-mini-btn" title="切换明暗主题">◐</button>
+        <span class="version-pill">v1.2.0</span>
+      </div>
+    </aside>
+
+    <!-- Right Main Content Area -->
+    <main class="main-area">
+      <!-- HOME VIEW -->
+      <section id="view-home" class="view-panel active">
+        <header class="top-toolbar">
+          <div class="search-box">
+            <span class="search-glyph">🔍</span>
+            <input id="searchInput" type="search" placeholder="搜索本地漫画或在当前在线动漫源中搜索..." autocomplete="off" />
+            <button id="btnClearSearch" class="icon-btn hidden" title="清空">✕</button>
+            <button id="btnDoSearch" class="pill-btn primary small">搜索</button>
+          </div>
+          <div class="toolbar-actions">
+            <button id="btnRefreshFeed" class="pill-btn" title="刷新当前内容">↻ 刷新</button>
+            <button id="btnDensity" class="pill-btn" title="切换网格密度">⊞ 网格</button>
+          </div>
+        </header>
+
+        <!-- Home Horizontal Chips Bar -->
+        <div id="homeChipsRow" class="chips-bar" role="tablist"></div>
+
+        <!-- Secondary Bar for Explore Subtabs & Categories -->
+        <div id="sourceSubBar" class="sub-bar hidden">
+          <div id="exploreTabs" class="sub-tabs"></div>
+          <div class="sub-actions">
+            <button id="btnCategoryPicker" class="pill-btn small hidden">分类筛选 ▾</button>
+            <button id="btnSourceLoginQuick" class="pill-btn small hidden">账号</button>
+          </div>
+        </div>
+
+        <!-- Comic Grid -->
+        <div id="homeFeedContainer" class="feed-scroll">
+          <div id="feedStatusBanner" class="status-banner hidden"></div>
+          <div id="comicGrid" class="comic-grid"></div>
+          <div id="feedEmpty" class="empty-state hidden">
+            <div class="empty-title">暂无内容</div>
+            <div id="feedEmptyDesc" class="empty-desc">可在顶部切换动漫源，或前往「仓库」添加本地漫画目录与 ZIP/CBZ 压缩包。</div>
+          </div>
+          <div id="paginationBar" class="pagination-bar hidden">
+            <button id="btnPrevPage" class="pill-btn">← 上一页</button>
+            <span id="pageIndicator" class="page-indicator">第 1 页</span>
+            <button id="btnNextPage" class="pill-btn">下一页 →</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- COLLECTIONS VIEW -->
+      <section id="view-collections" class="view-panel">
+        <header class="panel-header">
+          <div>
+            <h1>作品集</h1>
+            <p class="muted">将本地漫画与在线动漫源作品分组整理，支持 PIN 隐私锁与隐身收纳</p>
+          </div>
+          <div class="header-actions">
+            <button id="btnNewCollection" class="pill-btn primary">+ 新建作品集</button>
+            <button id="btnManageCollection" class="pill-btn">管理当前作品集</button>
+          </div>
+        </header>
+        <div id="collectionChipsBar" class="chips-bar"></div>
+        <div class="feed-scroll">
+          <div id="collectionLockedNotice" class="locked-panel hidden">
+            <div class="lock-icon">🔒</div>
+            <div id="collectionLockedTitle" class="lock-title">该作品集已加密锁定</div>
+            <button id="btnUnlockCollection" class="pill-btn primary">输入 PIN 解锁</button>
+          </div>
+          <div id="collectionGrid" class="comic-grid"></div>
+          <div id="collectionEmpty" class="empty-state hidden">
+            <div class="empty-title">当前作品集为空</div>
+            <div class="empty-desc">在首页或漫画详情页点击「加入作品集」，即可把喜欢的漫画归类至此。</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- WAREHOUSE VIEW (Embedded on Right Side) -->
+      <section id="view-warehouse" class="view-panel">
+        <header class="panel-header">
+          <div>
+            <h1>漫画仓库</h1>
+            <p class="muted">添加本机漫画文件夹、ZIP / CBZ / EPUB 压缩包或连接 WebDAV 远程书库</p>
+          </div>
+          <div class="header-actions">
+            <button id="btnAddFolder" class="pill-btn primary">+ 添加本地文件夹</button>
+            <button id="btnAddArchive" class="pill-btn">+ 导入压缩包</button>
+            <button id="btnRescanWarehouse" class="pill-btn">↻ 重新扫描</button>
+          </div>
+        </header>
+        <div class="settings-scroll">
+          <div class="card-block">
+            <div class="card-block-header">
+              <h2>已挂载本地目录与压缩包</h2>
+              <span id="warehouseSummaryBadge" class="badge">0 本本地漫画</span>
+            </div>
+            <div id="warehousePathList" class="path-list"></div>
+          </div>
+
+          <div class="card-block">
+            <div class="card-block-header">
+              <h2>WebDAV 云端仓库</h2>
+              <span id="webdavStatusBadge" class="badge">未测试</span>
+            </div>
+            <div class="form-grid">
+              <label class="field">
+                <span>服务器地址 (URL)</span>
+                <input id="webdavUrl" type="url" placeholder="https://dav.example.com/comics/" />
+              </label>
+              <label class="field">
+                <span>用户名</span>
+                <input id="webdavUser" type="text" placeholder="可选" />
+              </label>
+              <label class="field">
+                <span>密码 / 应用专用密码</span>
+                <input id="webdavPass" type="password" placeholder="可选" />
+              </label>
+            </div>
+            <div class="card-actions">
+              <button id="btnSaveWebDav" class="pill-btn primary">保存配置</button>
+              <button id="btnTestWebDav" class="pill-btn">测试连接</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- SETTINGS VIEW (Embedded on Right Side) -->
+      <section id="view-settings" class="view-panel">
+        <header class="panel-header">
+          <div>
+            <h1>应用设置</h1>
+            <p class="muted">界面外观、默认阅读配置、动漫源管理与本地缓存维护</p>
+          </div>
+        </header>
+        <div class="settings-scroll">
+          <div class="card-block">
+            <h2>外观主题</h2>
+            <div class="segmented-row" id="themeModeGroup">
+              <button class="seg-btn" data-theme="dark">深色模式</button>
+              <button class="seg-btn" data-theme="light">浅色模式</button>
+              <button class="seg-btn" data-theme="system">跟随系统</button>
+            </div>
+          </div>
+
+          <div class="card-block">
+            <h2>默认阅读器偏好</h2>
+            <div class="setting-row">
+              <div>
+                <div class="setting-name">默认翻页方向</div>
+                <div class="setting-hint">打开新漫画时采用的默认浏览模式</div>
+              </div>
+              <select id="settingDefaultMode" class="select-input">
+                <option value="ltr">普通模式 (从左到右)</option>
+                <option value="rtl">日漫模式 (从右到左)</option>
+                <option value="scroll">滚动模式 (条漫连续)</option>
+              </select>
+            </div>
+            <div class="setting-row">
+              <div>
+                <div class="setting-name">默认单双页模式</div>
+                <div class="setting-hint">桌面宽屏推荐「双页」自适应</div>
+              </div>
+              <select id="settingDefaultSpread" class="select-input">
+                <option value="double">双页拼合</option>
+                <option value="single">单页显示</option>
+              </select>
+            </div>
+            <div class="setting-row">
+              <div>
+                <div class="setting-name">显示左下/右下角页码提示</div>
+                <div class="setting-hint">阅读界面底部常驻紧凑页码指示</div>
+              </div>
+              <input id="settingShowPageNum" type="checkbox" class="toggle-switch" checked />
+            </div>
+          </div>
+
+          <div class="card-block">
+            <h2>缓存与源数据</h2>
+            <div class="setting-row">
+              <div>
+                <div class="setting-name">动漫源管理 (已内置 148 个 Venera 源)</div>
+                <div class="setting-hint">启用/停用在线源、订阅远程 index.json 仓库或登录源账号</div>
+              </div>
+              <button id="btnOpenSourceMgrFromSettings" class="pill-btn primary">打开源管理</button>
+            </div>
+            <div class="setting-row">
+              <div>
+                <div class="setting-name">图片磁盘缓存</div>
+                <div class="setting-hint">清理本机 `data/cache/images/` 中已缓存的封面和章节图片</div>
+              </div>
+              <button id="btnClearImgCache" class="pill-btn danger">清理图片缓存</button>
+            </div>
+          </div>
+
+          <div class="card-block">
+            <h2>关于 KomaComic Windows</h2>
+            <p class="muted" id="aboutRuntimeInfo">KomaComic (漫格漫画) v1.2.0 · Windows 原生桌面版 · 兼容 Venera 开源 JS 动漫源协议</p>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- MODAL OVERLAYS -->
+  <div id="modalBackdrop" class="modal-backdrop hidden">
+    <div id="modalDialog" class="modal-card" role="dialog" aria-modal="true">
+      <div class="modal-header">
+        <h3 id="modalTitle">标题</h3>
+        <button id="btnCloseModal" class="icon-btn">✕</button>
+      </div>
+      <div id="modalBody" class="modal-body"></div>
+      <div id="modalFooter" class="modal-footer hidden"></div>
+    </div>
+  </div>
+
+  <!-- READER FULLSCREEN OVERLAY -->
+  <div id="readerOverlay" class="reader-overlay hidden">
+    <!-- Top Gradient Bar -->
+    <div id="readerTopBar" class="reader-top-bar">
+      <div class="reader-top-left">
+        <button id="btnReaderClose" class="reader-icon-btn" title="退出阅读 (Esc)">←</button>
+        <div class="reader-titles">
+          <div id="readerComicTitle" class="reader-comic-title">漫画名称</div>
+          <div id="readerChapterTitle" class="reader-chapter-title">第 1 话</div>
+        </div>
+      </div>
+      <div class="reader-top-right">
+        <button id="btnSpreadPairShift" class="reader-pill-btn hidden" title="当双页左右拼合错位时点此修正">更改跨页匹配</button>
+        <button id="btnReaderFullscreen" class="reader-icon-btn" title="切换全屏 (F11)">⛶</button>
+      </div>
+    </div>
+
+    <!-- Reader Viewport -->
+    <div id="readerViewport" class="reader-viewport">
+      <div id="readerStage" class="reader-stage"></div>
+      <div id="readerLoading" class="reader-loading hidden">正在加载页面...</div>
+      <div id="readerPageBadge" class="reader-page-badge">1 / 1</div>
+    </div>
+
+    <!-- Floating Capsule Bottom Bar -->
+    <div id="readerBottomCapsule" class="reader-bottom-capsule">
+      <div class="capsule-progress-row">
+        <button id="btnPrevChapter" class="capsule-nav-btn" title="上一话">⏮</button>
+        <input id="readerSeekBar" type="range" min="1" max="1" value="1" class="capsule-slider" />
+        <span id="readerSeekText" class="capsule-seek-text">1/1</span>
+        <button id="btnNextChapter" class="capsule-nav-btn" title="下一话">⏭</button>
+      </div>
+      <div class="capsule-actions-row">
+        <button id="btnReaderSettingsToggle" class="capsule-action-btn" title="阅读设置">⬡<span>设置</span></button>
+        <button id="btnReaderBookmark" class="capsule-action-btn" title="书签/收藏">🔖<span>书签</span></button>
+        <button id="btnReaderChapters" class="capsule-action-btn" title="章节目录">📑<span>目录</span></button>
+      </div>
+    </div>
+
+    <!-- Dark Card Right Drawer: Reader Settings (Reference Figure 3) -->
+    <aside id="readerSettingsDrawer" class="reader-settings-drawer hidden">
+      <div class="drawer-header">
+        <span>设置</span>
+        <button id="btnCloseReaderDrawer" class="icon-btn">✕</button>
+      </div>
+      <div class="drawer-scroll">
+        <div class="drawer-card">
+          <div class="drawer-row-label">
+            <span>亮度</span>
+            <span id="lblBrightness">100%</span>
+          </div>
+          <div class="brightness-row">
+            <span>☾</span>
+            <input id="rngBrightness" type="range" min="35" max="115" value="100" />
+            <span>☀</span>
+          </div>
+        </div>
+
+        <div class="drawer-card">
+          <div class="drawer-row-label"><span>阅读模式</span></div>
+          <div class="drawer-btn-group" id="drawerReadingModeGroup">
+            <button class="drawer-opt-btn" data-mode="ltr">普通模式</button>
+            <button class="drawer-opt-btn" data-mode="rtl">日漫模式</button>
+            <button class="drawer-opt-btn" data-mode="scroll">滚动模式</button>
+          </div>
+          <div class="drawer-toggle-row">
+            <div>
+              <div class="drawer-toggle-title">阅读模式设置全部生效</div>
+              <div class="drawer-toggle-sub">打开后对支持该模式的漫画均生效</div>
+            </div>
+            <input id="chkApplyGlobalMode" type="checkbox" class="toggle-switch" />
+          </div>
+        </div>
+
+        <div class="drawer-card">
+          <div class="drawer-row-label"><span>画质</span></div>
+          <div class="drawer-btn-group" id="drawerQualityGroup">
+            <button class="drawer-opt-btn" data-quality="ultra">超清</button>
+            <button class="drawer-opt-btn" data-quality="high">高清</button>
+            <button class="drawer-opt-btn" data-quality="smooth">流畅</button>
+          </div>
+          <div class="drawer-row-label" style="margin-top: 12px;"><span>模式</span></div>
+          <div class="drawer-btn-group two-col" id="drawerSpreadGroup">
+            <button class="drawer-opt-btn" data-spread="single">单页</button>
+            <button class="drawer-opt-btn" data-spread="double">双页</button>
+          </div>
+        </div>
+
+        <div class="drawer-card">
+          <div class="drawer-toggle-row">
+            <span>去白边</span>
+            <input id="chkTrimMargins" type="checkbox" class="toggle-switch" />
+          </div>
+          <div class="drawer-toggle-row">
+            <span>允许双击缩放画面</span>
+            <input id="chkDoubleTapZoom" type="checkbox" class="toggle-switch" checked />
+          </div>
+          <div class="drawer-toggle-row">
+            <div>
+              <div class="drawer-toggle-title">展示单话评论页</div>
+              <div class="drawer-toggle-sub">可设置每话末尾的提示/评论页是否展示</div>
+            </div>
+            <input id="chkShowCommentPage" type="checkbox" class="toggle-switch" />
+          </div>
+          <div class="drawer-toggle-row">
+            <span>展示页码</span>
+            <input id="chkShowPageNumber" type="checkbox" class="toggle-switch" checked />
+          </div>
+        </div>
+      </div>
+    </aside>
+  </div>
+
+  <!-- Toast Host -->
+  <div id="toastContainer" class="toast-container"></div>
+
+  <!-- Desktop Bridge BEFORE loading clean-room venera_shim.js -->
+  <script>
+    window._veneraNative = {
+      dispatch: function (jsonStr) {
+        var xhr = new XMLHttpRequest();
+        xhr.open("POST", "/api/venera/dispatch", false);
+        xhr.setRequestHeader("Content-Type", "application/json; charset=utf-8");
+        xhr.send(jsonStr);
+        return xhr.responseText || "null";
+      },
+      dispatchAsync: function (cbId, jsonStr) {
+        fetch("/api/venera/async", {
+          method: "POST",
+          headers: { "Content-Type": "application/json; charset=utf-8" },
+          body: jsonStr
+        })
+          .then(function (r) { return r.text(); })
+          .then(function (text) {
+            if (window.__veneraResolveAsync) window.__veneraResolveAsync(cbId, text || "null");
+          })
+          .catch(function (err) {
+            if (window.__veneraRejectAsync) window.__veneraRejectAsync(cbId, err ? String(err.message || err) : "Async failed");
+          });
+      },
+      resolve: function () {},
+      reject: function () {}
+    };
+  </script>
+  <script src="/assets/venera_shim.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>

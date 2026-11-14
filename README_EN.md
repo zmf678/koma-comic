@@ -16,8 +16,8 @@
 
 ### 1. Built-in Venera-Compatible Comic Sources & Collections (`作品集`)
 - **Built-in JS Comic Source Runtime & Repository Subscription**:
-  - Zero-dependency Android `WebView` + native HTTP/Cookie/Crypto/DOM bridge compatible with standard Venera / Venera-Next `ComicSource` JS scripts and `index.json` repositories.
-  - Ships with clean-room built-in sources (**再漫画**, **MangaDex**, **XKCD**) out of the box, plus one-tap subscription to `index.json` source repos or custom `.js` URL/file imports in **Source Manager**.
+  - Zero-dependency Android `WebView` / Windows `WebView2` + native HTTP/Cookie/Crypto/DOM bridge compatible with standard Venera / Venera-Next `ComicSource` JS scripts and `index.json` repositories.
+  - **Ships with 148 built-in comic sources** from `zmf678/venera-sources` (plus search, one-tap enable/disable all, repo sync, and custom `.js` import in **Source Manager**).
   - Switch between active online comic sources, Local All, Favorites, and Recent History directly on the **Home** tab, with search, endless pagination, and one-tap **Add to Collection (`加入作品集`)**.
 - **Collections & Privacy Lock**:
   - Group local and online comics into custom Collections (`作品集`), optionally hiding private collections from the Local gallery.
@@ -58,6 +58,10 @@ koma-comic/
 │       │   └── res/                                # Tablet/phone responsive layouts, themes & icon assets
 │       └── test/java/com/arkreader/comic/
 │           └── CoreEngineTest.kt                   # Core engine & script parser unit tests
+├── windows/                                        # Native Windows desktop host (WinForms + WebView2 + HTTP/Crypto bridge)
+│   ├── Program.cs
+│   ├── build-windows.ps1
+│   └── wwwroot/
 ├── build.gradle.kts
 ├── gradle.properties
 ├── settings.gradle.kts
@@ -68,7 +72,23 @@ koma-comic/
 
 ## Build & Installation
 
-### Prerequisites
+### Windows Desktop (Portable x64)
+
+#### Prerequisites
+- Windows 10 / 11 (x64) with built-in .NET Framework 4.x and Microsoft Edge WebView2 Runtime
+
+#### Build Steps
+```powershell
+powershell -ExecutionPolicy Bypass -File windows/build-windows.ps1
+# Or via Gradle:
+gradle assembleWindows
+```
+Portable output: `build/windows/KomaComic-windows-x64/KomaComic.exe`  
+Release archive: `build/release/KomaComic-v1.2.0-windows-x64.zip`
+
+---
+
+### Android Prerequisites
 - **JDK**: Java 17 or Java 21
 - **Android SDK**: Compile/Target SDK 34 (`platforms;android-34`, `build-tools;34.0.0`)
 - **Gradle**: 8.7+
