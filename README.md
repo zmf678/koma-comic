@@ -57,10 +57,10 @@ koma-comic/
 │       │   └── res/                                # 平板/手机自适应布局、主题配色与图标资源
 │       └── test/java/com/arkreader/comic/
 │           └── CoreEngineTest.kt                   # 核心引擎与源解析单元测试
-├── windows/                                        # Windows 原生桌面端 (WinForms + WebView2 + HTTP/Crypto 桥接)
+├── windows/                                        # Windows 原生桌面端 (WPF DirectX + Per-Monitor V2 高清矢量渲染 + 后台 JS 引擎)
 │   ├── Program.cs
-│   ├── build-windows.ps1
-│   └── wwwroot/
+│   ├── app.manifest
+│   └── build-windows.ps1
 ├── build.gradle.kts
 ├── gradle.properties
 ├── settings.gradle.kts
@@ -83,7 +83,7 @@ powershell -ExecutionPolicy Bypass -File windows/build-windows.ps1
 gradle assembleWindows
 ```
 输出目录：`build/windows/KomaComic-windows-x64/KomaComic.exe`  
-发布压缩包：`build/release/KomaComic-v1.2.0-windows-x64.zip`
+发布压缩包：`build/release/KomaComic-v1.3.0-windows-x64.zip`
 
 ---
 

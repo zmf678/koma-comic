@@ -1,5 +1,5 @@
 ﻿param(
-    [string]$Version = "1.2.0",
+    [string]$Version = "1.3.0",
     [switch]$SkipArchive
 )
 
@@ -12,13 +12,16 @@ $ReleaseDir = Join-Path $RepoRoot "build\release"
 $NugetDir = Join-Path $ScriptDir ".nuget\webview2"
 $LogoPng = Join-Path $RepoRoot "app\src\main\res\drawable-nodpi\ic_koma_logo.png"
 $IconPath = Join-Path $ScriptDir "KomaComic.ico"
+$ManifestPath = Join-Path $ScriptDir "app.manifest"
 $CscExe = "C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
+$WpfDir = "C:\Windows\Microsoft.NET\Framework64\v4.0.30319\WPF"
+$FxDir = "C:\Windows\Microsoft.NET\Framework64\v4.0.30319"
 
 if (-not (Test-Path $CscExe)) {
     throw "未找到 .NET Framework C# 编译器: $CscExe"
 }
 
-Write-Host "==> [1/5] 生成 Windows 应用程序图标 ($IconPath)..."
+Write-Host "==> [1/5] 生成 Windows 多分辨率图标 ($IconPath)..."
 if (-not (Test-Path $LogoPng)) {
     throw "未找到应用图标源文件: $LogoPng"
 }
@@ -27,7 +30,7 @@ if ($LASTEXITCODE -ne 0 -or -not (Test-Path $IconPath)) {
     throw "生成 KomaComic.ico 失败"
 }
 
-Write-Host "==> [2/5] 准备 Microsoft.Web.WebView2 SDK..."
+Write-Host "==> [2/5] 准备后台 WebView2 JS 引擎依赖..."
 $Wv2Version = "1.0.2903.40"
 $Wv2Nupkg = Join-Path $ScriptDir ".nuget\Microsoft.Web.WebView2.$Wv2Version.nupkg"
 $NugetParent = Split-Path -Parent $Wv2Nupkg
@@ -57,11 +60,10 @@ if (-not $CoreDll -or -not $WinFormsDll -or -not $LoaderDll) {
 Write-Host "==> [3/5] 准备便携版输出目录: $OutAppDir"
 if (Test-Path $OutAppDir) { Remove-Item -Path $OutAppDir -Recurse -Force }
 New-Item -ItemType Directory -Path $OutAppDir -Force | Out-Null
-New-Item -ItemType Directory -Path (Join-Path $OutAppDir "wwwroot") -Force | Out-Null
 New-Item -ItemType Directory -Path (Join-Path $OutAppDir "assets") -Force | Out-Null
 New-Item -ItemType Directory -Path (Join-Path $OutAppDir "data") -Force | Out-Null
 
-Write-Host "==> [4/5] 编译 KomaComic.exe..."
+Write-Host "==> [4/5] 编译原生 WPF 高清版 KomaComic.exe (Per-Monitor V2 DPI)..."
 $ExePath = Join-Path $OutAppDir "KomaComic.exe"
 $ProgramCs = Join-Path $ScriptDir "Program.cs"
 
@@ -72,6 +74,7 @@ $cscArgs = @(
     "/optimize+",
     "/utf8output",
     "/win32icon:$IconPath",
+    "/win32manifest:$ManifestPath",
     "/out:$ExePath",
     "/r:System.dll",
     "/r:System.Core.dll",
@@ -80,6 +83,11 @@ $cscArgs = @(
     "/r:System.IO.Compression.dll",
     "/r:System.IO.Compression.FileSystem.dll",
     "/r:System.Web.Extensions.dll",
+    "/r:$FxDir\System.Xaml.dll",
+    "/r:$WpfDir\WindowsBase.dll",
+    "/r:$WpfDir\PresentationCore.dll",
+    "/r:$WpfDir\PresentationFramework.dll",
+    "/r:$WpfDir\WindowsFormsIntegration.dll",
     "/r:$($CoreDll.FullName)",
     "/r:$($WinFormsDll.FullName)",
     $ProgramCs
@@ -94,7 +102,6 @@ Write-Host "==> [5/5] 复制依赖与 148 个内置动漫源脚本..."
 Copy-Item -Path $CoreDll.FullName -Destination $OutAppDir -Force
 Copy-Item -Path $WinFormsDll.FullName -Destination $OutAppDir -Force
 Copy-Item -Path $LoaderDll.FullName -Destination $OutAppDir -Force
-Copy-Item -Path (Join-Path $ScriptDir "wwwroot\*") -Destination (Join-Path $OutAppDir "wwwroot") -Recurse -Force
 Copy-Item -Path (Join-Path $RepoRoot "app\src\main\assets\*") -Destination (Join-Path $OutAppDir "assets") -Recurse -Force
 Copy-Item -Path $LogoPng -Destination (Join-Path $OutAppDir "assets\ic_koma_logo.png") -Force
 
@@ -103,7 +110,7 @@ if (-not $SkipArchive) {
     $ZipPath = Join-Path $ReleaseDir "KomaComic-v$Version-windows-x64.zip"
     if (Test-Path $ZipPath) { Remove-Item -Path $ZipPath -Force }
     Compress-Archive -Path (Join-Path $OutAppDir "*") -DestinationPath $ZipPath -CompressionLevel Optimal
-    Write-Host "==> 完成 Windows 发布包: $ZipPath"
+    Write-Host "==> 完成 Windows WPF 高清发布包: $ZipPath"
 } else {
-    Write-Host "==> 完成 Windows 目录构建: $OutAppDir"
+    Write-Host "==> 完成 Windows WPF 高清目录构建: $OutAppDir"
 }

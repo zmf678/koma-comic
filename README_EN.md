@@ -58,10 +58,10 @@ koma-comic/
 │       │   └── res/                                # Tablet/phone responsive layouts, themes & icon assets
 │       └── test/java/com/arkreader/comic/
 │           └── CoreEngineTest.kt                   # Core engine & script parser unit tests
-├── windows/                                        # Native Windows desktop host (WinForms + WebView2 + HTTP/Crypto bridge)
+├── windows/                                        # Native Windows desktop host (WPF DirectX + Per-Monitor V2 High-DPI + background JS engine)
 │   ├── Program.cs
-│   ├── build-windows.ps1
-│   └── wwwroot/
+│   ├── app.manifest
+│   └── build-windows.ps1
 ├── build.gradle.kts
 ├── gradle.properties
 ├── settings.gradle.kts
@@ -84,7 +84,7 @@ powershell -ExecutionPolicy Bypass -File windows/build-windows.ps1
 gradle assembleWindows
 ```
 Portable output: `build/windows/KomaComic-windows-x64/KomaComic.exe`  
-Release archive: `build/release/KomaComic-v1.2.0-windows-x64.zip`
+Release archive: `build/release/KomaComic-v1.3.0-windows-x64.zip`
 
 ---
 
