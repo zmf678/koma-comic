@@ -81,6 +81,9 @@ class WarehouseActivity : AppCompatActivity() {
         binding.btnAddWebDav.setOnClickListener {
             startActivity(Intent(this, WebDavConfigActivity::class.java))
         }
+        binding.btnManageSources.setOnClickListener {
+            startActivity(Intent(this, SourceManageActivity::class.java))
+        }
     }
 
     override fun onResume() {
@@ -127,7 +130,7 @@ class WarehouseActivity : AppCompatActivity() {
             setText(wh.coverName)
         }
         val cbHideGallery = CheckBox(this).apply {
-            text = "在首页图库中隐藏（仅通过特定书架或仓库访问）"
+            text = "在本地全部中隐藏（仅通过特定作品集或仓库访问）"
             isChecked = wh.hideInGallery
         }
         val cbNomedia = CheckBox(this).apply {

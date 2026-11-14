@@ -120,9 +120,24 @@ class DatabaseHelper(context: Context) : SQLiteOpenHelper(context, DB_NAME, null
             )
         """)
 
-        // Insert default bookshelf & default reader config
+        db.execSQL("""
+            CREATE TABLE IF NOT EXISTS comic_sources (
+                source_key TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                version TEXT NOT NULL DEFAULT '1.0.0',
+                url TEXT NOT NULL DEFAULT '',
+                script TEXT NOT NULL,
+                settings_json TEXT NOT NULL DEFAULT '{}',
+                enabled INTEGER NOT NULL DEFAULT 1,
+                built_in INTEGER NOT NULL DEFAULT 0,
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                updated_at INTEGER NOT NULL DEFAULT 0
+            )
+        """.trimIndent())
+
+        // Insert default collection & default reader config
         val shelfCv = ContentValues().apply {
-            put("name", "默认书架")
+            put("name", "默认作品集")
             put("sort_order", 0)
         }
         db.insert("bookshelves", null, shelfCv)
@@ -137,6 +152,23 @@ class DatabaseHelper(context: Context) : SQLiteOpenHelper(context, DB_NAME, null
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
         if (oldVersion < 2) {
             db.execSQL("UPDATE reader_configs SET double_page_mode = 'AUTO_LANDSCAPE' WHERE id = 1 AND double_page_mode = 'NORMAL'")
+        }
+        if (oldVersion < 3) {
+            db.execSQL("""
+                CREATE TABLE IF NOT EXISTS comic_sources (
+                    source_key TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    version TEXT NOT NULL DEFAULT '1.0.0',
+                    url TEXT NOT NULL DEFAULT '',
+                    script TEXT NOT NULL,
+                    settings_json TEXT NOT NULL DEFAULT '{}',
+                    enabled INTEGER NOT NULL DEFAULT 1,
+                    built_in INTEGER NOT NULL DEFAULT 0,
+                    sort_order INTEGER NOT NULL DEFAULT 0,
+                    updated_at INTEGER NOT NULL DEFAULT 0
+                )
+            """.trimIndent())
+            db.execSQL("UPDATE bookshelves SET name = '默认作品集' WHERE id = 1 AND name = '默认书架'")
         }
     }
 
@@ -613,6 +645,188 @@ class DatabaseHelper(context: Context) : SQLiteOpenHelper(context, DB_NAME, null
         }
     }
 
+    // --- Venera Comic Sources & Online Comics ---
+
+    fun getComicSources(onlyEnabled: Boolean = false): List<ComicSourceEntity> {
+        val list = mutableListOf<ComicSourceEntity>()
+        val sql = if (onlyEnabled) {
+            "SELECT * FROM comic_sources WHERE enabled = 1 ORDER BY sort_order ASC, updated_at DESC"
+        } else {
+            "SELECT * FROM comic_sources ORDER BY sort_order ASC, updated_at DESC"
+        }
+        readableDatabase.rawQuery(sql, null).use { c ->
+            while (c.moveToNext()) {
+                list.add(
+                    ComicSourceEntity(
+                        sourceKey = c.getString(c.getColumnIndexOrThrow("source_key")),
+                        name = c.getString(c.getColumnIndexOrThrow("name")),
+                        version = c.getString(c.getColumnIndexOrThrow("version")),
+                        url = c.getString(c.getColumnIndexOrThrow("url")),
+                        script = c.getString(c.getColumnIndexOrThrow("script")),
+                        settingsJson = c.getString(c.getColumnIndexOrThrow("settings_json")),
+                        enabled = c.getInt(c.getColumnIndexOrThrow("enabled")) == 1,
+                        builtIn = c.getInt(c.getColumnIndexOrThrow("built_in")) == 1,
+                        sortOrder = c.getInt(c.getColumnIndexOrThrow("sort_order")),
+                        updatedAt = c.getLong(c.getColumnIndexOrThrow("updated_at"))
+                    )
+                )
+            }
+        }
+        return list
+    }
+
+    fun getComicSource(sourceKey: String): ComicSourceEntity? {
+        readableDatabase.rawQuery(
+            "SELECT * FROM comic_sources WHERE source_key = ?",
+            arrayOf(sourceKey)
+        ).use { c ->
+            if (!c.moveToFirst()) return null
+            return ComicSourceEntity(
+                sourceKey = c.getString(c.getColumnIndexOrThrow("source_key")),
+                name = c.getString(c.getColumnIndexOrThrow("name")),
+                version = c.getString(c.getColumnIndexOrThrow("version")),
+                url = c.getString(c.getColumnIndexOrThrow("url")),
+                script = c.getString(c.getColumnIndexOrThrow("script")),
+                settingsJson = c.getString(c.getColumnIndexOrThrow("settings_json")),
+                enabled = c.getInt(c.getColumnIndexOrThrow("enabled")) == 1,
+                builtIn = c.getInt(c.getColumnIndexOrThrow("built_in")) == 1,
+                sortOrder = c.getInt(c.getColumnIndexOrThrow("sort_order")),
+                updatedAt = c.getLong(c.getColumnIndexOrThrow("updated_at"))
+            )
+        }
+    }
+
+    fun upsertComicSource(src: ComicSourceEntity) {
+        val cv = ContentValues().apply {
+            put("source_key", src.sourceKey)
+            put("name", src.name)
+            put("version", src.version)
+            put("url", src.url)
+            put("script", src.script)
+            put("settings_json", src.settingsJson)
+            put("enabled", if (src.enabled) 1 else 0)
+            put("built_in", if (src.builtIn) 1 else 0)
+            put("sort_order", src.sortOrder)
+            put("updated_at", src.updatedAt)
+        }
+        val existing = getComicSource(src.sourceKey)
+        if (existing == null) {
+            writableDatabase.insert("comic_sources", null, cv)
+        } else {
+            // Preserve user settings & enabled flag unless script update replaces them
+            cv.put("settings_json", existing.settingsJson)
+            writableDatabase.update("comic_sources", cv, "source_key = ?", arrayOf(src.sourceKey))
+        }
+    }
+
+    fun setComicSourceEnabled(sourceKey: String, enabled: Boolean) {
+        val cv = ContentValues().apply {
+            put("enabled", if (enabled) 1 else 0)
+            put("updated_at", System.currentTimeMillis())
+        }
+        writableDatabase.update("comic_sources", cv, "source_key = ?", arrayOf(sourceKey))
+    }
+
+    fun updateComicSourceSettings(sourceKey: String, settingsJson: String) {
+        val cv = ContentValues().apply {
+            put("settings_json", settingsJson)
+            put("updated_at", System.currentTimeMillis())
+        }
+        writableDatabase.update("comic_sources", cv, "source_key = ?", arrayOf(sourceKey))
+    }
+
+    fun deleteComicSource(sourceKey: String) {
+        writableDatabase.delete("comic_sources", "source_key = ?", arrayOf(sourceKey))
+    }
+
+    fun getComicBySourceUri(sourceUri: String): Comic? {
+        readableDatabase.rawQuery(
+            "SELECT * FROM comics WHERE source_uri = ? LIMIT 1",
+            arrayOf(sourceUri)
+        ).use { c ->
+            return if (c.moveToFirst()) c.toComic() else null
+        }
+    }
+
+    /**
+     * Upserts an online comic & its chapters into the unified comics/chapters tables so it
+     * works identically in Collections (作品集), Favorites, Recent History, Bookmarks, and Reader.
+     */
+    fun upsertOnlineComic(
+        sourceKey: String,
+        remoteId: String,
+        title: String,
+        subTitle: String,
+        coverKey: String,
+        chapters: List<RemoteChapter>
+    ): Long {
+        val now = System.currentTimeMillis()
+        val comicUri = "venera://$sourceKey/$remoteId"
+        writableDatabase.beginTransaction()
+        try {
+            val existing = getComicBySourceUri(comicUri)
+            val comicId: Long
+            if (existing != null) {
+                comicId = existing.id
+                val cv = ContentValues().apply {
+                    put("title", title)
+                    if (subTitle.isNotEmpty()) put("path", subTitle)
+                    if (coverKey.isNotEmpty()) put("cover_key", coverKey)
+                }
+                writableDatabase.update("comics", cv, "id = ?", arrayOf(comicId.toString()))
+            } else {
+                val cv = ContentValues().apply {
+                    put("warehouse_id", 0L)
+                    put("title", title)
+                    put("path", subTitle.ifEmpty { sourceKey })
+                    put("source_uri", comicUri)
+                    put("format", ComicFormat.ONLINE.name)
+                    put("entry_prefix", sourceKey)
+                    put("cover_key", coverKey)
+                    put("total_pages", chapters.size)
+                    put("last_read_chapter_id", 0L)
+                    put("last_read_at", 0L)
+                    put("is_favorite", 0)
+                    put("reader_config_id", 1L)
+                    put("added_at", now)
+                }
+                comicId = writableDatabase.insert("comics", null, cv)
+            }
+
+            if (chapters.isNotEmpty()) {
+                val oldMap = getChapters(comicId).associateBy { it.sourceUri }
+                writableDatabase.delete("chapters", "comic_id = ?", arrayOf(comicId.toString()))
+                var restoredLastChapterId = 0L
+                chapters.forEachIndexed { idx, ch ->
+                    val chUri = "venera://$sourceKey/$remoteId/${ch.id}"
+                    val prev = oldMap[chUri]
+                    val chCv = ContentValues().apply {
+                        put("comic_id", comicId)
+                        put("title", ch.title)
+                        put("source_uri", chUri)
+                        put("format", ComicFormat.ONLINE.name)
+                        put("entry_prefix", "$sourceKey|$remoteId|${ch.id}")
+                        put("page_count", prev?.pageCount ?: 0)
+                        put("sort_order", idx)
+                        put("last_read_page", prev?.lastReadPage ?: 0)
+                    }
+                    val newId = writableDatabase.insert("chapters", null, chCv)
+                    if (existing != null && prev != null && existing.lastReadChapterId == prev.id) {
+                        restoredLastChapterId = newId
+                    }
+                }
+                if (restoredLastChapterId > 0) {
+                    val fix = ContentValues().apply { put("last_read_chapter_id", restoredLastChapterId) }
+                    writableDatabase.update("comics", fix, "id = ?", arrayOf(comicId.toString()))
+                }
+            }
+            writableDatabase.setTransactionSuccessful()
+            return comicId
+        } finally {
+            writableDatabase.endTransaction()
+        }
+    }
+
     fun deleteReaderConfig(id: Long) {
         if (id == 1L) return
         writableDatabase.beginTransaction()
@@ -716,7 +930,7 @@ class DatabaseHelper(context: Context) : SQLiteOpenHelper(context, DB_NAME, null
 
     companion object {
         private const val DB_NAME = "ark_reader.db"
-        private const val DB_VERSION = 2
+        private const val DB_VERSION = 3
 
         fun hashPin(pin: String): String {
             val digest = MessageDigest.getInstance("SHA-256").digest(pin.toByteArray(Charsets.UTF_8))

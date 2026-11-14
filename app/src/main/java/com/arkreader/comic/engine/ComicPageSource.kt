@@ -43,6 +43,7 @@ object PageSourceFactory {
                 warehouse?.webdavPass ?: ""
             )
             return when (chapter.format) {
+                ComicFormat.ONLINE -> OnlineChapterPageSource(chapter)
                 ComicFormat.FOLDER -> WebDavFolderPageSource(client, chapter.sourceUri)
                 ComicFormat.ZIP, ComicFormat.EPUB -> {
                     val key = coverCache.makeKey(chapter.sourceUri)
@@ -64,8 +65,12 @@ object PageSourceFactory {
             }
         }
 
+        if (chapter.format == ComicFormat.ONLINE) {
+            return OnlineChapterPageSource(chapter)
+        }
         val uri = Uri.parse(chapter.sourceUri)
         return when (chapter.format) {
+            ComicFormat.ONLINE -> OnlineChapterPageSource(chapter)
             ComicFormat.FOLDER -> FolderPageSource(context, uri)
             ComicFormat.ZIP, ComicFormat.EPUB -> {
                 val key = coverCache.makeKey(chapter.sourceUri)

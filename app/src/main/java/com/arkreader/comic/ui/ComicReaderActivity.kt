@@ -4,17 +4,25 @@ import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.content.res.Configuration
 import android.graphics.Bitmap
+import android.graphics.Color
+import android.os.Build
 import android.os.Bundle
 import android.util.LruCache
+import android.view.Gravity
 import android.view.HapticFeedbackConstants
 import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
+import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.SeekBar
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
@@ -24,7 +32,9 @@ import com.arkreader.comic.data.Bookmark
 import com.arkreader.comic.data.Chapter
 import com.arkreader.comic.data.ClickFlipMode
 import com.arkreader.comic.data.Comic
+import com.arkreader.comic.data.ComicFormat
 import com.arkreader.comic.data.DoublePageMode
+import com.arkreader.comic.data.ReaderBgColor
 import com.arkreader.comic.data.ReaderConfig
 import com.arkreader.comic.data.ReaderOrientation
 import com.arkreader.comic.data.ScrollMode
@@ -70,6 +80,9 @@ class ComicReaderActivity : AppCompatActivity() {
         binding = ActivityComicReaderBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
+        setupEdgeToEdgeSystemBars()
+        updateBottomCapsuleWidth()
+
         comicId = intent.getLongExtra(EXTRA_COMIC_ID, 0L)
         chapterId = intent.getLongExtra(EXTRA_CHAPTER_ID, 0L)
         val initialRawPage = intent.getIntExtra(EXTRA_PAGE_INDEX, 0)
@@ -77,6 +90,60 @@ class ComicReaderActivity : AppCompatActivity() {
         binding.vpHorizontal.registerOnPageChangeCallback(vpCallback)
         setupOverlayControls()
         loadComicAndConfig(initialRawPage)
+    }
+
+    @Suppress("DEPRECATION")
+    private fun setupEdgeToEdgeSystemBars() {
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        window.statusBarColor = Color.TRANSPARENT
+        window.navigationBarColor = Color.TRANSPARENT
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            window.attributes = window.attributes.apply {
+                layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+            }
+        }
+        val controller = WindowCompat.getInsetsController(window, binding.root)
+        controller.isAppearanceLightStatusBars = false
+        controller.isAppearanceLightNavigationBars = false
+
+        val density = resources.displayMetrics.density
+        val baseTopPad = (10 * density).toInt()
+        val baseBottomPad = (16 * density).toInt()
+        val sidePad = (16 * density).toInt()
+
+        ViewCompat.setOnApplyWindowInsetsListener(binding.readerRoot) { _, insets ->
+            val sys = insets.getInsetsIgnoringVisibility(WindowInsetsCompat.Type.systemBars())
+            binding.topOverlay.setPadding(
+                sidePad / 2,
+                sys.top + baseTopPad,
+                sidePad / 2,
+                (16 * density).toInt()
+            )
+            binding.bottomOverlay.setPadding(
+                sidePad,
+                0,
+                sidePad,
+                sys.bottom + baseBottomPad
+            )
+            insets
+        }
+        ViewCompat.requestApplyInsets(binding.readerRoot)
+    }
+
+    private fun updateBottomCapsuleWidth() {
+        val dm = resources.displayMetrics
+        val maxPx = (560 * dm.density).toInt()
+        val targetW = if (dm.widthPixels > maxPx + (32 * dm.density).toInt()) {
+            maxPx + (32 * dm.density).toInt()
+        } else {
+            ViewGroup.LayoutParams.MATCH_PARENT
+        }
+        val lp = binding.bottomOverlay.layoutParams as? FrameLayout.LayoutParams ?: return
+        if (lp.width != targetW) {
+            lp.width = targetW
+            lp.gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
+            binding.bottomOverlay.layoutParams = lp
+        }
     }
 
     override fun onResume() {
@@ -90,10 +157,12 @@ class ComicReaderActivity : AppCompatActivity() {
                 rebuildSlotsAndRender(getCurrentRawPage())
             }
         }
+        applySystemBarsForToolbarState(toolbarVisible)
     }
 
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
+        updateBottomCapsuleWidth()
         if (this::readerConfig.isInitialized && pageSource != null) {
             val rawPage = getCurrentRawPage()
             bitmapCache.evictAll()
@@ -115,34 +184,12 @@ class ComicReaderActivity : AppCompatActivity() {
 
     private fun setupOverlayControls() {
         binding.btnBack.setOnClickListener { finish() }
+        binding.btnReaderMore.setOnClickListener { showQuickReaderDialog() }
         binding.btnBookmark.setOnClickListener { showBookmarkDialog() }
         binding.btnReaderSettings.setOnClickListener { showQuickReaderDialog() }
+        binding.btnChapterList.setOnClickListener { showChapterPickerDialog() }
         binding.btnPrevChapter.setOnClickListener { switchChapter(-1) }
         binding.btnNextChapter.setOnClickListener { switchChapter(1) }
-
-        binding.btnDoubleModeToggle.setOnClickListener {
-            if (!this::readerConfig.isInitialized) return@setOnClickListener
-            val order = arrayOf(
-                DoublePageMode.AUTO_LANDSCAPE,
-                DoublePageMode.MERGE,
-                DoublePageMode.NORMAL,
-                DoublePageMode.SPLIT
-            )
-            val next = order[(order.indexOf(readerConfig.doublePageMode) + 1).coerceAtLeast(0) % order.size]
-            readerConfig = readerConfig.copy(doublePageMode = next)
-            app.db.upsertReaderConfig(readerConfig)
-            bitmapCache.evictAll()
-            rebuildSlotsAndRender(getCurrentRawPage())
-            Toast.makeText(this, "显示模式: ${next.label}", Toast.LENGTH_SHORT).show()
-        }
-
-        binding.btnMergeOrderToggle.setOnClickListener {
-            if (!this::readerConfig.isInitialized) return@setOnClickListener
-            readerConfig = readerConfig.copy(mergeRightToLeft = !readerConfig.mergeRightToLeft)
-            app.db.upsertReaderConfig(readerConfig)
-            bitmapCache.evictAll()
-            rebuildSlotsAndRender(getCurrentRawPage())
-        }
 
         binding.btnSpreadMatch.setOnClickListener {
             toggleCrossPageMatch()
@@ -151,7 +198,7 @@ class ComicReaderActivity : AppCompatActivity() {
         binding.seekPage.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
                 if (fromUser && slots.isNotEmpty()) {
-                    binding.tvSeekLabel.text = formatProgressText(progress)
+                    binding.tvSeekLabel.text = formatSeekShort(progress)
                 }
             }
             override fun onStartTrackingTouch(seekBar: SeekBar?) {}
@@ -182,7 +229,7 @@ class ComicReaderActivity : AppCompatActivity() {
         val effective = effectiveDoublePageMode()
         val matchState = if (nextFirstSingle) "首页单页起" else "成对跨页起"
         val tip = if (effective == DoublePageMode.NORMAL) {
-            "已更新跨页匹配 ($matchState)，横屏双页时生效"
+            "已切换跨页匹配 ($matchState)，横屏双页时生效"
         } else {
             "已切换跨页匹配 ($matchState)"
         }
@@ -196,14 +243,11 @@ class ComicReaderActivity : AppCompatActivity() {
 
     private fun updateOverlayActionPills() {
         if (!this::readerConfig.isInitialized) return
-        binding.btnDoubleModeToggle.text = when (readerConfig.doublePageMode) {
-            DoublePageMode.AUTO_LANDSCAPE -> "竖单横双"
-            DoublePageMode.MERGE -> "双页合并"
-            DoublePageMode.NORMAL -> "单页显示"
-            DoublePageMode.SPLIT -> "双页分割"
+        binding.btnSpreadMatch.text = if (readerConfig.firstPageSingle) {
+            "更改跨页匹配(单起)"
+        } else {
+            "更改跨页匹配(对起)"
         }
-        binding.btnMergeOrderToggle.text = if (readerConfig.mergeRightToLeft) "顺序: 右→左" else "顺序: 左→右"
-        binding.btnSpreadMatch.text = if (readerConfig.firstPageSingle) "更改跨页匹配(单起)" else "更改跨页匹配(对起)"
     }
 
     private fun loadComicAndConfig(initialRawPage: Int) {
@@ -271,7 +315,7 @@ class ComicReaderActivity : AppCompatActivity() {
                         readerConfig.pdfScale
                     )
                     val flags = BooleanArray(src.pageCount)
-                    if (src.pageCount <= 400) {
+                    if (chapter.format != ComicFormat.ONLINE && src.pageCount <= 400) {
                         for (i in 0 until src.pageCount) {
                             val size = src.getPageSize(i)
                             if (size != null && size.first > size.second * 1.15f) {
@@ -368,12 +412,17 @@ class ComicReaderActivity : AppCompatActivity() {
         return "${clamped + 1}/${slots.size} ($rawPart)"
     }
 
+    private fun formatSeekShort(slotIndex: Int): String {
+        val clamped = slotIndex.coerceIn(0, (slots.size - 1).coerceAtLeast(0))
+        return "${clamped + 1}/${slots.size}"
+    }
+
     private fun onSlotSelected(slotIndex: Int) {
         if (slots.isEmpty()) return
         currentSlotIndex = slotIndex.coerceIn(0, slots.size - 1)
         val displayText = formatProgressText(currentSlotIndex)
         binding.tvPageIndicator.text = "${currentChapter?.title.orEmpty()} · $displayText"
-        binding.tvSeekLabel.text = displayText
+        binding.tvSeekLabel.text = formatSeekShort(currentSlotIndex)
         binding.seekPage.progress = currentSlotIndex
         preloadAdjacent(currentSlotIndex)
     }
@@ -518,7 +567,23 @@ class ComicReaderActivity : AppCompatActivity() {
         val vis = if (visible) View.VISIBLE else View.GONE
         binding.topOverlay.visibility = vis
         binding.bottomOverlay.visibility = vis
+        applySystemBarsForToolbarState(visible)
         updatePageIndicatorVisibility()
+    }
+
+    @Suppress("DEPRECATION")
+    private fun applySystemBarsForToolbarState(visible: Boolean) {
+        val controller = WindowCompat.getInsetsController(window, binding.root)
+        window.statusBarColor = Color.TRANSPARENT
+        window.navigationBarColor = Color.TRANSPARENT
+        controller.isAppearanceLightStatusBars = false
+        controller.isAppearanceLightNavigationBars = false
+        if (visible) {
+            controller.show(WindowInsetsCompat.Type.statusBars())
+        } else {
+            controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            controller.hide(WindowInsetsCompat.Type.systemBars())
+        }
     }
 
     private fun switchChapter(offset: Int) {
@@ -540,6 +605,27 @@ class ComicReaderActivity : AppCompatActivity() {
     private fun saveCurrentProgress() {
         val ch = currentChapter ?: return
         app.db.updateReadingProgress(comicId, ch.id, getCurrentRawPage())
+    }
+
+    private fun showChapterPickerDialog() {
+        if (chapters.isEmpty()) return
+        val names = chapters.map { it.title }.toTypedArray()
+        val currentIdx = chapters.indexOfFirst { it.id == chapterId }.coerceAtLeast(0)
+        MaterialAlertDialogBuilder(this)
+            .setTitle("章节目录 (${chapters.size})")
+            .setSingleChoiceItems(names, currentIdx) { dialog, which ->
+                dialog.dismiss()
+                if (which != currentIdx) {
+                    saveCurrentProgress()
+                    val chosen = chapters[which]
+                    chapterId = chosen.id
+                    currentChapter = chosen
+                    binding.tvReaderChapterTitle.text = chosen.title
+                    openChapterSource(chosen, 0)
+                }
+            }
+            .setNegativeButton("关闭", null)
+            .show()
     }
 
     private fun showBookmarkDialog() {
@@ -582,13 +668,14 @@ class ComicReaderActivity : AppCompatActivity() {
         val options = arrayOf(
             "翻页方式: ${readerConfig.scrollMode.label}",
             "单双页模式: ${readerConfig.doublePageMode.label}",
+            "合并顺序: ${if (readerConfig.mergeRightToLeft) "右→左 (日漫)" else "左→右"}",
             "更改跨页匹配: ${if (readerConfig.firstPageSingle) "首页单页起" else "成对跨页起"}",
             "去白边: ${if (readerConfig.trimMargins) "开" else "关"}",
             "背景色: ${readerConfig.bgColor.label}",
             "管理与自定义更多配置..."
         )
         MaterialAlertDialogBuilder(this)
-            .setTitle("当前阅读配置 (${readerConfig.name})")
+            .setTitle("阅读设置 (${readerConfig.name})")
             .setItems(options) { _, which ->
                 when (which) {
                     0 -> {
@@ -604,20 +691,26 @@ class ComicReaderActivity : AppCompatActivity() {
                         bitmapCache.evictAll()
                         rebuildSlotsAndRender(getCurrentRawPage())
                     }
-                    2 -> toggleCrossPageMatch()
-                    3 -> {
+                    2 -> {
+                        readerConfig = readerConfig.copy(mergeRightToLeft = !readerConfig.mergeRightToLeft)
+                        app.db.upsertReaderConfig(readerConfig)
+                        bitmapCache.evictAll()
+                        rebuildSlotsAndRender(getCurrentRawPage())
+                    }
+                    3 -> toggleCrossPageMatch()
+                    4 -> {
                         readerConfig = readerConfig.copy(trimMargins = !readerConfig.trimMargins)
                         app.db.upsertReaderConfig(readerConfig)
                         bitmapCache.evictAll()
                         rebuildSlotsAndRender(getCurrentRawPage())
                     }
-                    4 -> {
-                        val bgs = com.arkreader.comic.data.ReaderBgColor.values()
+                    5 -> {
+                        val bgs = ReaderBgColor.values()
                         readerConfig = readerConfig.copy(bgColor = bgs[(readerConfig.bgColor.ordinal + 1) % bgs.size])
                         app.db.upsertReaderConfig(readerConfig)
                         applyReaderConfigStyle()
                     }
-                    5 -> startActivity(Intent(this, ReaderConfigActivity::class.java))
+                    6 -> startActivity(Intent(this, ReaderConfigActivity::class.java))
                 }
             }
             .show()

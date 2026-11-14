@@ -55,5 +55,9 @@
         <activity
             android:name=".ui.SettingsActivity"
             android:exported="false" />
+
+        <activity
+            android:name=".ui.SourceManageActivity"
+            android:exported="false" />
     </application>
 </manifest>

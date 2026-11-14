@@ -54,14 +54,14 @@ class BookshelfManageActivity : AppCompatActivity() {
     }
 
     private fun showCreateShelfDialog() {
-        val input = EditText(this).apply { hint = "输入新书架名称" }
+        val input = EditText(this).apply { hint = "输入新作品集名称" }
         MaterialAlertDialogBuilder(this)
-            .setTitle("新建书架")
+            .setTitle("新建作品集")
             .setView(input)
             .setPositiveButton("创建") { _, _ ->
                 val name = input.text?.toString()?.trim().orEmpty()
                 if (name.isBlank()) {
-                    Toast.makeText(this, "书架名称不能为空", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this, "作品集名称不能为空", Toast.LENGTH_SHORT).show()
                 } else {
                     val existing = app.db.getBookshelves()
                     app.db.upsertBookshelf(Bookshelf(name = name, sortOrder = existing.size))
@@ -79,11 +79,11 @@ class BookshelfManageActivity : AppCompatActivity() {
             setPadding(pad, pad / 2, pad, 0)
         }
         val etName = EditText(this).apply {
-            hint = "书架名称"
+            hint = "作品集名称"
             setText(shelf.name)
         }
         val cbHidden = CheckBox(this).apply {
-            text = "从首页「全部」中隐藏此书架的漫画"
+            text = "从本地全部中隐藏此作品集的漫画"
             isChecked = shelf.isHiddenFromAll
         }
         val cbQuickRelock = CheckBox(this).apply {
@@ -116,7 +116,7 @@ class BookshelfManageActivity : AppCompatActivity() {
         container.addView(etPin)
 
         MaterialAlertDialogBuilder(this)
-            .setTitle("书架设置与加密")
+            .setTitle("作品集设置与加密")
             .setView(container)
             .setPositiveButton("保存") { _, _ ->
                 val newLock = when {
@@ -151,12 +151,12 @@ class BookshelfManageActivity : AppCompatActivity() {
 
     private fun confirmDeleteShelf(shelf: Bookshelf) {
         if (shelf.id == 1L) {
-            Toast.makeText(this, "默认书架不可删除", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "默认作品集不可删除", Toast.LENGTH_SHORT).show()
             return
         }
         MaterialAlertDialogBuilder(this)
-            .setTitle("删除书架")
-            .setMessage("确定删除书架「${shelf.name}」吗？（不会删除漫画本身）")
+            .setTitle("删除作品集")
+            .setMessage("确定删除作品集「${shelf.name}」吗？（不会删除漫画本身）")
             .setPositiveButton("删除") { _, _ ->
                 app.db.deleteBookshelf(shelf.id)
                 if (app.prefs.activeBookshelfId == shelf.id) {

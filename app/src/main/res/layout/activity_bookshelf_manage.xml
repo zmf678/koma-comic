@@ -12,7 +12,7 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         app:navigationIcon="@drawable/ic_arrow_back"
-        app:title="书架管理" />
+        app:title="作品集管理" />
 
     <com.google.android.material.button.MaterialButton
         android:id="@+id/btnAddShelf"
@@ -20,7 +20,7 @@
         android:layout_height="wrap_content"
         android:layout_marginHorizontal="16dp"
         android:layout_marginVertical="8dp"
-        android:text="新建书架" />
+        android:text="新建作品集" />
 
     <androidx.recyclerview.widget.RecyclerView
         android:id="@+id/rvBookshelves"

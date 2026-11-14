@@ -6,7 +6,7 @@
 
 [中文](README.md) | **English**
 
-**KomaComic** is an open-source local and WebDAV comic/manga reader built for Android tablets and phones. Named after the comic panel (*Koma*), it focuses on local comic libraries, adaptive portrait/landscape double-page reading on large screens, and a clean, distraction-free experience—no ads, no expiration popups, and no third-party analytics or tracking SDKs.
+**KomaComic** is an open-source online-source, local, and WebDAV comic/manga reader built for Android tablets and phones. Named after the comic panel (*Koma*), it features a built-in Venera-compatible JavaScript comic source engine, adaptive portrait/landscape double-page reading on large screens, and an edge-to-edge distraction-free interface—no ads, no expiration popups, and no third-party tracking SDKs.
 
 > Package ID: `com.arkreader.comic` · Minimum SDK: Android 9.0 (API 28) · Target SDK: Android 14 (API 34)
 
@@ -14,31 +14,29 @@
 
 ## Features
 
-### 1. Multi-Source Libraries & Format Support
-- **Local Directories (SAF)**: Persistent Storage Access Framework (`OpenDocumentTree`) permissions for internal storage and SD cards, with optional `.nomedia` creation, custom cover filenames, and gallery-hiding toggles.
+### 1. Built-in Venera-Compatible Comic Sources & Collections (`作品集`)
+- **Built-in JS Comic Source Runtime & Repository Subscription**:
+  - Zero-dependency Android `WebView` + native HTTP/Cookie/Crypto/DOM bridge compatible with standard Venera / Venera-Next `ComicSource` JS scripts and `index.json` repositories.
+  - Ships with clean-room built-in sources (**再漫画**, **MangaDex**, **XKCD**) out of the box, plus one-tap subscription to `index.json` source repos or custom `.js` URL/file imports in **Source Manager**.
+  - Switch between active online comic sources, Local All, Favorites, and Recent History directly on the **Home** tab, with search, endless pagination, and one-tap **Add to Collection (`加入作品集`)**.
+- **Collections & Privacy Lock**:
+  - Group local and online comics into custom Collections (`作品集`), optionally hiding private collections from the Local gallery.
+  - Protect any collection with a **Numeric PIN** or system **`BiometricPrompt` fingerprint lock** (with optional 2-second quick relock).
+
+### 2. Multi-Source Local / WebDAV Libraries & Formats
+- **Local Directories (SAF)**: Persistent Storage Access Framework (`OpenDocumentTree`) permissions for internal storage and SD cards, with optional `.nomedia` creation and custom cover filenames.
 - **WebDAV Libraries**: Built-in lightweight WebDAV client (Basic Auth and connection testing) to scan and stream remote comic folders, archives, and PDFs.
 - **Supported Formats**:
+  - Online comic source streams (`ComicFormat.ONLINE`)
   - Local / remote image folders (`jpg` / `jpeg` / `png` / `webp` / `bmp` / `gif`)
   - Archive & e-book comics (`ZIP` / `CBZ` / `EPUB`)
   - Native PDF rendering via Android `PdfRenderer` with adjustable render scale
 
-### 2. Tablet-First Comic Reader
-- **Portrait Single Page / Landscape Double Spread (`AUTO_LANDSCAPE`)**:
-  - Automatically displays single pages in portrait and side-by-side double-page spreads in landscape while preserving your current reading position on rotation (also switchable anytime to Single Page, Always Double Page, or Split Double Page).
-  - Pre-scans local page dimensions so already-wide spread images stay intact instead of being merged twice.
-- **Quick Overlay Action Pills**:
-  - **Change Spread Pairing (`更改跨页匹配`)**: Built directly into the reader UI overlay to toggle first-page pairing parity (`Single Start` vs `Paired Start`), fixing misaligned two-page spreads in one tap without losing your page.
-  - **Merge Direction Toggle**: Instantly switch double-page ordering between `Left → Right` and `Right → Left` (Manga).
-- **Customizable Per-Comic Reader Profiles**:
-  - Reading modes: Vertical continuous scroll, Horizontal LTR, Horizontal RTL
-  - Gestures & hardware keys: Pinch-to-zoom, double-tap zoom, customizable tap zones (Left/Right or Diagonal), swapped tap directions, volume-key page turns, haptic feedback
-  - Image & display tools: Smart white-margin trimming (adjustable threshold & 10% edge safety), blank-page detection, horizontal padding, background colors (Black / Dark Gray / Light Gray / White), keep-screen-on, and bookmarks
-
-### 3. Bookshelves, Privacy Lock & Themes
-- **Adaptive Tablet & Phone Layout**: Uses a `NavigationRail` sidebar and multi-column grid on tablets (`>= 600dp`), switching automatically to a `BottomNavigationView` on phones.
-- **Bookshelf Management & App Lock**: Create custom bookshelves, hide private shelves from the Home "All" tab, and protect shelves with a **Numeric PIN** or system **`BiometricPrompt` fingerprint lock** (with optional 2-second background quick relock).
-- **Natural Sorting & CJK Search**: Natural numeric ordering for volumes/chapters (e.g. `Ch. 2` before `Ch. 10`), case-insensitive filtering, and Traditional/Simplified Chinese character folding.
-- **Theming & Cache Control**: System / Light / Dark night modes, 8 accent color themes, 4 library density presets (Large / Medium / Small grid & List), and one-tap cover/archive cache cleanup.
+### 3. Immersive Reader & Floating Capsule Menu
+- **Edge-to-Edge Fullscreen with Transparent Status Bar Reveal**: Hides system status and navigation bars completely during reading, revealing a clean transparent status bar over a subtle top gradient only when tapping the center of the screen to open the menu.
+- **Floating Rounded Capsule Menu & Spread Pairing Pill**: Minimalist dark floating bottom capsule (progress seek bar, previous/next chapter, hexagon reader settings, bookmarks, chapters directory) topped by the **Change Spread Pairing (`更改跨页匹配`)** floating pill.
+- **Portrait Single Page / Landscape Double Spread (`AUTO_LANDSCAPE`)**: Automatically switches between single-page portrait and side-by-side double-page landscape spreads while preserving reading position on rotation.
+- **Customizable Per-Comic Reader Profiles**: Vertical continuous scroll, Horizontal LTR, Horizontal RTL, pinch/double-tap zoom, customizable tap zones, volume-key flipping, smart white-margin trimming, blank-page detection, and bookmarks.
 
 ---
 
@@ -51,14 +49,15 @@ koma-comic/
 │   └── src/
 │       ├── main/
 │       │   ├── AndroidManifest.xml
+│       │   ├── assets/                             # Clean-room Venera JS host shim & built-in comic sources
 │       │   ├── java/com/arkreader/comic/
-│       │   │   ├── ArkReaderApp.kt                 # Application entry point & singletons (DB / Prefs / Cache)
+│       │   │   ├── ArkReaderApp.kt                 # Application entry point & singletons (DB / Prefs / Cache / VeneraRuntime)
 │       │   │   ├── data/                           # Models, SQLite DatabaseHelper & SharedPreferences
-│       │   │   ├── engine/                         # Scanner, WebDAV, PDF/ZIP/SAF sources, image & spread engine
-│       │   │   └── ui/                             # Main library, detail view, reader, warehouse & settings UIs
+│       │   │   ├── engine/                         # Venera JS runtime, repo client, WebDAV/PDF/ZIP & spread engine
+│       │   │   └── ui/                             # Home feeds, source manager, detail view, reader, collections & settings UIs
 │       │   └── res/                                # Tablet/phone responsive layouts, themes & icon assets
 │       └── test/java/com/arkreader/comic/
-│           └── CoreEngineTest.kt                   # Core engine unit tests
+│           └── CoreEngineTest.kt                   # Core engine & script parser unit tests
 ├── build.gradle.kts
 ├── gradle.properties
 ├── settings.gradle.kts

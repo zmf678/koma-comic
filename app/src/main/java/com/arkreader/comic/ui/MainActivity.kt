@@ -11,6 +11,7 @@ import android.text.TextWatcher
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import android.view.inputmethod.EditorInfo
 import android.widget.EditText
 import android.widget.ImageView
 import android.widget.PopupMenu
@@ -27,36 +28,62 @@ import com.arkreader.comic.data.Comic
 import com.arkreader.comic.data.DatabaseHelper
 import com.arkreader.comic.data.GridSize
 import com.arkreader.comic.data.LockType
+import com.arkreader.comic.data.RemoteComicItem
 import com.arkreader.comic.data.SortType
 import com.arkreader.comic.databinding.ActivityMainBinding
 import com.arkreader.comic.databinding.ItemComicCardBinding
 import com.arkreader.comic.databinding.ItemComicListBinding
 import com.arkreader.comic.engine.LocalScanner
+import com.google.android.material.chip.Chip
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
+sealed class DisplayComicItem {
+    data class Local(val comic: Comic) : DisplayComicItem()
+    data class Online(val remote: RemoteComicItem) : DisplayComicItem()
+}
+
 class MainActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityMainBinding
     private val app get() = ArkReaderApp.instance
 
-    private var currentNavMode = NAV_HOME // 0=Home, 1=Bookshelf
-    private var homeTabMode = 0 // 0=All, 1=Favorite, 2=History
+    private var currentNavMode = NAV_HOME // 0=Home, 1=Collections
+    private var activeHomeFilterTag = ""
     private val unlockedShelfIds = mutableSetOf<Long>()
     private val shelfPassTimes = mutableMapOf<Long, Long>()
     private var currentQuery = ""
     private var scanJob: Job? = null
+    private var sourceLoadJob: Job? = null
+    private var searchDebounceJob: Job? = null
+
+    private var onlinePage = 1
+    private var onlineMaxPage: Int? = null
+    private var isLoadingMoreOnline = false
+    private val onlineItems = mutableListOf<RemoteComicItem>()
 
     private val comicAdapter = ComicAdapter(
-        onClick = { comic -> openComic(comic) },
-        onLongClick = { comic -> showComicQuickMenu(comic) },
-        loadCover = { key, iv -> loadCoverAsync(key, iv) }
+        onClick = { item ->
+            when (item) {
+                is DisplayComicItem.Local -> openComic(item.comic)
+                is DisplayComicItem.Online -> openRemoteComic(item.remote)
+            }
+        },
+        onLongClick = { item ->
+            when (item) {
+                is DisplayComicItem.Local -> showComicQuickMenu(item.comic)
+                is DisplayComicItem.Online -> showRemoteQuickMenu(item.remote)
+            }
+        },
+        loadLocalCover = { key, iv -> loadLocalCoverAsync(key, iv) },
+        loadOnlineCover = { url, headers, iv -> loadOnlineCoverAsync(url, headers, iv) }
     )
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -73,12 +100,12 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
-        // Sync highlight on nav bar back to current mode after returning from sub-activities
         val selectedId = if (currentNavMode == NAV_HOME) R.id.menu_home else R.id.menu_bookshelf
         binding.navRail?.menu?.findItem(selectedId)?.isChecked = true
         binding.bottomNav?.menu?.findItem(selectedId)?.isChecked = true
         applyGridLayoutManager()
         relockQuickShelvesIfNeeded()
+        if (currentNavMode == NAV_HOME) rebuildHomeChips() else rebuildCollectionChips()
         reloadComics()
     }
 
@@ -87,14 +114,18 @@ class MainActivity : AppCompatActivity() {
             when (itemId) {
                 R.id.menu_home -> {
                     currentNavMode = NAV_HOME
+                    binding.chipScroll.visibility = View.VISIBLE
                     binding.chipGroupHome.visibility = View.VISIBLE
+                    rebuildHomeChips()
                     reloadComics()
                     true
                 }
                 R.id.menu_bookshelf -> {
                     currentNavMode = NAV_BOOKSHELF
-                    binding.chipGroupHome.visibility = View.GONE
-                    promptSelectBookshelfOrReload()
+                    binding.chipScroll.visibility = View.VISIBLE
+                    binding.chipGroupHome.visibility = View.VISIBLE
+                    rebuildCollectionChips()
+                    reloadComics()
                     true
                 }
                 R.id.menu_warehouse -> {
@@ -112,27 +143,137 @@ class MainActivity : AppCompatActivity() {
         binding.bottomNav?.setOnItemSelectedListener { navListener(it.itemId) }
     }
 
+    private fun rebuildHomeChips() {
+        val enabledSources = app.db.getComicSources(onlyEnabled = true)
+        if (activeHomeFilterTag.isEmpty() ||
+            (activeHomeFilterTag.startsWith("src:") && enabledSources.none { "src:${it.sourceKey}" == activeHomeFilterTag })
+        ) {
+            activeHomeFilterTag = enabledSources.firstOrNull()?.let { "src:${it.sourceKey}" } ?: TAG_LOCAL_ALL
+        }
+
+        val group = binding.chipGroupHome
+        group.setOnCheckedStateChangeListener(null)
+        group.removeAllViews()
+
+        fun addFilterChip(tag: String, label: String): Chip {
+            val chip = Chip(this, null, com.google.android.material.R.attr.chipStyle).apply {
+                id = View.generateViewId()
+                text = label
+                isCheckable = true
+                isCheckedIconVisible = false
+                this.tag = tag
+                isChecked = tag == activeHomeFilterTag
+            }
+            group.addView(chip)
+            return chip
+        }
+
+        enabledSources.forEach { src ->
+            addFilterChip("src:${src.sourceKey}", src.name)
+        }
+        addFilterChip(TAG_LOCAL_ALL, getString(R.string.tab_all))
+        addFilterChip(TAG_LOCAL_FAV, getString(R.string.tab_favorite))
+        addFilterChip(TAG_LOCAL_HISTORY, getString(R.string.tab_history))
+
+        val manageChip = Chip(this, null, com.google.android.material.R.attr.chipStyle).apply {
+            id = View.generateViewId()
+            text = "+ 源管理"
+            isCheckable = false
+            setOnClickListener {
+                startActivity(Intent(this@MainActivity, SourceManageActivity::class.java))
+            }
+        }
+        group.addView(manageChip)
+
+        group.setOnCheckedStateChangeListener { grp, checkedIds ->
+            val checkedId = checkedIds.firstOrNull() ?: return@setOnCheckedStateChangeListener
+            val selectedChip = grp.findViewById<Chip>(checkedId) ?: return@setOnCheckedStateChangeListener
+            val tag = selectedChip.tag as? String ?: return@setOnCheckedStateChangeListener
+            if (tag != activeHomeFilterTag) {
+                activeHomeFilterTag = tag
+                reloadComics()
+            }
+        }
+    }
+
+    private fun rebuildCollectionChips() {
+        val shelves = app.db.getBookshelves()
+        if (shelves.isEmpty()) {
+            binding.chipGroupHome.removeAllViews()
+            return
+        }
+        val currentId = app.prefs.activeBookshelfId
+        val activeShelf = shelves.find {
+            it.id == currentId && (it.lockType == LockType.NONE || unlockedShelfIds.contains(it.id))
+        } ?: shelves.firstOrNull {
+            it.lockType == LockType.NONE || unlockedShelfIds.contains(it.id)
+        } ?: shelves.first()
+        if (activeShelf.id != app.prefs.activeBookshelfId) {
+            app.prefs.activeBookshelfId = activeShelf.id
+        }
+
+        val group = binding.chipGroupHome
+        group.setOnCheckedStateChangeListener(null)
+        group.removeAllViews()
+
+        shelves.forEach { shelf ->
+            val lockMark = if (shelf.lockType != LockType.NONE && !unlockedShelfIds.contains(shelf.id)) " [锁]" else ""
+            val chip = Chip(this, null, com.google.android.material.R.attr.chipStyle).apply {
+                id = View.generateViewId()
+                text = shelf.name + lockMark
+                isCheckable = true
+                isCheckedIconVisible = false
+                tag = shelf.id
+                isChecked = shelf.id == activeShelf.id
+            }
+            group.addView(chip)
+        }
+
+        val manageChip = Chip(this, null, com.google.android.material.R.attr.chipStyle).apply {
+            id = View.generateViewId()
+            text = "+ 管理作品集"
+            isCheckable = false
+            setOnClickListener {
+                startActivity(Intent(this@MainActivity, BookshelfManageActivity::class.java))
+            }
+        }
+        group.addView(manageChip)
+
+        group.setOnCheckedStateChangeListener { grp, checkedIds ->
+            val checkedId = checkedIds.firstOrNull() ?: return@setOnCheckedStateChangeListener
+            val selectedChip = grp.findViewById<Chip>(checkedId) ?: return@setOnCheckedStateChangeListener
+            val shelfId = selectedChip.tag as? Long ?: return@setOnCheckedStateChangeListener
+            val chosen = app.db.getBookshelf(shelfId) ?: return@setOnCheckedStateChangeListener
+            selectBookshelf(chosen)
+        }
+    }
+
     private fun setupSearchAndFilters() {
         binding.etSearch.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
-                currentQuery = s?.toString()?.trim().orEmpty()
-                reloadComics()
+                val next = s?.toString()?.trim().orEmpty()
+                if (next == currentQuery) return
+                currentQuery = next
+                searchDebounceJob?.cancel()
+                if (currentNavMode == NAV_HOME && activeHomeFilterTag.startsWith("src:")) {
+                    searchDebounceJob = lifecycleScope.launch {
+                        delay(420)
+                        reloadComics()
+                    }
+                } else {
+                    reloadComics()
+                }
             }
             override fun afterTextChanged(s: Editable?) {}
         })
 
-        binding.chipAll.setOnClickListener {
-            homeTabMode = 0
-            reloadComics()
-        }
-        binding.chipFavorite.setOnClickListener {
-            homeTabMode = 1
-            reloadComics()
-        }
-        binding.chipHistory.setOnClickListener {
-            homeTabMode = 2
-            reloadComics()
+        binding.etSearch.setOnEditorActionListener { _, actionId, _ ->
+            if (actionId == EditorInfo.IME_ACTION_SEARCH) {
+                searchDebounceJob?.cancel()
+                reloadComics()
+                true
+            } else false
         }
 
         binding.btnFilterSort.setOnClickListener { showSortAndGridDialog() }
@@ -142,6 +283,25 @@ class MainActivity : AppCompatActivity() {
     private fun setupRecycler() {
         applyGridLayoutManager()
         binding.rvComics.adapter = comicAdapter
+        binding.rvComics.addOnScrollListener(object : RecyclerView.OnScrollListener() {
+            override fun onScrolled(recyclerView: RecyclerView, dx: Int, dy: Int) {
+                if (dy <= 0) return
+                if (currentNavMode != NAV_HOME || !activeHomeFilterTag.startsWith("src:")) return
+                if (isLoadingMoreOnline) return
+                val max = onlineMaxPage
+                if (max != null && onlinePage >= max) return
+
+                val lm = recyclerView.layoutManager ?: return
+                val lastVisible = when (lm) {
+                    is GridLayoutManager -> lm.findLastVisibleItemPosition()
+                    is LinearLayoutManager -> lm.findLastVisibleItemPosition()
+                    else -> return
+                }
+                if (lastVisible >= comicAdapter.itemCount - 6) {
+                    loadOnlineSourcePage(activeHomeFilterTag.removePrefix("src:"), reset = false)
+                }
+            }
+        })
     }
 
     private fun applyGridLayoutManager() {
@@ -187,16 +347,28 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun reloadComics() {
+        sourceLoadJob?.cancel()
+        if (currentNavMode == NAV_HOME && activeHomeFilterTag.startsWith("src:")) {
+            val sourceKey = activeHomeFilterTag.removePrefix("src:")
+            loadOnlineSourcePage(sourceKey, reset = true)
+            return
+        }
+
         val activeShelfId = if (currentNavMode == NAV_HOME) 0L else app.prefs.activeBookshelfId
+        val localTabMode = when (activeHomeFilterTag) {
+            TAG_LOCAL_FAV -> 1
+            TAG_LOCAL_HISTORY -> 2
+            else -> 0
+        }
         if (currentNavMode == NAV_HOME) {
-            binding.tvSectionTitle.text = when (homeTabMode) {
+            binding.tvSectionTitle.text = when (localTabMode) {
                 1 -> "收藏"
                 2 -> "最近"
-                else -> "全部"
+                else -> "本地全部"
             }
         } else {
             val shelf = app.db.getBookshelf(activeShelfId)
-            binding.tvSectionTitle.text = shelf?.name ?: "书架"
+            binding.tvSectionTitle.text = shelf?.name ?: "作品集"
         }
 
         val list = if (currentNavMode == NAV_BOOKSHELF && activeShelfId > 0L) {
@@ -207,16 +379,65 @@ class MainActivity : AppCompatActivity() {
                 app.db.getComicsForHome(0, activeShelfId, unlockedShelfIds, currentQuery, app.prefs.sortType)
             }
         } else {
-            app.db.getComicsForHome(homeTabMode, 0L, unlockedShelfIds, currentQuery, app.prefs.sortType)
+            app.db.getComicsForHome(localTabMode, 0L, unlockedShelfIds, currentQuery, app.prefs.sortType)
         }
 
         binding.tvSectionCount.text = list.size.toString()
-        comicAdapter.submitList(list)
+        comicAdapter.submitList(list.map { DisplayComicItem.Local(it) })
         binding.tvEmpty.visibility = if (list.isEmpty()) View.VISIBLE else View.GONE
-        if (list.isEmpty() && app.db.getWarehouses().isEmpty()) {
-            binding.tvEmpty.text = "尚未添加仓库，点击左侧或下方「仓库」添加本地文件夹或 WebDAV"
+        if (list.isEmpty() && currentNavMode == NAV_BOOKSHELF) {
+            binding.tvEmpty.text = "该作品集暂无漫画，可在动漫源长按或进入详情「加入作品集」"
+        } else if (list.isEmpty() && app.db.getWarehouses().isEmpty()) {
+            binding.tvEmpty.text = "尚未添加本地仓库，可在「仓库」中添加本地目录或 WebDAV"
         } else if (list.isEmpty()) {
             binding.tvEmpty.text = "当前分类暂无漫画"
+        }
+    }
+
+    private fun loadOnlineSourcePage(sourceKey: String, reset: Boolean) {
+        val srcName = app.db.getComicSource(sourceKey)?.name ?: sourceKey
+        binding.tvSectionTitle.text = if (currentQuery.isNotBlank()) "$srcName · 搜索" else srcName
+        val nextPage = if (reset) 1 else onlinePage + 1
+        if (reset) {
+            onlineItems.clear()
+            onlinePage = 1
+            onlineMaxPage = null
+            comicAdapter.submitList(emptyList())
+            binding.tvSectionCount.text = "..."
+            binding.tvEmpty.visibility = View.VISIBLE
+            binding.tvEmpty.text = "正在加载「$srcName」..."
+        }
+        isLoadingMoreOnline = true
+        sourceLoadJob = lifecycleScope.launch {
+            val res = runCatching {
+                if (currentQuery.isNotBlank()) {
+                    app.veneraRuntime.searchComics(sourceKey, currentQuery, nextPage)
+                } else {
+                    app.veneraRuntime.loadExplorePage(sourceKey, nextPage)
+                }
+            }
+            isLoadingMoreOnline = false
+            res.onSuccess { (items, maxP) ->
+                if (!isDestroyed) {
+                    if (reset) onlineItems.clear()
+                    val existingIds = onlineItems.asSequence().map { it.id }.toHashSet()
+                    items.forEach { if (existingIds.add(it.id)) onlineItems.add(it) }
+                    onlinePage = nextPage
+                    onlineMaxPage = maxP ?: nextPage
+                    binding.tvSectionCount.text = onlineItems.size.toString()
+                    comicAdapter.submitList(onlineItems.map { DisplayComicItem.Online(it) })
+                    binding.tvEmpty.visibility = if (onlineItems.isEmpty()) View.VISIBLE else View.GONE
+                    if (onlineItems.isEmpty()) {
+                        binding.tvEmpty.text = "「$srcName」暂无匹配漫画"
+                    }
+                }
+            }.onFailure { err ->
+                if (!isDestroyed && reset) {
+                    binding.tvSectionCount.text = "0"
+                    binding.tvEmpty.visibility = View.VISIBLE
+                    binding.tvEmpty.text = "加载「$srcName」失败: ${err.message}\n可切换「本地全部」或在「源管理」中切换动漫源"
+                }
+            }
         }
     }
 
@@ -232,13 +453,13 @@ class MainActivity : AppCompatActivity() {
         }.toTypedArray()
         val currentIdx = shelves.indexOfFirst { it.id == app.prefs.activeBookshelfId }.coerceAtLeast(0)
         MaterialAlertDialogBuilder(this)
-            .setTitle("选择书架")
+            .setTitle("选择作品集")
             .setSingleChoiceItems(names, currentIdx) { dialog, which ->
                 val chosen = shelves[which]
                 dialog.dismiss()
                 selectBookshelf(chosen)
             }
-            .setPositiveButton("管理书架") { _, _ ->
+            .setPositiveButton("管理作品集") { _, _ ->
                 startActivity(Intent(this, BookshelfManageActivity::class.java))
             }
             .setNegativeButton("取消") { _, _ -> reloadComics() }
@@ -261,10 +482,10 @@ class MainActivity : AppCompatActivity() {
     private fun showPinUnlockDialog(shelf: Bookshelf) {
         val input = EditText(this).apply {
             inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_VARIATION_PASSWORD
-            hint = "输入书架密码"
+            hint = "输入作品集密码"
         }
         MaterialAlertDialogBuilder(this)
-            .setTitle("解锁书架「${shelf.name}」")
+            .setTitle("解锁作品集「${shelf.name}」")
             .setView(input)
             .setPositiveButton("确定") { _, _ ->
                 val entered = input.text?.toString().orEmpty()
@@ -272,6 +493,7 @@ class MainActivity : AppCompatActivity() {
                     unlockedShelfIds.add(shelf.id)
                     shelfPassTimes[shelf.id] = System.currentTimeMillis()
                     app.prefs.activeBookshelfId = shelf.id
+                    rebuildCollectionChips()
                     reloadComics()
                 } else {
                     Toast.makeText(this, "密码错误", Toast.LENGTH_SHORT).show()
@@ -295,6 +517,7 @@ class MainActivity : AppCompatActivity() {
                         unlockedShelfIds.add(shelf.id)
                         shelfPassTimes[shelf.id] = System.currentTimeMillis()
                         app.prefs.activeBookshelfId = shelf.id
+                        rebuildCollectionChips()
                         reloadComics()
                     }
 
@@ -340,19 +563,22 @@ class MainActivity : AppCompatActivity() {
 
     private fun showMoreMenu(anchor: View) {
         val popup = PopupMenu(this, anchor)
-        popup.menu.add(0, 1, 0, "重新扫描所有仓库")
-        popup.menu.add(0, 2, 1, "管理仓库")
+        popup.menu.add(0, 1, 0, "刷新当前内容")
+        popup.menu.add(0, 2, 1, "在线漫画源管理")
+        popup.menu.add(0, 3, 2, "重新扫描所有本地仓库")
+        popup.menu.add(0, 4, 3, "管理仓库")
         if (currentNavMode == NAV_BOOKSHELF) {
-            popup.menu.add(0, 3, 2, "切换/管理书架")
+            popup.menu.add(0, 5, 4, "管理作品集")
         } else {
-            popup.menu.add(0, 4, 2, "书架管理")
+            popup.menu.add(0, 6, 4, "作品集管理")
         }
         popup.setOnMenuItemClickListener { item ->
             when (item.itemId) {
-                1 -> scanAllWarehouses()
-                2 -> startActivity(Intent(this, WarehouseActivity::class.java))
-                3 -> promptSelectBookshelfOrReload()
-                4 -> startActivity(Intent(this, BookshelfManageActivity::class.java))
+                1 -> reloadComics()
+                2 -> startActivity(Intent(this, SourceManageActivity::class.java))
+                3 -> scanAllWarehouses()
+                4 -> startActivity(Intent(this, WarehouseActivity::class.java))
+                5, 6 -> startActivity(Intent(this, BookshelfManageActivity::class.java))
             }
             true
         }
@@ -393,6 +619,16 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun openRemoteComic(remote: RemoteComicItem) {
+        startActivity(Intent(this, ComicDetailActivity::class.java).apply {
+            putExtra(ComicDetailActivity.EXTRA_SOURCE_KEY, remote.sourceKey)
+            putExtra(ComicDetailActivity.EXTRA_REMOTE_ID, remote.id)
+            putExtra(ComicDetailActivity.EXTRA_REMOTE_TITLE, remote.title)
+            putExtra(ComicDetailActivity.EXTRA_REMOTE_COVER, remote.cover)
+            putExtra(ComicDetailActivity.EXTRA_REMOTE_SUB, remote.subTitle)
+        })
+    }
+
     private fun openComicReader(comic: Comic) {
         val chapters = app.db.getChapters(comic.id)
         if (chapters.isEmpty()) {
@@ -414,7 +650,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun showComicQuickMenu(comic: Comic) {
         val favLabel = if (comic.isFavorite) "取消收藏" else "加入收藏"
-        val items = arrayOf("继续阅读", "查看详情", favLabel, "加入书架")
+        val items = arrayOf("继续阅读", "查看详情", favLabel, "加入作品集")
         MaterialAlertDialogBuilder(this)
             .setTitle(comic.title)
             .setItems(items) { _, idx ->
@@ -433,38 +669,107 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
+    private fun showRemoteQuickMenu(remote: RemoteComicItem) {
+        val items = arrayOf("查看详情", "加入作品集", "加入收藏")
+        MaterialAlertDialogBuilder(this)
+            .setTitle(remote.title)
+            .setItems(items) { _, idx ->
+                when (idx) {
+                    0 -> openRemoteComic(remote)
+                    1 -> syncAndAssignRemoteToBookshelf(remote, toggleFavorite = false)
+                    2 -> syncAndAssignRemoteToBookshelf(remote, toggleFavorite = true)
+                }
+            }
+            .show()
+    }
+
+    private fun syncAndAssignRemoteToBookshelf(remote: RemoteComicItem, toggleFavorite: Boolean) {
+        Toast.makeText(this, "正在获取「${remote.title}」信息...", Toast.LENGTH_SHORT).show()
+        lifecycleScope.launch {
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    val details = runCatching {
+                        app.veneraRuntime.loadComicDetails(remote.sourceKey, remote.id)
+                    }.getOrNull()
+                    val coverUrl = details?.cover?.ifEmpty { remote.cover } ?: remote.cover
+                    val headers = details?.headers ?: remote.headers
+                    val (coverKey, _) = if (coverUrl.isNotBlank()) {
+                        app.coverCache.getOrDownloadHttpCover(coverUrl, headers)
+                    } else "" to null
+                    val id = app.db.upsertOnlineComic(
+                        sourceKey = remote.sourceKey,
+                        remoteId = remote.id,
+                        title = details?.title?.ifEmpty { remote.title } ?: remote.title,
+                        subTitle = details?.subTitle?.ifEmpty { remote.subTitle } ?: remote.subTitle,
+                        coverKey = coverKey,
+                        chapters = details?.chapters ?: emptyList()
+                    )
+                    if (toggleFavorite) {
+                        app.db.setFavorite(id, true)
+                    }
+                    app.db.getComic(id)
+                }
+            }.onSuccess { comic ->
+                if (comic != null) {
+                    if (toggleFavorite) {
+                        Toast.makeText(this@MainActivity, "已收藏「${comic.title}」", Toast.LENGTH_SHORT).show()
+                    } else {
+                        showAssignBookshelfDialog(comic)
+                    }
+                }
+            }.onFailure { err ->
+                Toast.makeText(this@MainActivity, "操作失败: ${err.message}", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
     private fun showAssignBookshelfDialog(comic: Comic) {
         val shelves = app.db.getBookshelves()
         if (shelves.isEmpty()) {
-            Toast.makeText(this, "请先在书架管理中新建书架", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "请先在作品集管理中新建作品集", Toast.LENGTH_SHORT).show()
             return
         }
         val currentIds = app.db.getBookshelfIdsForComic(comic.id).toMutableSet()
         val names = shelves.map { it.name }.toTypedArray()
         val checked = BooleanArray(shelves.size) { currentIds.contains(shelves[it].id) }
         MaterialAlertDialogBuilder(this)
-            .setTitle("加入书架")
+            .setTitle("加入作品集")
             .setMultiChoiceItems(names, checked) { _, which, isChecked ->
                 val id = shelves[which].id
                 if (isChecked) currentIds.add(id) else currentIds.remove(id)
             }
             .setPositiveButton("保存") { _, _ ->
                 app.db.setComicBookshelves(comic.id, currentIds)
-                reloadComics()
+                Toast.makeText(this, "已更新作品集", Toast.LENGTH_SHORT).show()
+                if (currentNavMode == NAV_BOOKSHELF) reloadComics()
             }
             .setNegativeButton("取消", null)
             .show()
     }
 
-    private fun loadCoverAsync(cacheKey: String, imageView: ImageView) {
-        imageView.tag = cacheKey
+    private fun loadLocalCoverAsync(cacheKey: String, imageView: ImageView) {
+        imageView.tag = "local:$cacheKey"
         imageView.setImageResource(R.drawable.ic_koma_logo)
         if (cacheKey.isBlank()) return
         lifecycleScope.launch {
             val bmp: Bitmap? = withContext(Dispatchers.IO) {
                 app.coverCache.getCover(cacheKey)
             }
-            if (imageView.tag == cacheKey && bmp != null) {
+            if (imageView.tag == "local:$cacheKey" && bmp != null) {
+                imageView.setImageBitmap(bmp)
+            }
+        }
+    }
+
+    private fun loadOnlineCoverAsync(url: String, headers: Map<String, String>, imageView: ImageView) {
+        imageView.tag = "url:$url"
+        imageView.setImageResource(R.drawable.ic_koma_logo)
+        if (url.isBlank()) return
+        lifecycleScope.launch {
+            val (_, bmp) = withContext(Dispatchers.IO) {
+                app.coverCache.getOrDownloadHttpCover(url, headers)
+            }
+            if (imageView.tag == "url:$url" && bmp != null) {
                 imageView.setImageBitmap(bmp)
             }
         }
@@ -473,22 +778,26 @@ class MainActivity : AppCompatActivity() {
     companion object {
         private const val NAV_HOME = 0
         private const val NAV_BOOKSHELF = 1
+        private const val TAG_LOCAL_ALL = "local:all"
+        private const val TAG_LOCAL_FAV = "local:fav"
+        private const val TAG_LOCAL_HISTORY = "local:history"
     }
 }
 
 private class ComicAdapter(
-    private val onClick: (Comic) -> Unit,
-    private val onLongClick: (Comic) -> Unit,
-    private val loadCover: (String, ImageView) -> Unit
+    private val onClick: (DisplayComicItem) -> Unit,
+    private val onLongClick: (DisplayComicItem) -> Unit,
+    private val loadLocalCover: (String, ImageView) -> Unit,
+    private val loadOnlineCover: (String, Map<String, String>, ImageView) -> Unit
 ) : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
 
-    private val items = mutableListOf<Comic>()
+    private val items = mutableListOf<DisplayComicItem>()
     private var isListMode = false
     private var doubleLineTitle = false
     private var onlyShowCover = false
     private val dateFormat = SimpleDateFormat("MM-dd HH:mm", Locale.getDefault())
 
-    fun submitList(newItems: List<Comic>) {
+    fun submitList(newItems: List<DisplayComicItem>) {
         items.clear()
         items.addAll(newItems)
         notifyDataSetChanged()
@@ -517,32 +826,64 @@ private class ComicAdapter(
     override fun getItemCount(): Int = items.size
 
     override fun onBindViewHolder(holder: RecyclerView.ViewHolder, position: Int) {
-        val item = items[position]
+        val wrapped = items[position]
         if (holder is GridVH) {
             val b = holder.binding
             b.tvTitle.visibility = if (onlyShowCover) View.GONE else View.VISIBLE
             b.tvTitle.maxLines = if (doubleLineTitle) 2 else 1
-            b.tvTitle.text = item.title
-            if (item.totalChapters > 1) {
-                b.tvBadge.visibility = View.VISIBLE
-                b.tvBadge.text = "${item.totalChapters}章"
-            } else if (item.isFavorite) {
-                b.tvBadge.visibility = View.VISIBLE
-                b.tvBadge.text = "收藏"
-            } else {
-                b.tvBadge.visibility = View.GONE
+            when (wrapped) {
+                is DisplayComicItem.Local -> {
+                    val item = wrapped.comic
+                    b.tvTitle.text = item.title
+                    if (item.totalChapters > 1) {
+                        b.tvBadge.visibility = View.VISIBLE
+                        b.tvBadge.text = "${item.totalChapters}章"
+                    } else if (item.isFavorite) {
+                        b.tvBadge.visibility = View.VISIBLE
+                        b.tvBadge.text = "收藏"
+                    } else {
+                        b.tvBadge.visibility = View.GONE
+                    }
+                    loadLocalCover(item.coverCacheKey, b.ivCover)
+                }
+                is DisplayComicItem.Online -> {
+                    val remote = wrapped.remote
+                    b.tvTitle.text = remote.title
+                    val badgeText = remote.subTitle.ifEmpty { remote.tags.firstOrNull().orEmpty() }
+                    if (badgeText.isNotEmpty()) {
+                        b.tvBadge.visibility = View.VISIBLE
+                        b.tvBadge.text = badgeText
+                    } else {
+                        b.tvBadge.visibility = View.GONE
+                    }
+                    loadOnlineCover(remote.cover, remote.headers, b.ivCover)
+                }
             }
-            loadCover(item.coverCacheKey, b.ivCover)
-            b.root.setOnClickListener { onClick(item) }
-            b.root.setOnLongClickListener { onLongClick(item); true }
+            b.root.setOnClickListener { onClick(wrapped) }
+            b.root.setOnLongClickListener { onLongClick(wrapped); true }
         } else if (holder is ListVH) {
             val b = holder.binding
-            b.tvTitle.text = item.title
-            val readInfo = if (item.lastReadAt > 0L) "最近: ${dateFormat.format(Date(item.lastReadAt))}" else "未读"
-            b.tvSub.text = "${item.format.name} · ${item.totalChapters} 章节 · $readInfo"
-            loadCover(item.coverCacheKey, b.ivCover)
-            b.root.setOnClickListener { onClick(item) }
-            b.root.setOnLongClickListener { onLongClick(item); true }
+            when (wrapped) {
+                is DisplayComicItem.Local -> {
+                    val item = wrapped.comic
+                    b.tvTitle.text = item.title
+                    val readInfo = if (item.lastReadAt > 0L) "最近: ${dateFormat.format(Date(item.lastReadAt))}" else "未读"
+                    b.tvSub.text = "${item.format.name} · ${item.totalChapters} 章节 · $readInfo"
+                    loadLocalCover(item.coverCacheKey, b.ivCover)
+                }
+                is DisplayComicItem.Online -> {
+                    val remote = wrapped.remote
+                    b.tvTitle.text = remote.title
+                    b.tvSub.text = listOfNotNull(
+                        remote.subTitle.takeIf { it.isNotEmpty() },
+                        remote.tags.take(3).joinToString(" / ").takeIf { it.isNotEmpty() },
+                        remote.description.take(40).takeIf { it.isNotEmpty() }
+                    ).joinToString(" · ")
+                    loadOnlineCover(remote.cover, remote.headers, b.ivCover)
+                }
+            }
+            b.root.setOnClickListener { onClick(wrapped) }
+            b.root.setOnLongClickListener { onLongClick(wrapped); true }
         }
     }
 

@@ -2,9 +2,12 @@ package com.arkreader.comic
 
 import android.app.Application
 import androidx.appcompat.app.AppCompatDelegate
+import com.arkreader.comic.data.ComicSourceEntity
 import com.arkreader.comic.data.DatabaseHelper
 import com.arkreader.comic.data.PrefsManager
 import com.arkreader.comic.engine.CoverCache
+import com.arkreader.comic.engine.VeneraRuntime
+import org.json.JSONArray
 
 class ArkReaderApp : Application() {
     lateinit var db: DatabaseHelper
@@ -13,6 +16,8 @@ class ArkReaderApp : Application() {
         private set
     lateinit var coverCache: CoverCache
         private set
+    lateinit var veneraRuntime: VeneraRuntime
+        private set
 
     override fun onCreate() {
         super.onCreate()
@@ -20,7 +25,39 @@ class ArkReaderApp : Application() {
         prefs = PrefsManager(this)
         db = DatabaseHelper(this)
         coverCache = CoverCache(this)
+        veneraRuntime = VeneraRuntime(this, db)
+        seedBuiltinComicSources()
         applyNightMode(prefs.themeMode)
+    }
+
+    private fun seedBuiltinComicSources() {
+        runCatching {
+            val existing = db.getComicSources().associateBy { it.sourceKey }
+            val jsonText = assets.open("sources/builtin_sources.json").bufferedReader().use { it.readText() }
+            val arr = JSONArray(jsonText)
+            for (i in 0 until arr.length()) {
+                val obj = arr.optJSONObject(i) ?: continue
+                val key = obj.optString("key")
+                val name = obj.optString("name", key)
+                val version = obj.optString("version", "1.0.0")
+                val fileName = obj.optString("fileName")
+                if (key.isEmpty() || fileName.isEmpty()) continue
+                val prev = existing[key]
+                if (prev != null && (!prev.builtIn || prev.version == version)) continue
+                val script = assets.open(fileName).bufferedReader().use { it.readText() }
+                db.upsertComicSource(
+                    ComicSourceEntity(
+                        sourceKey = key,
+                        name = name,
+                        version = version,
+                        script = script,
+                        enabled = prev?.enabled ?: true,
+                        builtIn = true,
+                        sortOrder = i
+                    )
+                )
+            }
+        }
     }
 
     fun applyNightMode(mode: Int) {

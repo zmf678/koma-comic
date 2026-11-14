@@ -1,0 +1,23 @@
+[
+  {
+    "key": "zaimanhua",
+    "name": "再漫画",
+    "version": "1.0.0",
+    "fileName": "sources/zaimanhua.js",
+    "description": "中文在线漫画源（内置精简版，支持热门排行、更新列表、搜索与章节阅读）"
+  },
+  {
+    "key": "manga_dex",
+    "name": "MangaDex",
+    "version": "1.0.0",
+    "fileName": "sources/mangadex.js",
+    "description": "全球多语言开源漫画库（内置官方 API 源，优先显示中文章节）"
+  },
+  {
+    "key": "xkcd",
+    "name": "XKCD 极客",
+    "version": "1.0.0",
+    "fileName": "sources/xkcd.js",
+    "description": "经典英文极客科学短漫连载"
+  }
+]

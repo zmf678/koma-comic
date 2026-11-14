@@ -9,7 +9,8 @@ enum class ComicFormat {
     FOLDER,
     ZIP,
     PDF,
-    EPUB
+    EPUB,
+    ONLINE
 }
 
 enum class LockType {

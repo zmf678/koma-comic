@@ -80,11 +80,14 @@ class SettingsActivity : AppCompatActivity() {
 
         addDivider()
         addSectionTitle("管理入口")
-        addActionRow("书架管理与加密", "新建、隐藏或为书架设置 PIN / 指纹锁") {
+        addActionRow("作品集管理与加密", "新建、隐藏或为作品集设置 PIN / 指纹锁") {
             startActivity(Intent(this, BookshelfManageActivity::class.java))
         }
         addActionRow("默认与自定义阅读配置", "双页拆分、白边裁剪、点击区与方向") {
             startActivity(Intent(this, ReaderConfigActivity::class.java))
+        }
+        addActionRow("在线漫画源管理", "内置动漫源、订阅源仓库、导入自定义 JS 源") {
+            startActivity(Intent(this, SourceManageActivity::class.java))
         }
         addActionRow("仓库管理", "本地 SAF 目录与 WebDAV") {
             startActivity(Intent(this, WarehouseActivity::class.java))
