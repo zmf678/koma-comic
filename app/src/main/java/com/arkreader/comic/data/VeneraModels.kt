@@ -24,6 +24,48 @@ data class RemoteComicItem(
     val headers: Map<String, String> = emptyMap()
 )
 
+data class SourceBrowseTarget(
+    val kind: String,
+    val title: String,
+    val index: Int = 0,
+    val category: String = "",
+    val param: String = "",
+    val keyword: String = "",
+    val options: List<String?> = emptyList()
+) : java.io.Serializable
+
+data class SourceCategoryGroup(val index: Int, val title: String)
+
+data class SourceBrowseMenu(
+    val canSearch: Boolean,
+    val channels: List<SourceBrowseTarget>,
+    val groups: List<SourceCategoryGroup>,
+    val ranking: SourceBrowseTarget?
+)
+
+data class SourceFilterChoice(val value: String?, val title: String)
+data class SourceFilterField(
+    val index: Int,
+    val title: String,
+    val multiple: Boolean,
+    val choices: List<SourceFilterChoice>
+)
+data class SourceBrowseFilters(val values: List<String?>, val fields: List<SourceFilterField>)
+
+data class SourceFeedSection(
+    val title: String,
+    val comics: List<RemoteComicItem>,
+    val target: SourceBrowseTarget?
+)
+data class SourceBrowsePage(
+    val sections: List<SourceFeedSection>,
+    val maxPage: Int?,
+    val nextCursor: String?
+) {
+    fun hasNext(page: Int): Boolean =
+        nextCursor != null || (maxPage?.let { page < it } ?: sections.any { it.comics.isNotEmpty() })
+}
+
 data class RemoteChapter(
     val id: String,
     val title: String,

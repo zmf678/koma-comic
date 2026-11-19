@@ -542,23 +542,6 @@
         }
     };
 
-    window.__defaultOptionsFor = function (optionList) {
-        if (!Array.isArray(optionList)) return [];
-        return optionList.map(function (opt) {
-            if (!opt) return "";
-            if (opt.default !== undefined && opt.default !== null) return String(opt.default);
-            const arr = Array.isArray(opt.options) ? opt.options : [];
-            if (!arr.length) return "";
-            const first = arr[0];
-            if (first && typeof first === "object") {
-                return String(first.value !== undefined ? first.value : "");
-            }
-            const s = String(first);
-            const dashIdx = s.indexOf("-");
-            return dashIdx >= 0 ? s.slice(0, dashIdx) : s;
-        });
-    };
-
     window.__extractSourceImageHeaders = function (src) {
         try {
             const h = typeof src.headers === "function" ? src.headers() : src.headers;
@@ -656,6 +639,192 @@
             }
         }
         return { comics: out, maxPage: maxPage };
+    };
+
+    const hasLoader = (entry) => entry &&
+        (typeof entry.load === "function" || typeof entry.loadNext === "function");
+    const exploreEntries = (src) => Array.isArray(src.explore) ? src.explore : [];
+    const categoryParts = (src) => Array.isArray(src.category?.parts) ? src.category.parts : [];
+
+    function browseTarget(src, value, label) {
+        if (typeof value === "string") {
+            const match = /^(category|search):(.*)$/s.exec(value);
+            if (match) {
+                const at = match[2].indexOf("@");
+                value = match[1] === "search"
+                    ? { page: "search", attributes: { text: match[2] } }
+                    : { page: "category", attributes: {
+                        category: at < 0 ? match[2] : match[2].slice(0, at),
+                        param: at < 0 ? "" : match[2].slice(at + 1)
+                    } };
+            } else {
+                const index = exploreEntries(src).findIndex((entry) => entry?.title === value && hasLoader(entry));
+                return index < 0 ? null : { kind: "explore", index, title: label || value };
+            }
+        }
+        const attrs = value?.attributes || {};
+        if (value?.page === "category" && typeof src.categoryComics?.load === "function" && attrs.category != null) {
+            const category = String(attrs.category);
+            return { kind: "category", title: label || category, category, param: String(attrs.param ?? "") };
+        }
+        if (value?.page === "search" && hasLoader(src.search) && (attrs.text ?? attrs.keyword) != null) {
+            const keyword = String(attrs.text ?? attrs.keyword);
+            return { kind: "search", title: label || keyword, keyword, options: Array.isArray(attrs.options) ? attrs.options : [] };
+        }
+        return null;
+    }
+
+    window.__sourceBrowseMenu = function (src) {
+        const ranking = src.categoryComics?.ranking;
+        return {
+            canSearch: Boolean(hasLoader(src.search)),
+            channels: exploreEntries(src).flatMap((entry, index) => hasLoader(entry)
+                ? [{ kind: "explore", index, title: String(entry.title || ("发现 " + (index + 1))) }] : []),
+            groups: categoryParts(src).flatMap((part, index) => part && (
+                (part.type === "dynamic" && typeof part.loader === "function") ||
+                (Array.isArray(part.categories) && part.categories.length > 0)
+            ) ? [{ index, title: String(part.name || "分类") }] : []),
+            ranking: src.category?.enableRankingPage && ranking &&
+                (hasLoader(ranking) || typeof ranking.loadWithNext === "function")
+                ? { kind: "ranking", title: "排行" } : null
+        };
+    };
+
+    window.__sourceBrowseCategories = async function (src, index) {
+        const part = categoryParts(src)[index];
+        if (!part) return [];
+        const entries = part.type === "dynamic" ? await part.loader() : part.categories;
+        if (!Array.isArray(entries)) return [];
+        return entries.flatMap((entry, i) => {
+            const label = entry && typeof entry === "object" ? entry.label : entry;
+            if (label == null || !String(label).trim()) return [];
+            const destination = typeof entry === "object" ? entry.target : (
+                part.itemType === "search"
+                    ? { page: "search", attributes: { text: label } }
+                    : { page: "category", attributes: {
+                        category: label, param: part.categoryParams?.[i] ?? part.groupParam ?? ""
+                    } }
+            );
+            const target = browseTarget(src, destination, String(label));
+            return target ? [target] : [];
+        });
+    };
+
+    function browseChoice(choice) {
+        if (choice && typeof choice === "object") {
+            const value = String(choice.value ?? "");
+            return { value, title: String(choice.label ?? choice.title ?? choice.name ?? value) };
+        }
+        const value = String(choice ?? "");
+        const split = value.indexOf("-");
+        return split < 0 ? { value, title: value } : { value: value.slice(0, split), title: value.slice(split + 1) };
+    }
+
+    window.__sourceBrowseFilters = async function (src, target) {
+        let options;
+        if (target.kind === "search") options = src.search?.optionList;
+        if (target.kind === "category") {
+            const category = src.categoryComics;
+            options = typeof category?.optionLoader === "function"
+                ? await category.optionLoader(target.category, target.param)
+                : category?.optionList;
+        }
+        if (target.kind === "ranking") options = [{ label: "榜单", options: src.categoryComics?.ranking?.options }];
+        if (!Array.isArray(options)) return { values: [], fields: [] };
+        const values = [];
+        const fields = [];
+        options.forEach((option, index) => {
+            const choices = Array.isArray(option?.options) ? option.options.map(browseChoice) : [];
+            const multiple = option?.type === "multi-select";
+            if (option?.type === "dropdown" && choices.length && !choices.some((choice) => choice.value === "")) {
+                choices.unshift({ value: null, title: "不限" });
+            }
+            const initial = option?.default;
+            const fallback = initial != null
+                ? (Array.isArray(initial) ? JSON.stringify(initial) : String(initial))
+                : (multiple ? "[]" : choices.length ? choices[0].value : "");
+            const visible = option && (!Array.isArray(option.showWhen) || option.showWhen.includes(target.category)) &&
+                (!Array.isArray(option.notShowWhen) || !option.notShowWhen.includes(target.category));
+            values.push(index in (target.options || []) ? target.options[index] : fallback);
+            if (visible && choices.length) {
+                fields.push({ index, title: String(option.label || option.title || ("选项 " + (index + 1))), multiple, choices });
+            }
+        });
+        return { values, fields };
+    };
+
+    window.__sourceBrowseFeed = async function (src, target, page, cursor, options) {
+        let entry;
+        let args = [];
+        let type;
+        let loadNext;
+        if (target.kind === "explore") {
+            entry = exploreEntries(src)[target.index];
+            type = entry?.type;
+        } else if (target.kind === "search") {
+            entry = src.search;
+            args = [target.keyword, options];
+        } else if (target.kind === "category") {
+            entry = src.categoryComics;
+            args = [target.category, target.param, options];
+        } else if (target.kind === "ranking") {
+            entry = src.categoryComics?.ranking;
+            args = [options[0] ?? ""];
+            loadNext = entry?.loadWithNext;
+        }
+        const singlePage = type === "singlePageWithMultiPart" || type === "multiPartPage";
+        if (singlePage && page > 1) return { sections: [], maxPage: 1, nextCursor: null };
+        let result;
+        let usesCursor = cursor != null || typeof entry?.load !== "function";
+        if (!usesCursor) {
+            const scriptPage = singlePage ? null : type === "mixed" ? page - 1 : page;
+            result = await entry.load(...args, scriptPage);
+        }
+        // Some bundled scripts leave an empty load stub next to the actual cursor implementation.
+        loadNext = loadNext || entry?.loadNext;
+        if ((usesCursor || result == null) && typeof loadNext === "function") {
+            usesCursor = true;
+            if (page === 1 || cursor != null) {
+                result = await loadNext.call(entry, ...args, cursor == null ? null : JSON.parse(cursor));
+            }
+        }
+        const headers = window.__extractSourceImageHeaders(src);
+        const sections = [];
+        function addSection(comics, title = "", more = null) {
+            const normalized = window.__normalizeComicsResult(comics, page, false, headers).comics;
+            const target = browseTarget(src, more, "");
+            if (normalized.length || target) sections.push({ title: String(title || ""), comics: normalized, target });
+        }
+        if (type === "singlePageWithMultiPart" && result && !Array.isArray(result) &&
+            !Array.isArray(result.comics) && !Array.isArray(result.parts) && !Array.isArray(result.data)) {
+            const parts = result instanceof Map ? result.entries() : Object.entries(result);
+            for (const [title, comics] of parts) addSection(comics, title);
+        } else if (singlePage || type === "mixed") {
+            const parts = Array.isArray(result) ? result : result?.data ?? result?.parts ?? result?.comics;
+            if (Array.isArray(parts) && parts.some((part) => Array.isArray(part) || Array.isArray(part?.comics))) {
+                let batch = [];
+                for (const part of parts) {
+                    if (Array.isArray(part) || Array.isArray(part?.comics)) {
+                        if (batch.length) addSection(batch);
+                        batch = [];
+                        if (Array.isArray(part)) addSection(part);
+                        else addSection(part.comics, part.title, part.viewMore);
+                    } else {
+                        batch.push(part);
+                    }
+                }
+                if (batch.length) addSection(batch);
+            } else addSection(result);
+        } else {
+            addSection(result);
+        }
+        const candidateCursor = usesCursor && result?.next != null ? JSON.stringify(result.next) : null;
+        const nextCursor = candidateCursor === cursor ? null : candidateCursor;
+        const reportedMax = Number(result?.maxPage ?? result?.max_page);
+        const maxPage = singlePage || !result ? page
+            : usesCursor ? (nextCursor == null ? page : null)
+            : Number.isFinite(reportedMax) && reportedMax > 0 ? reportedMax : sections.length ? null : page;
+        return { sections, maxPage, nextCursor };
     };
 
     window.__serializeVenera = function (val) {

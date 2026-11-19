@@ -131,8 +131,11 @@
 
                     <TextView
                         android:id="@+id/tvSectionTitle"
-                        android:layout_width="wrap_content"
+                        android:layout_width="0dp"
                         android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:ellipsize="end"
+                        android:maxLines="2"
                         android:text="全部"
                         android:textColor="@color/text_primary"
                         android:textSize="18sp"
@@ -140,10 +143,9 @@
 
                     <TextView
                         android:id="@+id/tvSectionCount"
-                        android:layout_width="0dp"
+                        android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:layout_marginStart="8dp"
-                        android:layout_weight="1"
                         android:text="0"
                         android:textColor="@color/text_secondary"
                         android:textSize="13sp" />
@@ -158,6 +160,10 @@
                         app:tint="@color/text_primary" />
                 </LinearLayout>
 
+                <include
+                    android:id="@+id/browseControls"
+                    layout="@layout/panel_source_browse" />
+
                 <FrameLayout
                     android:layout_width="match_parent"
                     android:layout_height="0dp"
@@ -171,18 +177,36 @@
                         android:paddingHorizontal="12dp"
                         android:paddingBottom="88dp" />
 
-                    <TextView
-                        android:id="@+id/tvEmpty"
-                        android:layout_width="wrap_content"
+                    <LinearLayout
+                        android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:layout_gravity="center"
                         android:gravity="center"
-                        android:lineSpacingExtra="6dp"
-                        android:padding="24dp"
-                        android:text="@string/empty_comics_tip"
-                        android:textColor="@color/text_secondary"
-                        android:textSize="15sp"
-                        android:visibility="gone" />
+                        android:orientation="vertical"
+                        android:paddingHorizontal="24dp">
+
+                        <TextView
+                            android:id="@+id/tvEmpty"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:gravity="center"
+                            android:lineSpacingExtra="6dp"
+                            android:accessibilityLiveRegion="polite"
+                            android:text="@string/empty_comics_tip"
+                            android:textColor="@color/text_secondary"
+                            android:textSize="15sp"
+                            android:visibility="gone" />
+
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/btnOnlineRetry"
+                            style="@style/Widget.Material3.Button.OutlinedButton"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="12dp"
+                            android:minHeight="48dp"
+                            android:text="重试"
+                            android:visibility="gone" />
+                    </LinearLayout>
                 </FrameLayout>
             </LinearLayout>
 

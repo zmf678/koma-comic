@@ -25,9 +25,16 @@ import android.widget.Toast
 import com.arkreader.comic.data.ComicSourceEntity
 import com.arkreader.comic.data.DatabaseHelper
 import com.arkreader.comic.data.RemoteComicDetails
-import com.arkreader.comic.data.RemoteComicItem
 import com.arkreader.comic.data.RemotePageImage
 import com.arkreader.comic.data.SourceAccountCap
+import com.arkreader.comic.data.SourceBrowseFilters
+import com.arkreader.comic.data.SourceBrowseMenu
+import com.arkreader.comic.data.SourceBrowsePage
+import com.arkreader.comic.data.SourceBrowseTarget
+import com.arkreader.comic.data.SourceCategoryGroup
+import com.arkreader.comic.data.SourceFeedSection
+import com.arkreader.comic.data.SourceFilterChoice
+import com.arkreader.comic.data.SourceFilterField
 import com.arkreader.comic.data.SourceSettingField
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import kotlinx.coroutines.CompletableDeferred
@@ -228,63 +235,85 @@ class VeneraRuntime(
         }
     }
 
-    suspend fun loadExplorePage(sourceKey: String, page: Int = 1): Pair<List<RemoteComicItem>, Int?> {
-        val js = """
-            const fallbackHeaders = window.__extractSourceImageHeaders(src);
-            const arr = Array.isArray(src.explore) ? src.explore : [];
-            let normalized = null;
-            if (arr.length > 0) {
-                const first = arr[0];
-                const isSingle = first.type === 'singlePageWithMultiPart';
-                if (isSingle && $page > 1) {
-                    return { comics: [], maxPage: 1 };
-                }
-                if (typeof first.load === 'function') {
-                    const r = await first.load($page);
-                    normalized = window.__normalizeComicsResult(r, $page, isSingle, fallbackHeaders);
-                } else if (typeof first.loadNext === 'function') {
-                    const key = '_next_' + ($page - 1);
-                    const token = ($page <= 1) ? null : src[key];
-                    const r = await first.loadNext(token);
-                    if (r && r.next !== undefined) src['_next_' + $page] = r.next;
-                    const maxP = (r && r.next) ? ($page + 1) : $page;
-                    normalized = window.__normalizeComicsResult({ comics: (r && r.comics) || [], maxPage: maxP }, $page, false, fallbackHeaders);
-                }
-            }
-            if ((!normalized || !normalized.comics || normalized.comics.length === 0) &&
-                src.categoryComics && typeof src.categoryComics.load === 'function') {
-                let firstCat = "全部";
-                let firstParam = "";
-                const parts = src.category && Array.isArray(src.category.parts) ? src.category.parts : [];
-                if (parts.length > 0) {
-                    const p0 = parts[0];
-                    if (Array.isArray(p0.categories) && p0.categories.length > 0) firstCat = p0.categories[0];
-                    if (Array.isArray(p0.categoryParams) && p0.categoryParams.length > 0) firstParam = p0.categoryParams[0];
-                }
-                const opts = window.__defaultOptionsFor(src.categoryComics.optionList);
-                const cr = await src.categoryComics.load(firstCat, firstParam, opts, $page);
-                normalized = window.__normalizeComicsResult(cr, $page, false, fallbackHeaders);
-            }
-            return normalized || { comics: [], maxPage: 1 };
-        """.trimIndent()
-        val raw = invokeAsyncJs(sourceKey, js)
-        return VeneraScriptParser.parseComicsListResult(sourceKey, raw)
+    suspend fun getBrowseMenu(sourceKey: String): SourceBrowseMenu {
+        val menu = JSONObject(invokeAsyncJs(sourceKey, "return window.__sourceBrowseMenu(src);"))
+        return SourceBrowseMenu(
+            canSearch = menu.optBoolean("canSearch"),
+            channels = menu.optJSONArray("channels").objects().map(::parseBrowseTarget),
+            groups = menu.optJSONArray("groups").objects().map {
+                SourceCategoryGroup(it.getInt("index"), it.getString("title"))
+            },
+            ranking = menu.optJSONObject("ranking")?.let(::parseBrowseTarget)
+        )
     }
 
-    suspend fun searchComics(sourceKey: String, keyword: String, page: Int = 1): Pair<List<RemoteComicItem>, Int?> {
-        val q = JSONObject.quote(keyword)
-        val js = """
-            if (!src.search || typeof src.search.load !== 'function') {
-                return { comics: [], maxPage: 1 };
+    suspend fun getBrowseCategories(sourceKey: String, groupIndex: Int): List<SourceBrowseTarget> =
+        JSONArray(invokeAsyncJs(sourceKey, "return window.__sourceBrowseCategories(src, $groupIndex);"))
+            .objects().map(::parseBrowseTarget)
+
+    suspend fun getBrowseFilters(sourceKey: String, target: SourceBrowseTarget): SourceBrowseFilters {
+        val json = JSONObject(invokeAsyncJs(sourceKey, "return window.__sourceBrowseFilters(src, ${target.toJson()});"))
+        return SourceBrowseFilters(
+            values = json.optJSONArray("values").strings(),
+            fields = json.optJSONArray("fields").objects().map { field ->
+                SourceFilterField(
+                    index = field.getInt("index"),
+                    title = field.getString("title"),
+                    multiple = field.optBoolean("multiple"),
+                    choices = field.optJSONArray("choices").objects().map {
+                        SourceFilterChoice(it.optString("value").takeUnless { _ -> it.isNull("value") }, it.getString("title"))
+                    }
+                )
             }
-            const opts = window.__defaultOptionsFor(src.search.optionList);
-            const r = await src.search.load($q, opts, $page);
-            const fallbackHeaders = window.__extractSourceImageHeaders(src);
-            return window.__normalizeComicsResult(r, $page, false, fallbackHeaders);
-        """.trimIndent()
-        val raw = invokeAsyncJs(sourceKey, js)
-        return VeneraScriptParser.parseComicsListResult(sourceKey, raw)
+        )
     }
+
+    suspend fun loadBrowsePage(
+        sourceKey: String,
+        target: SourceBrowseTarget,
+        options: List<String?>,
+        page: Int,
+        cursor: String?
+    ): SourceBrowsePage {
+        val token = cursor?.let(JSONObject::quote) ?: "null"
+        val js = "return window.__sourceBrowseFeed(src, ${target.toJson()}, $page, $token, ${JSONArray(options)});"
+        val result = JSONObject(invokeAsyncJs(sourceKey, js))
+        val sections = result.optJSONArray("sections").objects().map { section ->
+            SourceFeedSection(
+                title = section.optString("title"),
+                comics = VeneraScriptParser.parseComicsListResult(sourceKey, section.toString()).first,
+                target = section.optJSONObject("target")?.let(::parseBrowseTarget)
+            )
+        }
+        return SourceBrowsePage(
+            sections, result.optInt("maxPage").takeIf { it > 0 },
+            result.optString("nextCursor").takeUnless { result.isNull("nextCursor") }
+        )
+    }
+
+    private fun parseBrowseTarget(json: JSONObject) = SourceBrowseTarget(
+        kind = json.getString("kind"),
+        title = json.getString("title"),
+        index = json.optInt("index"),
+        category = json.optString("category"),
+        param = json.optString("param"),
+        keyword = json.optString("keyword"),
+        options = json.optJSONArray("options").strings()
+    )
+
+    private fun SourceBrowseTarget.toJson() = JSONObject()
+        .put("kind", kind)
+        .put("index", index)
+        .put("category", category)
+        .put("param", param)
+        .put("keyword", keyword)
+        .put("options", JSONArray(options))
+
+    private fun JSONArray?.objects(): List<JSONObject> =
+        if (this == null) emptyList() else (0 until length()).mapNotNull(::optJSONObject)
+
+    private fun JSONArray?.strings(): List<String?> =
+        if (this == null) emptyList() else (0 until length()).map { if (isNull(it)) null else optString(it) }
 
     suspend fun loadComicDetails(sourceKey: String, remoteId: String): RemoteComicDetails {
         val qId = JSONObject.quote(remoteId)

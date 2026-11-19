@@ -7,16 +7,21 @@ import android.os.Bundle
 import android.os.CancellationSignal
 import android.text.Editable
 import android.text.InputType
+import android.text.TextUtils
 import android.text.TextWatcher
+import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.view.inputmethod.EditorInfo
 import android.widget.EditText
 import android.widget.ImageView
+import android.widget.LinearLayout
 import android.widget.PopupMenu
+import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.os.BundleCompat
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.LinearLayoutManager
@@ -30,19 +35,27 @@ import com.arkreader.comic.data.GridSize
 import com.arkreader.comic.data.LockType
 import com.arkreader.comic.data.RemoteComicItem
 import com.arkreader.comic.data.SortType
+import com.arkreader.comic.data.SourceBrowseFilters
+import com.arkreader.comic.data.SourceBrowseMenu
+import com.arkreader.comic.data.SourceBrowseTarget
+import com.arkreader.comic.data.SourceCategoryGroup
+import com.arkreader.comic.data.SourceFilterField
 import com.arkreader.comic.databinding.ActivityMainBinding
 import com.arkreader.comic.databinding.ItemComicCardBinding
 import com.arkreader.comic.databinding.ItemComicListBinding
 import com.arkreader.comic.engine.LocalScanner
 import com.google.android.material.chip.Chip
+import com.google.android.material.button.MaterialButton
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.json.JSONArray
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -50,12 +63,15 @@ import java.util.Locale
 sealed class DisplayComicItem {
     data class Local(val comic: Comic) : DisplayComicItem()
     data class Online(val remote: RemoteComicItem) : DisplayComicItem()
+    data class Section(val title: String, val target: SourceBrowseTarget?) : DisplayComicItem()
+    data class PageAction(val text: String, val enabled: Boolean) : DisplayComicItem()
 }
 
 class MainActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityMainBinding
     private val app get() = ArkReaderApp.instance
+    private val Int.dp get() = (this * resources.displayMetrics.density + 0.5f).toInt()
 
     private var currentNavMode = NAV_HOME // 0=Home, 1=Collections, 2=Warehouse, 3=Settings
     private var activeHomeFilterTag = ""
@@ -68,22 +84,33 @@ class MainActivity : AppCompatActivity() {
     private lateinit var warehousePanel: MainWarehousePanel
     private lateinit var settingsPanel: MainSettingsPanel
 
-    private var onlinePage = 1
-    private var onlineMaxPage: Int? = null
-    private var isLoadingMoreOnline = false
-    private val onlineItems = mutableListOf<RemoteComicItem>()
+    private var browseMenu: SourceBrowseMenu? = null
+    private var browseTarget: SourceBrowseTarget? = null
+    private var filterTarget: SourceBrowseTarget? = null
+    private var browseFilters: SourceBrowseFilters? = null
+    private var categoryJob: Job? = null
+    private var onlinePage = 0
+    private var onlineCursor: String? = null
+    private var onlineHasNext = false
+    private var onlineLoading = false
+    private var onlinePageFailed = false
+    private val onlineItems = mutableListOf<DisplayComicItem>()
+    private val ungroupedComicIds = mutableSetOf<String>()
 
     private val comicAdapter = ComicAdapter(
         onClick = { item ->
             when (item) {
                 is DisplayComicItem.Local -> openComic(item.comic)
                 is DisplayComicItem.Online -> openRemoteComic(item.remote)
+                is DisplayComicItem.Section -> item.target?.let(::selectBrowseTarget)
+                is DisplayComicItem.PageAction -> requestNextOnlinePage()
             }
         },
         onLongClick = { item ->
             when (item) {
                 is DisplayComicItem.Local -> showComicQuickMenu(item.comic)
                 is DisplayComicItem.Online -> showRemoteQuickMenu(item.remote)
+                else -> Unit
             }
         },
         loadLocalCover = { key, iv -> loadLocalCoverAsync(key, iv) },
@@ -99,6 +126,7 @@ class MainActivity : AppCompatActivity() {
         if (savedInstanceState != null) {
             currentNavMode = savedInstanceState.getInt(STATE_NAV_MODE, NAV_HOME)
             activeHomeFilterTag = savedInstanceState.getString(STATE_HOME_FILTER, "")
+            browseTarget = BundleCompat.getSerializable(savedInstanceState, STATE_BROWSE_TARGET, SourceBrowseTarget::class.java)
         }
 
         warehousePanel = MainWarehousePanel(
@@ -125,6 +153,7 @@ class MainActivity : AppCompatActivity() {
         super.onSaveInstanceState(outState)
         outState.putInt(STATE_NAV_MODE, currentNavMode)
         outState.putString(STATE_HOME_FILTER, activeHomeFilterTag)
+        outState.putSerializable(STATE_BROWSE_TARGET, browseTarget)
     }
 
     override fun onResume() {
@@ -137,6 +166,7 @@ class MainActivity : AppCompatActivity() {
         applyNavModePanels(currentNavMode)
         when (currentNavMode) {
             NAV_HOME -> {
+                browseMenu = null
                 rebuildHomeChips()
                 reloadComics()
             }
@@ -170,7 +200,9 @@ class MainActivity : AppCompatActivity() {
         binding.navRail?.menu?.findItem(selectedId)?.isChecked = true
         binding.bottomNav?.menu?.findItem(selectedId)?.isChecked = true
         sourceLoadJob?.cancel()
-        isLoadingMoreOnline = false
+        categoryJob?.cancel()
+        searchDebounceJob?.cancel()
+        onlineLoading = false
         applyNavModePanels(mode)
         when (mode) {
             NAV_HOME -> {
@@ -222,6 +254,9 @@ class MainActivity : AppCompatActivity() {
             (activeHomeFilterTag.startsWith("src:") && enabledSources.none { "src:${it.sourceKey}" == activeHomeFilterTag })
         ) {
             activeHomeFilterTag = enabledSources.firstOrNull()?.let { "src:${it.sourceKey}" } ?: TAG_LOCAL_ALL
+            browseMenu = null
+            browseTarget = null
+            filterTarget = null
         }
 
         val group = binding.chipGroupHome
@@ -232,6 +267,7 @@ class MainActivity : AppCompatActivity() {
             val chip = Chip(this, null, com.google.android.material.R.attr.chipStyle).apply {
                 id = View.generateViewId()
                 text = label
+                ensureAccessibleTouchTarget(48.dp)
                 isCheckable = true
                 isCheckedIconVisible = false
                 this.tag = tag
@@ -245,51 +281,50 @@ class MainActivity : AppCompatActivity() {
         addFilterChip(TAG_LOCAL_FAV, getString(R.string.tab_favorite))
         addFilterChip(TAG_LOCAL_HISTORY, getString(R.string.tab_history))
 
-        if (enabledSources.size > 5) {
-            val pickSourceChip = Chip(this, null, com.google.android.material.R.attr.chipStyle).apply {
-                id = View.generateViewId()
-                text = "选源 (${enabledSources.size})"
-                isCheckable = false
-                setOnClickListener { showQuickSourcePicker(enabledSources) }
+        if (enabledSources.isNotEmpty()) {
+            val pick = if (activeHomeFilterTag.startsWith("src:")) {
+                addFilterChip(activeHomeFilterTag, "漫画源")
+            } else {
+                Chip(this, null, com.google.android.material.R.attr.chipStyle).apply {
+                    text = "漫画源"
+                    isCheckable = false
+                    ensureAccessibleTouchTarget(48.dp)
+                    group.addView(this)
+                }
             }
-            group.addView(pickSourceChip)
+            pick.setOnClickListener { showQuickSourcePicker(enabledSources) }
         }
 
         val manageChip = Chip(this, null, com.google.android.material.R.attr.chipStyle).apply {
             id = View.generateViewId()
-            text = "+ 源管理"
+            text = "源管理"
             isCheckable = false
+            ensureAccessibleTouchTarget(48.dp)
             setOnClickListener {
                 startActivity(Intent(this@MainActivity, SourceManageActivity::class.java))
             }
         }
         group.addView(manageChip)
 
-        // Show currently selected source near the front when scrolled far into the 148-source catalog
-        val activeSrcKey = activeHomeFilterTag.removePrefix("src:")
-        val orderedSources = if (activeHomeFilterTag.startsWith("src:")) {
-            val active = enabledSources.find { it.sourceKey == activeSrcKey }
-            if (active != null && enabledSources.indexOf(active) >= 12) {
-                listOf(active) + enabledSources.filter { it.sourceKey != activeSrcKey }
-            } else {
-                enabledSources
-            }
-        } else {
-            enabledSources
-        }
-        orderedSources.forEach { src ->
-            addFilterChip("src:${src.sourceKey}", src.name)
-        }
-
+        binding.chipScroll.scrollTo(0, 0)
         group.setOnCheckedStateChangeListener { grp, checkedIds ->
             val checkedId = checkedIds.firstOrNull() ?: return@setOnCheckedStateChangeListener
             val selectedChip = grp.findViewById<Chip>(checkedId) ?: return@setOnCheckedStateChangeListener
             val tag = selectedChip.tag as? String ?: return@setOnCheckedStateChangeListener
-            if (tag != activeHomeFilterTag) {
-                activeHomeFilterTag = tag
-                reloadComics()
-            }
+            if (tag.startsWith("local:")) selectHomeFilter(tag)
         }
+    }
+
+    private fun selectHomeFilter(tag: String) {
+        if (activeHomeFilterTag == tag) return
+        if (tag.startsWith("src:") || activeHomeFilterTag.startsWith("src:")) clearBrowseQuery()
+        activeHomeFilterTag = tag
+        categoryJob?.cancel()
+        browseMenu = null
+        browseTarget = null
+        filterTarget = null
+        rebuildHomeChips()
+        reloadComics()
     }
 
     private fun showQuickSourcePicker(sources: List<com.arkreader.comic.data.ComicSourceEntity>) {
@@ -302,15 +337,19 @@ class MainActivity : AppCompatActivity() {
             hint = "搜索已启用漫画源（共 ${sources.size} 个）"
             isSingleLine = true
         }
-        val filtered = sources.toMutableList()
+        val ordered = sources.sortedByDescending { "src:${it.sourceKey}" == activeHomeFilterTag }
+        val filtered = ordered.toMutableList()
         val listView = android.widget.ListView(this).apply {
             layoutParams = android.widget.LinearLayout.LayoutParams(
                 android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
-                (380 * dp).toInt()
+                (resources.configuration.screenHeightDp * 0.42f * dp).toInt()
             )
         }
         fun renderList(): android.widget.ArrayAdapter<String> {
-            val labels = filtered.map { "${it.name} (${it.sourceKey})" }
+            val labels = filtered.map {
+                if ("src:${it.sourceKey}" == activeHomeFilterTag) "${it.name}（当前）"
+                else "${it.name} · ${it.sourceKey}"
+            }
             return android.widget.ArrayAdapter(this, android.R.layout.simple_list_item_1, labels)
         }
         listView.adapter = renderList()
@@ -320,9 +359,9 @@ class MainActivity : AppCompatActivity() {
                 val q = s?.toString()?.trim()?.lowercase().orEmpty()
                 filtered.clear()
                 if (q.isEmpty()) {
-                    filtered.addAll(sources)
+                    filtered.addAll(ordered)
                 } else {
-                    filtered.addAll(sources.filter {
+                    filtered.addAll(ordered.filter {
                         it.name.lowercase().contains(q) || it.sourceKey.lowercase().contains(q)
                     })
                 }
@@ -342,9 +381,7 @@ class MainActivity : AppCompatActivity() {
         listView.setOnItemClickListener { _, _, position, _ ->
             val chosen = filtered.getOrNull(position) ?: return@setOnItemClickListener
             dialog.dismiss()
-            activeHomeFilterTag = "src:${chosen.sourceKey}"
-            rebuildHomeChips()
-            reloadComics()
+            selectHomeFilter("src:${chosen.sourceKey}")
         }
     }
 
@@ -430,6 +467,14 @@ class MainActivity : AppCompatActivity() {
 
         binding.btnFilterSort.setOnClickListener { showSortAndGridDialog() }
         binding.btnMore.setOnClickListener { anchor -> showMoreMenu(anchor) }
+        binding.btnOnlineRetry.setOnClickListener { reloadComics() }
+        binding.browseControls.btnChannels.setOnClickListener { showBrowseChannels() }
+        binding.browseControls.btnCategories.setOnClickListener { showBrowseCategoryGroups() }
+        binding.browseControls.btnSourceFilters.setOnClickListener { showBrowseFilters() }
+        binding.browseControls.btnClearSearch.setOnClickListener {
+            clearBrowseQuery()
+            reloadComics()
+        }
     }
 
     private fun setupRecycler() {
@@ -439,9 +484,7 @@ class MainActivity : AppCompatActivity() {
             override fun onScrolled(recyclerView: RecyclerView, dx: Int, dy: Int) {
                 if (dy <= 0) return
                 if (currentNavMode != NAV_HOME || !activeHomeFilterTag.startsWith("src:")) return
-                if (isLoadingMoreOnline) return
-                val max = onlineMaxPage
-                if (max != null && onlinePage >= max) return
+                if (!onlineHasNext || onlineLoading || onlinePageFailed || searchDebounceJob?.isActive == true) return
 
                 val lm = recyclerView.layoutManager ?: return
                 val lastVisible = when (lm) {
@@ -450,7 +493,7 @@ class MainActivity : AppCompatActivity() {
                     else -> return
                 }
                 if (lastVisible >= comicAdapter.itemCount - 6) {
-                    loadOnlineSourcePage(activeHomeFilterTag.removePrefix("src:"), reset = false)
+                    requestNextOnlinePage()
                 }
             }
         })
@@ -469,7 +512,12 @@ class MainActivity : AppCompatActivity() {
                 GridSize.SMALL -> if (isTablet) 8 else 4
                 GridSize.LIST -> 1
             }
-            binding.rvComics.layoutManager = GridLayoutManager(this, span)
+            binding.rvComics.layoutManager = GridLayoutManager(this, span).apply {
+                spanSizeLookup = object : GridLayoutManager.SpanSizeLookup() {
+                    override fun getSpanSize(position: Int): Int =
+                        if (comicAdapter.isFullWidth(position)) span else 1
+                }
+            }
         }
         comicAdapter.updateDisplayPrefs(grid, prefs.doubleLineTitle, prefs.onlyShowCover)
     }
@@ -499,14 +547,17 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun reloadComics() {
+        searchDebounceJob?.cancel()
         sourceLoadJob?.cancel()
-        isLoadingMoreOnline = false
+        onlineLoading = false
+        binding.btnOnlineRetry.visibility = View.GONE
         if (currentNavMode != NAV_HOME && currentNavMode != NAV_BOOKSHELF) return
         if (currentNavMode == NAV_HOME && activeHomeFilterTag.startsWith("src:")) {
             val sourceKey = activeHomeFilterTag.removePrefix("src:")
             loadOnlineSourcePage(sourceKey, reset = true)
             return
         }
+        renderBrowseControls(null, null, false)
 
         val activeShelfId = if (currentNavMode == NAV_HOME) 0L else app.prefs.activeBookshelfId
         val localTabMode = when (activeHomeFilterTag) {
@@ -550,62 +601,244 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun loadOnlineSourcePage(sourceKey: String, reset: Boolean) {
-        val srcName = app.db.getComicSource(sourceKey)?.name ?: sourceKey
-        val expectedTag = "src:$sourceKey"
-        val expectedQuery = currentQuery
-        binding.tvSectionTitle.text = if (expectedQuery.isNotBlank()) "$srcName · 搜索" else srcName
-        val nextPage = if (reset) 1 else onlinePage + 1
-        if (reset) {
-            onlineItems.clear()
-            onlinePage = 1
-            onlineMaxPage = null
-            comicAdapter.submitList(emptyList())
-            binding.tvSectionCount.text = "..."
-            binding.tvEmpty.visibility = View.VISIBLE
-            binding.tvEmpty.text = "正在加载「$srcName」..."
+    private fun renderBrowseControls(menu: SourceBrowseMenu?, target: SourceBrowseTarget?, canFilter: Boolean) {
+        val online = currentNavMode == NAV_HOME && activeHomeFilterTag.startsWith("src:")
+        val canSearch = !online || menu?.canSearch == true
+        binding.etSearch.isEnabled = canSearch
+        binding.etSearch.hint = when {
+            !online -> getString(R.string.search_hint)
+            menu == null -> "正在读取漫画源"
+            canSearch -> "搜索当前漫画源"
+            else -> "当前源不支持搜索"
         }
-        isLoadingMoreOnline = true
-        sourceLoadJob = lifecycleScope.launch {
-            val res = try {
-                Result.success(
-                    if (expectedQuery.isNotBlank()) {
-                        app.veneraRuntime.searchComics(sourceKey, expectedQuery, nextPage)
-                    } else {
-                        app.veneraRuntime.loadExplorePage(sourceKey, nextPage)
-                    }
-                )
-            } catch (ce: CancellationException) {
-                throw ce
-            } catch (t: Throwable) {
-                Result.failure(t)
+        val controls = binding.browseControls
+        controls.btnChannels.visibility = if (!menu?.channels.isNullOrEmpty() || menu?.ranking != null) View.VISIBLE else View.GONE
+        controls.btnCategories.visibility = if (!menu?.groups.isNullOrEmpty()) View.VISIBLE else View.GONE
+        controls.btnSourceFilters.visibility = if (canFilter) View.VISIBLE else View.GONE
+        controls.btnClearSearch.visibility = if (target?.kind == "search" && currentQuery.isNotEmpty()) View.VISIBLE else View.GONE
+        controls.root.visibility = if ((0 until controls.browseActions.childCount).any {
+            controls.browseActions.getChildAt(it).visibility == View.VISIBLE
+        }) View.VISIBLE else View.GONE
+    }
+
+    private fun clearBrowseQuery() {
+        searchDebounceJob?.cancel()
+        currentQuery = ""
+        binding.etSearch.text.clear()
+    }
+
+    private fun selectBrowseTarget(target: SourceBrowseTarget) {
+        categoryJob?.cancel()
+        clearBrowseQuery()
+        browseTarget = target
+        reloadComics()
+    }
+
+    private fun showBrowseChannels() {
+        val menu = browseMenu ?: return
+        val channels = menu.channels + listOfNotNull(menu.ranking)
+        MaterialAlertDialogBuilder(this)
+            .setTitle("浏览栏目")
+            .setSingleChoiceItems(channels.map { it.title }.toTypedArray(), channels.indexOf(filterTarget)) { dialog, index ->
+                dialog.dismiss()
+                selectBrowseTarget(channels[index])
             }
-            if (!coroutineContext.isActive || isDestroyed || isFinishing) return@launch
-            if (currentNavMode != NAV_HOME || activeHomeFilterTag != expectedTag || currentQuery != expectedQuery) {
+            .setNegativeButton("关闭", null)
+            .show()
+    }
+
+    private fun showBrowseCategoryGroups() {
+        val groups = browseMenu?.groups.orEmpty()
+        if (groups.size == 1) {
+            openBrowseCategoryGroup(groups.single())
+        } else if (groups.isNotEmpty()) {
+            MaterialAlertDialogBuilder(this)
+                .setTitle("分类")
+                .setItems(groups.map { it.title }.toTypedArray()) { _, index -> openBrowseCategoryGroup(groups[index]) }
+                .setNegativeButton("关闭", null)
+                .show()
+        }
+    }
+
+    private fun openBrowseCategoryGroup(group: SourceCategoryGroup) {
+        categoryJob?.cancel()
+        val sourceKey = activeHomeFilterTag.removePrefix("src:")
+        val dialog = MaterialAlertDialogBuilder(this)
+            .setTitle(group.title)
+            .setMessage("正在加载分类…")
+            .setNegativeButton("关闭", null)
+            .setPositiveButton("重试") { _, _ -> openBrowseCategoryGroup(group) }
+            .show()
+        dialog.getButton(android.content.DialogInterface.BUTTON_POSITIVE).visibility = View.GONE
+        categoryJob = lifecycleScope.launch {
+            val targets = try {
+                app.veneraRuntime.getBrowseCategories(sourceKey, group.index)
+            } catch (error: Exception) {
+                if (error is CancellationException && error !is TimeoutCancellationException) throw error
+                dialog.setMessage("加载分类失败\n${browseError(error)}")
+                dialog.getButton(android.content.DialogInterface.BUTTON_POSITIVE).visibility = View.VISIBLE
                 return@launch
             }
-            isLoadingMoreOnline = false
-            res.onSuccess { (items, maxP) ->
-                if (reset) onlineItems.clear()
-                val existingIds = onlineItems.asSequence().map { it.id }.toHashSet()
-                items.forEach { if (existingIds.add(it.id)) onlineItems.add(it) }
-                onlinePage = nextPage
-                onlineMaxPage = maxP ?: nextPage
-                binding.tvSectionCount.text = onlineItems.size.toString()
-                comicAdapter.submitList(onlineItems.map { DisplayComicItem.Online(it) })
-                binding.tvEmpty.visibility = if (onlineItems.isEmpty()) View.VISIBLE else View.GONE
-                if (onlineItems.isEmpty()) {
-                    binding.tvEmpty.text = "「$srcName」暂无匹配漫画"
+            if (!dialog.isShowing || !coroutineContext.isActive) return@launch
+            dialog.dismiss()
+            val builder = MaterialAlertDialogBuilder(this@MainActivity).setTitle(group.title).setNegativeButton("关闭", null)
+            if (targets.isEmpty()) builder.setMessage("这个分组暂无可用分类")
+            else builder.setSingleChoiceItems(targets.map { it.title }.toTypedArray(), targets.indexOf(filterTarget)) { picker, index ->
+                picker.dismiss()
+                selectBrowseTarget(targets[index])
+            }
+            builder.show()
+        }
+    }
+
+    private fun showBrowseFilters() {
+        val filters = browseFilters ?: return
+        MaterialAlertDialogBuilder(this)
+            .setTitle("筛选")
+            .setItems(filters.fields.map { field ->
+                val value = filters.values.getOrNull(field.index)
+                val selected = selectedFilterValues(field, value)
+                val labels = field.choices.filter { it.value in selected }.joinToString("、") { it.title }
+                if (labels.isBlank()) field.title else "${field.title} · $labels"
+            }.toTypedArray()) { _, index ->
+                showBrowseFilterField(filters, filters.fields[index])
+            }
+            .setNeutralButton("恢复默认") { _, _ ->
+                browseFilters = null
+                reloadComics()
+            }
+            .setNegativeButton("关闭", null)
+            .show()
+    }
+
+    private fun selectedFilterValues(field: SourceFilterField, value: String?): Set<String?> {
+        if (!field.multiple) return setOf(value)
+        return runCatching {
+            val array = JSONArray(value ?: "[]")
+            (0 until array.length()).map { array.getString(it) }.toSet()
+        }.getOrDefault(emptySet())
+    }
+
+    private fun showBrowseFilterField(filters: SourceBrowseFilters, field: SourceFilterField) {
+        val selected = selectedFilterValues(field, filters.values.getOrNull(field.index)).toMutableSet()
+        val labels = field.choices.map { it.title }.toTypedArray()
+        val dialog = MaterialAlertDialogBuilder(this).setTitle(field.title).setNegativeButton("取消", null)
+        fun apply(value: String?) {
+            browseFilters = filters.copy(values = filters.values.toMutableList().apply { set(field.index, value) })
+            reloadComics()
+        }
+        if (field.multiple) {
+            val checks = field.choices.map { it.value in selected }.toBooleanArray()
+            dialog.setMultiChoiceItems(labels, checks) { _, index, checked ->
+                val value = field.choices[index].value
+                if (checked) selected.add(value) else selected.remove(value)
+            }.setPositiveButton("应用") { _, _ -> apply(JSONArray(selected.toList()).toString()) }
+        } else {
+            dialog.setSingleChoiceItems(labels, field.choices.indexOfFirst { it.value in selected }) { picker, index ->
+                picker.dismiss()
+                apply(field.choices[index].value)
+            }
+        }
+        dialog.show()
+    }
+
+    private fun requestNextOnlinePage() {
+        if (onlineHasNext && !onlineLoading && searchDebounceJob?.isActive != true) {
+            loadOnlineSourcePage(activeHomeFilterTag.removePrefix("src:"), reset = false)
+        }
+    }
+
+    private fun showBrowseStatus(message: String, retry: Boolean = false) {
+        binding.tvEmpty.text = message
+        binding.tvEmpty.visibility = View.VISIBLE
+        binding.btnOnlineRetry.visibility = if (retry) View.VISIBLE else View.GONE
+    }
+
+    private fun browseError(error: Exception): String =
+        if (error is TimeoutCancellationException) "请求超时"
+        else error.message.orEmpty().lineSequence().firstOrNull().orEmpty().take(160).ifBlank { "请求失败" }
+
+    private fun renderOnlineItems(action: String = "加载更多", enabled: Boolean = true) {
+        val items = if (onlineHasNext) onlineItems + DisplayComicItem.PageAction(action, enabled) else onlineItems
+        comicAdapter.submitList(items)
+    }
+
+    private fun loadOnlineSourcePage(sourceKey: String, reset: Boolean) {
+        val sourceName = app.db.getComicSource(sourceKey)?.name ?: sourceKey
+        val query = currentQuery
+        val page = if (reset) 1 else onlinePage + 1
+        if (reset) {
+            onlineItems.clear()
+            ungroupedComicIds.clear()
+            onlinePage = 0
+            onlineCursor = null
+            onlineHasNext = false
+            onlinePageFailed = false
+            binding.rvComics.scrollToPosition(0)
+            binding.tvSectionTitle.text = sourceName
+            binding.tvSectionCount.text = ""
+            showBrowseStatus("正在加载…")
+            renderOnlineItems()
+            renderBrowseControls(browseMenu, null, false)
+        } else renderOnlineItems("正在加载…", enabled = false)
+
+        onlineLoading = true
+        sourceLoadJob = lifecycleScope.launch {
+            try {
+                val runtime = app.veneraRuntime
+                val menu = browseMenu ?: runtime.getBrowseMenu(sourceKey)
+                if (currentQuery != query) return@launch
+                browseMenu = menu
+                val target = when {
+                    query.isNotEmpty() && menu.canSearch -> SourceBrowseTarget("search", "搜索结果", keyword = query)
+                    else -> browseTarget ?: menu.channels.firstOrNull() ?: menu.ranking
                 }
-            }.onFailure { err ->
-                if (err is CancellationException) return@onFailure
-                if (reset && onlineItems.isEmpty()) {
-                    binding.tvSectionCount.text = "0"
-                    binding.tvEmpty.visibility = View.VISIBLE
-                    binding.tvEmpty.text = "加载「$srcName」失败: ${err.message}\n可切换「本地全部」或在「源管理」中切换动漫源"
-                } else if (!reset) {
-                    Toast.makeText(this@MainActivity, "加载更多失败: ${err.message}", Toast.LENGTH_SHORT).show()
+                renderBrowseControls(menu, target, false)
+                if (target == null) {
+                    showBrowseStatus(when {
+                        menu.groups.isNotEmpty() -> "选择一个分类开始浏览"
+                        menu.canSearch -> "输入关键词搜索此漫画源"
+                        else -> "此漫画源暂无可用的浏览或搜索入口"
+                    })
+                    return@launch
                 }
+                binding.tvSectionTitle.text = if (sourceName == target.title) sourceName else "$sourceName · ${target.title}"
+                if (filterTarget != target) browseFilters = null
+                filterTarget = target
+                val filters = browseFilters ?: runtime.getBrowseFilters(sourceKey, target)
+                if (currentQuery != query) return@launch
+                browseFilters = filters
+                renderBrowseControls(menu, target, filters.fields.isNotEmpty())
+
+                val result = runtime.loadBrowsePage(sourceKey, target, filters.values, page, onlineCursor)
+                if (currentQuery != query) return@launch
+                for (section in result.sections) {
+                    val grouped = section.title.isNotBlank() || section.target != null
+                    if (grouped) onlineItems.add(DisplayComicItem.Section(section.title, section.target))
+                    section.comics.filter { grouped || ungroupedComicIds.add(it.id) }
+                        .forEach { onlineItems.add(DisplayComicItem.Online(it)) }
+                }
+                onlinePage = page
+                onlineCursor = result.nextCursor
+                onlineHasNext = result.hasNext(page)
+                onlinePageFailed = false
+                binding.tvSectionCount.text = onlineItems.count { it is DisplayComicItem.Online }.toString()
+                binding.tvEmpty.visibility = View.GONE
+                if (onlineItems.isEmpty() && !onlineHasNext) {
+                    showBrowseStatus(if (target.kind == "search") "没有找到匹配的漫画" else "这个栏目暂无漫画")
+                }
+                renderOnlineItems()
+            } catch (error: Exception) {
+                if (error is CancellationException && error !is TimeoutCancellationException) throw error
+                if (currentQuery != query) return@launch
+                if (reset) {
+                    showBrowseStatus("加载失败\n${browseError(error)}", retry = true)
+                } else {
+                    onlinePageFailed = true
+                    renderOnlineItems("加载失败，重试")
+                }
+            } finally {
+                if (coroutineContext.isActive) onlineLoading = false
             }
         }
     }
@@ -951,6 +1184,7 @@ class MainActivity : AppCompatActivity() {
         private const val NAV_SETTINGS = 3
         private const val STATE_NAV_MODE = "state_nav_mode"
         private const val STATE_HOME_FILTER = "state_home_filter"
+        private const val STATE_BROWSE_TARGET = "state_browse_target"
         private const val TAG_LOCAL_ALL = "local:all"
         private const val TAG_LOCAL_FAV = "local:fav"
         private const val TAG_LOCAL_HISTORY = "local:history"
@@ -985,14 +1219,49 @@ private class ComicAdapter(
         if (changed) notifyDataSetChanged()
     }
 
-    override fun getItemViewType(position: Int): Int = if (isListMode) 1 else 0
+    fun isFullWidth(position: Int): Boolean =
+        items.getOrNull(position).let { it is DisplayComicItem.Section || it is DisplayComicItem.PageAction }
+
+    override fun getItemViewType(position: Int): Int = when (items[position]) {
+        is DisplayComicItem.Section -> 2
+        is DisplayComicItem.PageAction -> 3
+        else -> if (isListMode) 1 else 0
+    }
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): RecyclerView.ViewHolder {
         val inflater = LayoutInflater.from(parent.context)
-        return if (viewType == 1) {
-            ListVH(ItemComicListBinding.inflate(inflater, parent, false))
-        } else {
-            GridVH(ItemComicCardBinding.inflate(inflater, parent, false))
+        val context = parent.context
+        val touchSize = (48 * context.resources.displayMetrics.density).toInt()
+        val inset = (8 * context.resources.displayMetrics.density).toInt()
+        return when (viewType) {
+            1 -> ListVH(ItemComicListBinding.inflate(inflater, parent, false))
+            2 -> {
+                val row = LinearLayout(context).apply {
+                    layoutParams = RecyclerView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+                    gravity = Gravity.CENTER_VERTICAL
+                    minimumHeight = touchSize
+                    setPaddingRelative(inset, inset, inset, 0)
+                }
+                val title = TextView(context).apply {
+                    layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                    setTextAppearance(com.google.android.material.R.style.TextAppearance_Material3_TitleMedium)
+                    ellipsize = TextUtils.TruncateAt.END
+                    maxLines = 2
+                    isAccessibilityHeading = true
+                }
+                val more = MaterialButton(context, null, com.google.android.material.R.attr.borderlessButtonStyle).apply {
+                    text = "查看更多"
+                    minHeight = touchSize
+                }
+                row.addView(title)
+                row.addView(more)
+                SectionVH(row, title, more)
+            }
+            3 -> PageActionVH(MaterialButton(context, null, com.google.android.material.R.attr.borderlessButtonStyle).apply {
+                layoutParams = RecyclerView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+                minHeight = touchSize
+            })
+            else -> GridVH(ItemComicCardBinding.inflate(inflater, parent, false))
         }
     }
 
@@ -1000,7 +1269,16 @@ private class ComicAdapter(
 
     override fun onBindViewHolder(holder: RecyclerView.ViewHolder, position: Int) {
         val wrapped = items[position]
-        if (holder is GridVH) {
+        if (holder is SectionVH && wrapped is DisplayComicItem.Section) {
+            holder.title.text = wrapped.title
+            holder.more.visibility = if (wrapped.target != null) View.VISIBLE else View.GONE
+            holder.more.contentDescription = if (wrapped.title.isBlank()) "查看更多" else "查看更多：${wrapped.title}"
+            holder.more.setOnClickListener { onClick(wrapped) }
+        } else if (holder is PageActionVH && wrapped is DisplayComicItem.PageAction) {
+            holder.button.text = wrapped.text
+            holder.button.isEnabled = wrapped.enabled
+            holder.button.setOnClickListener { onClick(wrapped) }
+        } else if (holder is GridVH) {
             val b = holder.binding
             b.tvTitle.visibility = if (onlyShowCover) View.GONE else View.VISIBLE
             b.tvTitle.maxLines = if (doubleLineTitle) 2 else 1
@@ -1031,6 +1309,7 @@ private class ComicAdapter(
                     }
                     loadOnlineCover(remote.cover, remote.headers, b.ivCover)
                 }
+                else -> return
             }
             b.root.setOnClickListener { onClick(wrapped) }
             b.root.setOnLongClickListener { onLongClick(wrapped); true }
@@ -1054,6 +1333,7 @@ private class ComicAdapter(
                     ).joinToString(" · ")
                     loadOnlineCover(remote.cover, remote.headers, b.ivCover)
                 }
+                else -> return
             }
             b.root.setOnClickListener { onClick(wrapped) }
             b.root.setOnLongClickListener { onLongClick(wrapped); true }
@@ -1062,4 +1342,6 @@ private class ComicAdapter(
 
     class GridVH(val binding: ItemComicCardBinding) : RecyclerView.ViewHolder(binding.root)
     class ListVH(val binding: ItemComicListBinding) : RecyclerView.ViewHolder(binding.root)
+    class SectionVH(row: View, val title: TextView, val more: MaterialButton) : RecyclerView.ViewHolder(row)
+    class PageActionVH(val button: MaterialButton) : RecyclerView.ViewHolder(button)
 }

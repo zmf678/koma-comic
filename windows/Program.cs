@@ -1991,6 +1991,75 @@ namespace KomaComic.Windows
         }
     }
 
+    internal sealed class SourceBrowseTarget
+    {
+        public string Kind { get; set; }
+        public string Title { get; set; }
+        public int Index { get; set; }
+        public string Category { get; set; }
+        public string Param { get; set; }
+        public string Keyword { get; set; }
+        public List<string> Options { get; set; }
+
+        public Dictionary<string, object> AsScriptArgument()
+        {
+            return new Dictionary<string, object>
+            {
+                { "kind", Kind }, { "index", Index }, { "category", Category },
+                { "param", Param }, { "keyword", Keyword }, { "options", Options }
+            };
+        }
+    }
+
+    internal sealed class SourceCategoryGroup
+    {
+        public int Index { get; set; }
+        public string Title { get; set; }
+    }
+
+    internal sealed class SourceBrowseMenu
+    {
+        public bool CanSearch { get; set; }
+        public List<SourceBrowseTarget> Channels { get; set; }
+        public List<SourceCategoryGroup> Groups { get; set; }
+        public SourceBrowseTarget Ranking { get; set; }
+    }
+
+    internal sealed class SourceBrowseFilters
+    {
+        public List<string> Values { get; set; }
+        public List<SourceFilterField> Fields { get; set; }
+    }
+
+    internal sealed class SourceFilterField
+    {
+        public int Index { get; set; }
+        public string Title { get; set; }
+        public bool Multiple { get; set; }
+        public List<SourceFilterChoice> Choices { get; set; }
+    }
+
+    internal sealed class SourceFilterChoice
+    {
+        public string Title { get; set; }
+        public string Value { get; set; }
+    }
+
+    internal sealed class SourceFeedSection
+    {
+        public string Title { get; set; }
+        public SourceBrowseTarget Target { get; set; }
+        public List<ComicCardModel> Cards { get; set; }
+        public List<Dictionary<string, object>> Comics { get; set; }
+    }
+
+    internal sealed class SourceBrowsePage
+    {
+        public List<SourceFeedSection> Sections { get; set; }
+        public int? MaxPage { get; set; }
+        public string NextCursor { get; set; }
+    }
+
     internal sealed class VeneraJsRunner : IDisposable
     {
         private static readonly Regex ClassRegex = new Regex(@"class\s+([A-Za-z_$][A-Za-z0-9_$]*)\s+extends\s+ComicSource\b");
@@ -1999,7 +2068,7 @@ namespace KomaComic.Windows
         private Microsoft.Web.WebView2.WinForms.WebView2 _webView;
         private readonly TaskCompletionSource<bool> _readyTcs = new TaskCompletionSource<bool>();
         private readonly Dictionary<string, TaskCompletionSource<string>> _pendingCalls = new Dictionary<string, TaskCompletionSource<string>>(StringComparer.Ordinal);
-        private readonly HashSet<string> _loadedSources = new HashSet<string>(StringComparer.Ordinal);
+        private readonly Dictionary<string, Task> _sourceLoads = new Dictionary<string, Task>(StringComparer.Ordinal);
         private readonly object _lock = new object();
 
         public VeneraJsRunner(AppServices services, Dispatcher uiDispatcher)
@@ -2046,7 +2115,7 @@ namespace KomaComic.Windows
 
         public void InvalidateSource(string key)
         {
-            lock (_loadedSources) { _loadedSources.Remove(key); }
+            lock (_sourceLoads) { _sourceLoads.Remove(key); }
         }
 
         private void OnWebMessageReceived(object sender, CoreWebView2WebMessageReceivedEventArgs e)
@@ -2075,11 +2144,31 @@ namespace KomaComic.Windows
             bool ok = await _readyTcs.Task;
             if (!ok) throw new InvalidOperationException("JS 引擎初始化失败");
 
-            lock (_loadedSources)
+            Task load;
+            lock (_sourceLoads)
             {
-                if (_loadedSources.Contains(item.Key)) return;
+                if (!_sourceLoads.TryGetValue(item.Key, out load))
+                {
+                    load = LoadSourceAsync(item);
+                    _sourceLoads[item.Key] = load;
+                }
             }
 
+            try { await load; }
+            catch
+            {
+                lock (_sourceLoads)
+                {
+                    Task current;
+                    if (_sourceLoads.TryGetValue(item.Key, out current) && ReferenceEquals(current, load))
+                        _sourceLoads.Remove(item.Key);
+                }
+                throw;
+            }
+        }
+
+        private async Task LoadSourceAsync(SourceItem item)
+        {
             string script = _services.ReadSourceScript(item);
             if (string.IsNullOrWhiteSpace(script)) throw new InvalidOperationException("源脚本为空: " + item.Name);
             Match m = ClassRegex.Match(script);
@@ -2088,8 +2177,9 @@ namespace KomaComic.Windows
 
             JavaScriptSerializer ser = JsonUtil.CreateSerializer();
             string qKey = ser.Serialize(item.Key);
+            string callId = Guid.NewGuid().ToString("N");
             string js =
-                "window.__veneraInvoke('LOAD_' + " + qKey + ", async function() {\n" +
+                "window.__veneraInvoke(" + ser.Serialize(callId) + ", async function() {\n" +
                 "  window.__currentSourceKey = " + qKey + ";\n" +
                 script + "\n" +
                 "  const inst = new " + className + "();\n" +
@@ -2101,8 +2191,7 @@ namespace KomaComic.Windows
                 "  return true;\n" +
                 "});";
 
-            await ExecuteCallAsync(js, "LOAD_" + item.Key);
-            lock (_loadedSources) { _loadedSources.Add(item.Key); }
+            await ExecuteCallAsync(js, callId);
         }
 
         private async Task<string> ExecuteCallAsync(string wrappedJs, string explicitCallId)
@@ -2140,103 +2229,57 @@ namespace KomaComic.Windows
             return await ExecuteCallAsync(wrapped, callId);
         }
 
-        public async Task<KeyValuePair<List<ComicCardModel>, int>> LoadFeedAsync(SourceItem item, int exploreIdx, string catName, string catParam, string searchKw, int page)
+        private async Task<T> LoadBrowseDataAsync<T>(SourceItem item, string js)
         {
-            JavaScriptSerializer ser = JsonUtil.CreateSerializer();
-            string qKw = ser.Serialize(searchKw ?? "");
-            string qCat = ser.Serialize(catName ?? "");
-            string qParam = ser.Serialize(catParam ?? "");
-            bool hasCat = !string.IsNullOrEmpty(catName);
-
-            string js =
-                "const fallbackHeaders = window.__extractSourceImageHeaders(src);\n" +
-                "const exploreTitles = (Array.isArray(src.explore) ? src.explore : []).map(function(e, i){ return e.title || ('发现 ' + (i+1)); });\n" +
-                "const catParts = (src.category && Array.isArray(src.category.parts)) ? src.category.parts.map(function(p){ return { name: p.name || '分类', categories: p.categories || [], params: p.categoryParams || [] }; }) : [];\n" +
-                "let normalized = null;\n" +
-                "if (" + (string.IsNullOrWhiteSpace(searchKw) ? "false" : "true") + " && src.search && typeof src.search.load === 'function') {\n" +
-                "  const opts = window.__defaultOptionsFor(src.search.optionList);\n" +
-                "  const r = await src.search.load(" + qKw + ", opts, " + page + ");\n" +
-                "  normalized = window.__normalizeComicsResult(r, " + page + ", false, fallbackHeaders);\n" +
-                "} else if (" + (hasCat ? "true" : "false") + " && src.categoryComics && typeof src.categoryComics.load === 'function') {\n" +
-                "  const opts = window.__defaultOptionsFor(src.categoryComics.optionList);\n" +
-                "  const cr = await src.categoryComics.load(" + qCat + ", " + qParam + ", opts, " + page + ");\n" +
-                "  normalized = window.__normalizeComicsResult(cr, " + page + ", false, fallbackHeaders);\n" +
-                "} else {\n" +
-                "  const arr = Array.isArray(src.explore) ? src.explore : [];\n" +
-                "  if (arr.length > 0) {\n" +
-                "    const first = arr[Math.min(" + exploreIdx + ", arr.length - 1)];\n" +
-                "    const isSingle = first.type === 'singlePageWithMultiPart';\n" +
-                "    if (isSingle && " + page + " > 1) { normalized = { comics: [], maxPage: 1 }; }\n" +
-                "    else if (typeof first.load === 'function') {\n" +
-                "      const r = await first.load(" + page + ");\n" +
-                "      normalized = window.__normalizeComicsResult(r, " + page + ", isSingle, fallbackHeaders);\n" +
-                "    } else if (typeof first.loadNext === 'function') {\n" +
-                "      const key = '_next_' + (" + page + " - 1);\n" +
-                "      const token = (" + page + " <= 1) ? null : src[key];\n" +
-                "      const r = await first.loadNext(token);\n" +
-                "      if (r && r.next !== undefined) src['_next_' + " + page + "] = r.next;\n" +
-                "      const maxP = (r && r.next) ? (" + page + " + 1) : " + page + ";\n" +
-                "      normalized = window.__normalizeComicsResult({ comics: (r && r.comics) || [], maxPage: maxP }, " + page + ", false, fallbackHeaders);\n" +
-                "    }\n" +
-                "  }\n" +
-                "  if ((!normalized || !normalized.comics || normalized.comics.length === 0) && src.categoryComics && typeof src.categoryComics.load === 'function') {\n" +
-                "    let firstCat = '全部', firstParam = '';\n" +
-                "    if (catParts.length > 0) { if (catParts[0].categories.length) firstCat = catParts[0].categories[0]; if (catParts[0].params.length) firstParam = catParts[0].params[0]; }\n" +
-                "    const opts = window.__defaultOptionsFor(src.categoryComics.optionList);\n" +
-                "    const cr = await src.categoryComics.load(firstCat, firstParam, opts, " + page + ");\n" +
-                "    normalized = window.__normalizeComicsResult(cr, " + page + ", false, fallbackHeaders);\n" +
-                "  }\n" +
-                "}\n" +
-                "return { result: normalized || { comics: [], maxPage: 1 }, exploreTitles: exploreTitles, catParts: catParts };";
-
             string raw = await InvokeSourceAsync(item, js);
-            Dictionary<string, object> obj = ser.Deserialize<Dictionary<string, object>>(raw);
-            List<ComicCardModel> list = new List<ComicCardModel>();
-            int maxPage = 1;
-            if (obj != null)
-            {
-                object resObj = null;
-                if (obj.TryGetValue("result", out resObj) && resObj is Dictionary<string, object>)
-                {
-                    Dictionary<string, object> resDict = (Dictionary<string, object>)resObj;
-                    maxPage = JsonUtil.GetInt(resDict, "maxPage", 1);
-                    if (maxPage <= 0) maxPage = 1;
-                    object comicsObj = null;
-                    if (resDict.TryGetValue("comics", out comicsObj) && comicsObj is ArrayList)
-                    {
-                        foreach (object el in (ArrayList)comicsObj)
-                        {
-                            Dictionary<string, object> cd = el as Dictionary<string, object>;
-                            if (cd == null) continue;
-                            string cid = JsonUtil.GetStr(cd, "id", "");
-                            if (string.IsNullOrEmpty(cid)) continue;
-                            ComicCardModel card = new ComicCardModel
-                            {
-                                Uid = item.Key + "::" + cid,
-                                Id = cid,
-                                SourceKey = item.Key,
-                                IsLocal = false,
-                                Title = JsonUtil.GetStr(cd, "title", cid),
-                                SubTitle = JsonUtil.GetStr(cd, "subTitle", item.Name),
-                                CoverUrl = JsonUtil.GetStr(cd, "cover", ""),
-                                Badge = item.Name,
-                                Headers = ExtractHeadersMap(cd)
-                            };
-                            list.Add(card);
-                        }
-                    }
-                }
-            }
-            return new KeyValuePair<List<ComicCardModel>, int>(list, maxPage);
+            return JsonUtil.CreateSerializer().Deserialize<T>(raw);
         }
 
-        public async Task<List<string>> GetExploreTitlesAsync(SourceItem item)
+        public Task<SourceBrowseMenu> GetBrowseMenuAsync(SourceItem item)
         {
-            string raw = await InvokeSourceAsync(item, "return (Array.isArray(src.explore) ? src.explore : []).map(function(e, i){ return e.title || ('发现 ' + (i+1)); });");
-            ArrayList arr = JsonUtil.CreateSerializer().Deserialize<ArrayList>(raw);
-            List<string> titles = new List<string>();
-            if (arr != null) foreach (object o in arr) titles.Add(Convert.ToString(o));
-            return titles;
+            return LoadBrowseDataAsync<SourceBrowseMenu>(item, "return window.__sourceBrowseMenu(src);");
+        }
+
+        public Task<List<SourceBrowseTarget>> GetBrowseCategoriesAsync(SourceItem item, int groupIndex)
+        {
+            return LoadBrowseDataAsync<List<SourceBrowseTarget>>(item, "return window.__sourceBrowseCategories(src, " + groupIndex + ");");
+        }
+
+        public Task<SourceBrowseFilters> GetBrowseFiltersAsync(SourceItem item, SourceBrowseTarget target)
+        {
+            string arg = JsonUtil.CreateSerializer().Serialize(target.AsScriptArgument());
+            return LoadBrowseDataAsync<SourceBrowseFilters>(item, "return window.__sourceBrowseFilters(src, " + arg + ");");
+        }
+
+        public async Task<SourceBrowsePage> LoadBrowsePageAsync(
+            SourceItem item, SourceBrowseTarget target, List<string> options, int page, string cursor)
+        {
+            JavaScriptSerializer ser = JsonUtil.CreateSerializer();
+            string js = "return window.__sourceBrowseFeed(src, " + ser.Serialize(target.AsScriptArgument()) +
+                ", " + page + ", " + ser.Serialize(cursor) + ", " + ser.Serialize(options) + ");";
+            SourceBrowsePage result = await LoadBrowseDataAsync<SourceBrowsePage>(item, js);
+            foreach (SourceFeedSection section in result.Sections)
+            {
+                section.Cards = new List<ComicCardModel>();
+                foreach (Dictionary<string, object> comic in section.Comics)
+                {
+                    string id = JsonUtil.GetStr(comic, "id", "");
+                    if (string.IsNullOrEmpty(id)) continue;
+                    section.Cards.Add(new ComicCardModel
+                    {
+                        Uid = item.Key + "::" + id,
+                        Id = id,
+                        SourceKey = item.Key,
+                        IsLocal = false,
+                        Title = JsonUtil.GetStr(comic, "title", id),
+                        SubTitle = JsonUtil.GetStr(comic, "subTitle", item.Name),
+                        CoverUrl = JsonUtil.GetStr(comic, "cover", ""),
+                        Badge = item.Name,
+                        Headers = ExtractHeadersMap(comic)
+                    });
+                }
+            }
+            return result;
         }
 
         public async Task<ComicDetailModel> LoadComicDetailAsync(SourceItem item, string remoteId, Dictionary<string, string> fallbackCardHeaders)
@@ -2531,19 +2574,33 @@ namespace KomaComic.Windows
 
         // Home UI
         private TextBox _searchBox;
+        private Button _btnSearch;
         private StackPanel _chipsPanel;
-        private StackPanel _exploreTabsPanel;
-        private Border _exploreTabsBar;
+        private Border _browseBar;
+        private TextBlock _sourceHeading;
+        private Button _channelsButton;
+        private Button _categoriesButton;
+        private Button _sourceFiltersButton;
+        private Button _clearSourceSearchButton;
         private TextBlock _statusBanner;
-        private WrapPanel _comicGrid;
+        private Button _retryFeedButton;
+        private ScrollViewer _homeFeedScroll;
+        private StackPanel _comicGrid;
         private TextBlock _emptyFeedText;
         private Grid _paginationBar;
         private Button _btnPrevPage;
         private Button _btnNextPage;
         private TextBlock _pageLabel;
         private int _currentPage = 1;
-        private int _maxPage = 1;
-        private int _currentExploreIdx = 0;
+        private int _feedRequestId;
+        private int _categoryRequestId;
+        private string _homeQuery = "";
+        private string _browseSourceKey;
+        private SourceBrowseMenu _browseMenu;
+        private SourceBrowseTarget _browseTarget;
+        private SourceBrowseTarget _filterTarget;
+        private SourceBrowseFilters _browseFilters;
+        private readonly Dictionary<int, string> _feedCursors = new Dictionary<int, string>();
 
         // Collections UI
         private StackPanel _collectionChipsPanel;
@@ -2848,10 +2905,10 @@ namespace KomaComic.Windows
             searchBorder.SetResourceReference(Border.BorderBrushProperty, "Brush.Border");
 
             DockPanel searchDock = new DockPanel();
-            Button btnSearch = UiTheme.MakeButton("搜索", true, false);
-            btnSearch.Padding = new Thickness(14, 5, 14, 5);
-            DockPanel.SetDock(btnSearch, Dock.Right);
-            searchDock.Children.Add(btnSearch);
+            _btnSearch = UiTheme.MakeButton("搜索", true, false);
+            _btnSearch.Padding = new Thickness(14, 5, 14, 5);
+            DockPanel.SetDock(_btnSearch, Dock.Right);
+            searchDock.Children.Add(_btnSearch);
 
             _searchBox = new TextBox
             {
@@ -2863,18 +2920,21 @@ namespace KomaComic.Windows
             };
             _searchBox.SetResourceReference(TextBox.ForegroundProperty, "Brush.Text");
             _searchBox.SetResourceReference(TextBox.CaretBrushProperty, "Brush.Text");
-            _searchBox.KeyDown += delegate (object s, KeyEventArgs e) { if (e.Key == Key.Enter) LoadActiveFeedAsync(1); };
+            _searchBox.KeyDown += delegate (object s, KeyEventArgs e)
+            {
+                if (e.Key == Key.Enter) SubmitHomeSearch();
+            };
             searchDock.Children.Add(_searchBox);
             searchBorder.Child = searchDock;
             toolbar.Children.Add(searchBorder);
 
-            btnSearch.Click += delegate (object s, RoutedEventArgs e) { LoadActiveFeedAsync(1); };
+            _btnSearch.Click += delegate (object s, RoutedEventArgs e) { SubmitHomeSearch(); };
 
             StackPanel rightBtns = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(12, 0, 0, 0) };
             Grid.SetColumn(rightBtns, 1);
             Button btnRefresh = UiTheme.MakeButton("↻ 刷新", false, false);
             btnRefresh.Margin = new Thickness(0, 0, 8, 0);
-            btnRefresh.Click += delegate (object s, RoutedEventArgs e) { LoadActiveFeedAsync(_currentPage); };
+            btnRefresh.Click += delegate (object s, RoutedEventArgs e) { LoadActiveFeedAsync(1); };
             Button btnDensity = UiTheme.MakeButton("⊞ 网格", false, false);
             btnDensity.Click += delegate (object s, RoutedEventArgs e)
             {
@@ -2899,41 +2959,61 @@ namespace KomaComic.Windows
             chipScroll.Content = _chipsPanel;
             g.Children.Add(chipScroll);
 
-            // Row 2: Explore Sub-Tabs
-            _exploreTabsBar = new Border
+            _browseBar = new Border
             {
                 BorderThickness = new Thickness(0, 0, 0, 1),
-                Padding = new Thickness(20, 2, 20, 8),
+                Padding = new Thickness(20, 5, 20, 8),
                 Visibility = Visibility.Collapsed
             };
-            _exploreTabsBar.SetResourceReference(Border.BorderBrushProperty, "Brush.Border");
-            Grid.SetRow(_exploreTabsBar, 2);
-            ScrollViewer subScroll = new ScrollViewer { HorizontalScrollBarVisibility = ScrollBarVisibility.Auto, VerticalScrollBarVisibility = ScrollBarVisibility.Disabled };
-            _exploreTabsPanel = new StackPanel { Orientation = Orientation.Horizontal };
-            subScroll.Content = _exploreTabsPanel;
-            _exploreTabsBar.Child = subScroll;
-            g.Children.Add(_exploreTabsBar);
+            _browseBar.SetResourceReference(Border.BorderBrushProperty, "Brush.Border");
+            Grid.SetRow(_browseBar, 2);
+            StackPanel browseStack = new StackPanel();
+            _sourceHeading = new TextBlock
+            {
+                FontSize = 18, FontWeight = FontWeights.SemiBold, TextTrimming = TextTrimming.CharacterEllipsis,
+                Margin = new Thickness(0, 0, 0, 6)
+            };
+            _sourceHeading.SetResourceReference(TextBlock.ForegroundProperty, "Brush.Text");
+            browseStack.Children.Add(_sourceHeading);
+            WrapPanel browseActions = new WrapPanel();
+            _channelsButton = AddBrowseButton(browseActions, "栏目", OpenBrowseChannels);
+            _categoriesButton = AddBrowseButton(browseActions, "分类", OpenBrowseCategoryGroups);
+            _sourceFiltersButton = AddBrowseButton(browseActions, "筛选", OpenBrowseFilters);
+            _clearSourceSearchButton = AddBrowseButton(browseActions, "清除搜索", delegate
+            {
+                _searchBox.Clear();
+                SubmitHomeSearch();
+            });
+            browseStack.Children.Add(browseActions);
+            _browseBar.Child = browseStack;
+            g.Children.Add(_browseBar);
 
             // Row 3: Comic Feed ScrollViewer
-            ScrollViewer feedScroll = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Padding = new Thickness(20, 10, 20, 24) };
-            Grid.SetRow(feedScroll, 3);
+            _homeFeedScroll = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Padding = new Thickness(20, 10, 20, 24) };
+            Grid.SetRow(_homeFeedScroll, 3);
             StackPanel feedStack = new StackPanel();
 
             _statusBanner = new TextBlock
             {
                 FontSize = 13,
+                TextWrapping = TextWrapping.Wrap,
                 Margin = new Thickness(0, 0, 0, 10),
                 Visibility = Visibility.Collapsed
             };
             _statusBanner.SetResourceReference(TextBlock.ForegroundProperty, "Brush.Accent");
             feedStack.Children.Add(_statusBanner);
+            _retryFeedButton = UiTheme.MakeButton("重试", false, false);
+            _retryFeedButton.HorizontalAlignment = HorizontalAlignment.Left;
+            _retryFeedButton.Visibility = Visibility.Collapsed;
+            _retryFeedButton.Click += delegate { LoadActiveFeedAsync(_currentPage); };
+            feedStack.Children.Add(_retryFeedButton);
 
-            _comicGrid = new WrapPanel { HorizontalAlignment = HorizontalAlignment.Left };
+            _comicGrid = new StackPanel();
             feedStack.Children.Add(_comicGrid);
 
             _emptyFeedText = new TextBlock
             {
-                Text = "暂无漫画内容，可在上方切换「选源 (148)」或前往「仓库」导入本机漫画文件夹/压缩包。",
+                TextWrapping = TextWrapping.Wrap,
                 FontSize = 14,
                 HorizontalAlignment = HorizontalAlignment.Center,
                 Margin = new Thickness(0, 64, 0, 0),
@@ -2959,8 +3039,8 @@ namespace KomaComic.Windows
             _paginationBar.Children.Add(_btnNextPage);
             feedStack.Children.Add(_paginationBar);
 
-            feedScroll.Content = feedStack;
-            g.Children.Add(feedScroll);
+            _homeFeedScroll.Content = feedStack;
+            g.Children.Add(_homeFeedScroll);
             return g;
         }
 
@@ -2972,24 +3052,9 @@ namespace KomaComic.Windows
             AddChipButton("本地全部", _services.ActiveHomeMode == "local", false, delegate () { SwitchHomeMode("local"); });
             AddChipButton("收藏", _services.ActiveHomeMode == "fav", false, delegate () { SwitchHomeMode("fav"); });
             AddChipButton("最近阅读", _services.ActiveHomeMode == "history", false, delegate () { SwitchHomeMode("history"); });
-            AddChipButton(string.Format("选源 ({0}/{1})", enabled.Count, _services.Sources.Count), false, true, OpenQuickSourcePicker);
-            AddChipButton("+ 源管理", false, true, OpenSourceManagerDialog);
-
-            List<SourceItem> ordered = new List<SourceItem>(enabled);
-            int activeIdx = ordered.FindIndex(delegate (SourceItem s) { return s.Key == _services.ActiveHomeMode; });
-            if (activeIdx > 8)
-            {
-                SourceItem cur = ordered[activeIdx];
-                ordered.RemoveAt(activeIdx);
-                ordered.Insert(0, cur);
-            }
-
-            int cap = Math.Min(32, ordered.Count);
-            for (int i = 0; i < cap; i++)
-            {
-                SourceItem src = ordered[i];
-                AddChipButton(src.Name, _services.ActiveHomeMode == src.Key, false, delegate () { SwitchHomeMode(src.Key); });
-            }
+            SourceItem active = enabled.Find(source => source.Key == _services.ActiveHomeMode);
+            AddChipButton("漫画源", active != null, true, OpenQuickSourcePicker);
+            AddChipButton("源管理", false, true, OpenSourceManagerDialog);
         }
 
         private void AddChipButton(string label, bool active, bool actionStyle, Action onClick)
@@ -3029,27 +3094,92 @@ namespace KomaComic.Windows
 
         private void SwitchHomeMode(string mode)
         {
+            if (mode != _services.ActiveHomeMode)
+            {
+                _categoryRequestId++;
+                _browseSourceKey = null;
+                _browseMenu = null;
+                _browseTarget = null;
+                _filterTarget = null;
+                _browseFilters = null;
+                if (!IsLocalHomeMode(mode) || !IsLocalHomeMode(_services.ActiveHomeMode))
+                {
+                    _homeQuery = "";
+                    _searchBox.Clear();
+                }
+            }
             _services.ActiveHomeMode = mode;
-            _currentExploreIdx = 0;
             _services.SaveState();
             RebuildHomeChips();
             LoadActiveFeedAsync(1);
         }
 
+        private static bool IsLocalHomeMode(string mode)
+        {
+            return mode == "local" || mode == "fav" || mode == "history";
+        }
+
+        private void SubmitHomeSearch()
+        {
+            _homeQuery = (_searchBox.Text ?? "").Trim();
+            LoadActiveFeedAsync(1);
+        }
+
+        private void SelectBrowseTarget(SourceBrowseTarget target)
+        {
+            _categoryRequestId++;
+            _homeQuery = "";
+            _searchBox.Clear();
+            _browseTarget = target;
+            LoadActiveFeedAsync(1);
+        }
+
+        private Button AddBrowseButton(Panel panel, string text, Action onClick)
+        {
+            Button button = UiTheme.MakeButton(text, false, false);
+            button.Margin = new Thickness(0, 0, 8, 4);
+            button.Click += delegate { onClick(); };
+            panel.Children.Add(button);
+            return button;
+        }
+
+        private void RenderBrowseControls(SourceBrowseMenu menu, SourceBrowseTarget target, bool filters)
+        {
+            _searchBox.IsEnabled = _btnSearch.IsEnabled = menu != null && menu.CanSearch;
+            _searchBox.ToolTip = menu == null ? "正在读取漫画源" : menu.CanSearch ? "搜索当前漫画源" : "当前源不支持搜索";
+            System.Windows.Automation.AutomationProperties.SetName(_searchBox, (string)_searchBox.ToolTip);
+            _channelsButton.Visibility = menu != null && (menu.Channels.Count > 0 || menu.Ranking != null)
+                ? Visibility.Visible : Visibility.Collapsed;
+            _categoriesButton.Visibility = menu != null && menu.Groups.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+            _categoriesButton.IsEnabled = true;
+            _categoriesButton.Content = "分类";
+            _sourceFiltersButton.Visibility = filters ? Visibility.Visible : Visibility.Collapsed;
+            _clearSourceSearchButton.Visibility = target != null && target.Kind == "search" && _homeQuery.Length > 0
+                ? Visibility.Visible : Visibility.Collapsed;
+        }
+
         private async void LoadActiveFeedAsync(int page)
         {
-            _currentPage = page < 1 ? 1 : page;
+            int request = ++_feedRequestId;
+            _currentPage = Math.Max(1, page);
+            page = _currentPage;
+            if (page == 1) _feedCursors.Clear();
             string mode = _services.ActiveHomeMode;
-            string kw = (_searchBox.Text ?? "").Trim();
+            string kw = _homeQuery;
 
+            _homeFeedScroll.ScrollToTop();
             _comicGrid.Children.Clear();
             _emptyFeedText.Visibility = Visibility.Collapsed;
             _paginationBar.Visibility = Visibility.Collapsed;
+            _statusBanner.Visibility = Visibility.Collapsed;
+            _retryFeedButton.Visibility = Visibility.Collapsed;
 
-            if (mode == "local" || mode == "fav" || mode == "history")
+            if (IsLocalHomeMode(mode))
             {
-                _exploreTabsBar.Visibility = Visibility.Collapsed;
-                _statusBanner.Visibility = Visibility.Collapsed;
+                _browseBar.Visibility = Visibility.Collapsed;
+                _searchBox.IsEnabled = _btnSearch.IsEnabled = true;
+                _searchBox.ToolTip = "搜索当前书库";
+                System.Windows.Automation.AutomationProperties.SetName(_searchBox, "搜索当前书库");
                 List<ComicCardModel> list;
                 if (mode == "local")
                 {
@@ -3076,113 +3206,293 @@ namespace KomaComic.Windows
                         return (c.Title ?? "").ToLowerInvariant().Contains(lq) || (c.SubTitle ?? "").ToLowerInvariant().Contains(lq);
                     });
                 }
-                RenderComicCards(list);
+                if (list.Count == 0) ShowEmptyFeed(kw.Length > 0 ? "没有找到匹配的漫画" : "这里暂无漫画");
+                else RenderComicCards(list);
                 return;
             }
 
-            SourceItem src = _services.Sources.Find(delegate (SourceItem s) { return s.Key == mode; });
+            SourceItem src = _services.Sources.Find(source => source.Key == mode && source.Enabled);
             if (src == null)
             {
-                _emptyFeedText.Visibility = Visibility.Visible;
+                _browseBar.Visibility = Visibility.Collapsed;
+                RenderBrowseControls(null, null, false);
+                ShowEmptyFeed("请通过「漫画源」选择一个可用来源");
                 return;
             }
 
-            _statusBanner.Text = "正在从「" + src.Name + "」加载内容...";
+            _browseBar.Visibility = Visibility.Visible;
+            _sourceHeading.Text = src.Name;
+            _sourceHeading.ToolTip = src.Name;
+            SourceBrowseMenu menu = _browseSourceKey == mode ? _browseMenu : null;
+            RenderBrowseControls(menu, null, false);
+            _statusBanner.Text = "正在加载…";
             _statusBanner.Visibility = Visibility.Visible;
 
             try
             {
-                KeyValuePair<List<ComicCardModel>, int> feed = await _jsRunner.LoadFeedAsync(src, _currentExploreIdx, null, null, kw, _currentPage);
-                if (_services.ActiveHomeMode != mode) return;
-
-                _statusBanner.Visibility = Visibility.Collapsed;
-                _maxPage = feed.Value;
-                RenderComicCards(feed.Key);
-                RenderExploreTabsAsync(src);
-
-                if (feed.Key.Count > 0 || _currentPage > 1)
+                if (menu == null) menu = await _jsRunner.GetBrowseMenuAsync(src);
+                if (request != _feedRequestId) return;
+                _browseMenu = menu;
+                _browseSourceKey = mode;
+                SourceBrowseTarget target = kw.Length > 0 && menu.CanSearch
+                    ? new SourceBrowseTarget { Kind = "search", Title = "搜索结果", Keyword = kw }
+                    : _browseTarget ?? (menu.Channels.Count > 0 ? menu.Channels[0] : menu.Ranking);
+                RenderBrowseControls(menu, target, false);
+                if (target == null)
                 {
-                    _paginationBar.Visibility = Visibility.Visible;
-                    _btnPrevPage.IsEnabled = _currentPage > 1;
-                    _btnNextPage.IsEnabled = _currentPage < _maxPage;
-                    _pageLabel.Text = string.Format("第 {0} / {1} 页", _currentPage, _maxPage);
+                    _statusBanner.Visibility = Visibility.Collapsed;
+                    ShowEmptyFeed(menu.Groups.Count > 0 ? "选择一个分类开始浏览"
+                        : menu.CanSearch ? "输入关键词搜索此漫画源" : "此漫画源暂无可用的浏览或搜索入口");
+                    return;
                 }
+
+                _sourceHeading.Text = src.Name == target.Title ? src.Name : src.Name + " · " + target.Title;
+                _sourceHeading.ToolTip = _sourceHeading.Text;
+                if (!SameBrowseTarget(_filterTarget, target))
+                {
+                    _browseFilters = null;
+                    _filterTarget = target;
+                }
+                SourceBrowseFilters filters = _browseFilters ?? await _jsRunner.GetBrowseFiltersAsync(src, target);
+                if (request != _feedRequestId) return;
+                _browseFilters = filters;
+                RenderBrowseControls(menu, target, filters.Fields.Count > 0);
+
+                string cursor;
+                _feedCursors.TryGetValue(page, out cursor);
+                SourceBrowsePage feed = await _jsRunner.LoadBrowsePageAsync(src, target, filters.Values, page, cursor);
+                if (request != _feedRequestId) return;
+                _statusBanner.Visibility = Visibility.Collapsed;
+
+                if (feed.NextCursor != null) _feedCursors[page + 1] = feed.NextCursor;
+                else _feedCursors.Remove(page + 1);
+                foreach (SourceFeedSection section in feed.Sections)
+                {
+                    if (!string.IsNullOrWhiteSpace(section.Title) || section.Target != null) RenderSectionHeader(section);
+                    RenderComicCards(section.Cards);
+                }
+                bool canAdvance = feed.NextCursor != null || (feed.MaxPage.HasValue
+                    ? page < feed.MaxPage.Value : feed.Sections.Exists(section => section.Cards.Count > 0));
+                if (feed.Sections.Count == 0 && !canAdvance)
+                    ShowEmptyFeed(target.Kind == "search" ? "没有找到匹配的漫画" : "这个栏目暂无漫画");
+                RenderBrowsePagination(page, feed.MaxPage, canAdvance);
             }
             catch (Exception ex)
             {
-                _statusBanner.Text = "加载「" + src.Name + "」失败: " + ex.Message + "（可点击「选源」换源或在「源管理」登录账号）";
+                if (request != _feedRequestId) return;
+                _statusBanner.Text = "加载失败\n" + BrowseError(ex);
                 _statusBanner.Visibility = Visibility.Visible;
+                _retryFeedButton.Visibility = Visibility.Visible;
+                RenderBrowsePagination(page, null, false);
             }
         }
 
-        private async void RenderExploreTabsAsync(SourceItem src)
+        private static bool SameBrowseTarget(SourceBrowseTarget first, SourceBrowseTarget second)
         {
+            return ReferenceEquals(first, second) || (first != null && second != null &&
+                first.Kind == "search" && second.Kind == "search" && first.Keyword == second.Keyword &&
+                first.Options == null && second.Options == null);
+        }
+
+        private static string BrowseError(Exception error)
+        {
+            string firstLine = error.Message.Split('\n')[0].Trim();
+            return firstLine.Length > 160 ? firstLine.Substring(0, 160) + "…" : firstLine;
+        }
+
+        private void ShowEmptyFeed(string message)
+        {
+            _emptyFeedText.Text = message;
+            _emptyFeedText.Visibility = Visibility.Visible;
+        }
+
+        private void RenderBrowsePagination(int page, int? maxPage, bool canAdvance)
+        {
+            if (page == 1 && !canAdvance) return;
+            _paginationBar.Visibility = Visibility.Visible;
+            _btnPrevPage.IsEnabled = page > 1;
+            _btnNextPage.IsEnabled = canAdvance;
+            _pageLabel.Text = maxPage.HasValue && maxPage.Value >= page
+                ? string.Format("第 {0} / {1} 页", page, maxPage.Value) : string.Format("第 {0} 页", page);
+        }
+
+        private void OpenBrowseChannels()
+        {
+            if (_browseMenu == null) return;
+            List<SourceBrowseTarget> channels = new List<SourceBrowseTarget>(_browseMenu.Channels);
+            if (_browseMenu.Ranking != null) channels.Add(_browseMenu.Ranking);
+            int selected = PickBrowseChoice("浏览栏目", channels.ConvertAll(target => target.Title), channels.IndexOf(_filterTarget));
+            if (selected >= 0) SelectBrowseTarget(channels[selected]);
+        }
+
+        private async void OpenBrowseCategoryGroups()
+        {
+            if (_browseMenu == null || _browseMenu.Groups.Count == 0) return;
+            SourceItem src = _services.Sources.Find(source => source.Key == _browseSourceKey);
+            if (src == null) return;
+            List<SourceCategoryGroup> groups = _browseMenu.Groups;
+            int selected = groups.Count == 1 ? 0 : PickBrowseChoice("分类", groups.ConvertAll(group => group.Title), -1);
+            if (selected < 0) return;
+            int request = ++_categoryRequestId;
+            SourceCategoryGroup chosen = groups[selected];
+            _categoriesButton.IsEnabled = false;
+            _categoriesButton.Content = "加载分类…";
             try
             {
-                List<string> titles = await _jsRunner.GetExploreTitlesAsync(src);
-                _exploreTabsPanel.Children.Clear();
-                if (titles.Count == 0)
+                List<SourceBrowseTarget> targets = await _jsRunner.GetBrowseCategoriesAsync(src, chosen.Index);
+                if (request != _categoryRequestId || _services.ActiveHomeMode != src.Key || !_viewHome.IsVisible) return;
+                if (targets.Count == 0)
                 {
-                    _exploreTabsBar.Visibility = Visibility.Collapsed;
+                    ShowToast("这个分组暂无可用分类");
                     return;
                 }
-                _exploreTabsBar.Visibility = Visibility.Visible;
-                for (int i = 0; i < titles.Count; i++)
+                selected = PickBrowseChoice(chosen.Title, targets.ConvertAll(target => target.Title), -1);
+                if (selected >= 0) SelectBrowseTarget(targets[selected]);
+            }
+            catch (Exception ex)
+            {
+                if (request == _categoryRequestId && _services.ActiveHomeMode == src.Key)
+                    ShowToast("加载分类失败，点击「分类」重试。 " + BrowseError(ex));
+            }
+            finally
+            {
+                if (request == _categoryRequestId)
                 {
-                    int idx = i;
-                    bool active = idx == _currentExploreIdx;
-                    Button tabBtn = new Button
-                    {
-                        Content = titles[i],
-                        Margin = new Thickness(0, 0, 8, 0),
-                        Padding = new Thickness(10, 4, 10, 4),
-                        FontSize = 12.5,
-                        FontWeight = active ? FontWeights.Bold : FontWeights.Normal,
-                        BorderThickness = new Thickness(0),
-                        Cursor = Cursors.Hand,
-                        Template = UiTheme.CreateRoundedButtonTemplate(10, "Brush.SurfaceHover")
-                    };
-                    if (active)
-                    {
-                        tabBtn.SetResourceReference(Control.BackgroundProperty, "Brush.Surface");
-                        tabBtn.SetResourceReference(Control.ForegroundProperty, "Brush.Accent");
-                    }
-                    else
-                    {
-                        tabBtn.Background = Brushes.Transparent;
-                        tabBtn.SetResourceReference(Control.ForegroundProperty, "Brush.TextMuted");
-                    }
-                    tabBtn.Click += delegate (object s, RoutedEventArgs e)
-                    {
-                        _currentExploreIdx = idx;
-                        LoadActiveFeedAsync(1);
-                    };
-                    _exploreTabsPanel.Children.Add(tabBtn);
+                    _categoriesButton.Content = "分类";
+                    _categoriesButton.IsEnabled = true;
                 }
             }
-            catch
+        }
+
+        private void OpenBrowseFilters()
+        {
+            SourceBrowseFilters filters = _browseFilters;
+            if (filters == null || filters.Fields.Count == 0) return;
+            List<string> labels = filters.Fields.ConvertAll(field =>
             {
-                _exploreTabsBar.Visibility = Visibility.Collapsed;
+                HashSet<string> selection = ReadFilterSelection(field, filters.Values[field.Index]);
+                List<SourceFilterChoice> chosen = field.Choices.FindAll(choice => selection.Contains(choice.Value));
+                return chosen.Count == 0 ? field.Title : field.Title + " · " + string.Join("、", chosen.ConvertAll(choice => choice.Title));
+            });
+            labels.Add("恢复默认");
+            int selected = PickBrowseChoice("筛选", labels, -1);
+            if (selected < 0) return;
+            if (selected == filters.Fields.Count)
+            {
+                _browseFilters = null;
+                LoadActiveFeedAsync(1);
+                return;
             }
+            SourceFilterField activeField = filters.Fields[selected];
+            HashSet<string> values = ReadFilterSelection(activeField, filters.Values[activeField.Index]);
+            List<int> checkedIndices = new List<int>();
+            for (int index = 0; index < activeField.Choices.Count; index++)
+                if (values.Contains(activeField.Choices[index].Value)) checkedIndices.Add(index);
+            List<int> picked = PickBrowseChoices(activeField.Title, activeField.Choices.ConvertAll(choice => choice.Title),
+                checkedIndices, activeField.Multiple);
+            if (picked == null) return;
+            filters.Values[activeField.Index] = activeField.Multiple
+                ? JsonUtil.CreateSerializer().Serialize(picked.ConvertAll(index => activeField.Choices[index].Value))
+                : activeField.Choices[picked[0]].Value;
+            LoadActiveFeedAsync(1);
+        }
+
+        private static HashSet<string> ReadFilterSelection(SourceFilterField field, string value)
+        {
+            if (!field.Multiple) return new HashSet<string> { value };
+            if (value == null) return new HashSet<string>();
+            try { return new HashSet<string>(JsonUtil.CreateSerializer().Deserialize<List<string>>(value)); }
+            catch (ArgumentException) { return new HashSet<string>(); }
+            catch (InvalidOperationException) { return new HashSet<string>(); }
+        }
+
+        private int PickBrowseChoice(string title, List<string> items, int selected)
+        {
+            List<int> indices = selected < 0 ? new List<int>() : new List<int> { selected };
+            List<int> result = PickBrowseChoices(title, items, indices, false);
+            return result == null ? -1 : result[0];
+        }
+
+        private List<int> PickBrowseChoices(string title, List<string> items, List<int> selected, bool multiple)
+        {
+            Window dialog = CreateStyledDialog(title, 480, Math.Min(520, 130 + 36 * items.Count));
+            DockPanel panel = new DockPanel { Margin = new Thickness(16) };
+            StackPanel actions = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
+            DockPanel.SetDock(actions, Dock.Bottom);
+            panel.Children.Add(actions);
+            List<KeyValuePair<int, string>> entries = new List<KeyValuePair<int, string>>();
+            for (int index = 0; index < items.Count; index++)
+                entries.Add(new KeyValuePair<int, string>(index, items[index]));
+            ListBox list = new ListBox
+            {
+                ItemsSource = entries, Margin = new Thickness(0, 0, 0, 12),
+                SelectionMode = multiple ? SelectionMode.Multiple : SelectionMode.Single
+            };
+            System.Windows.Automation.AutomationProperties.SetName(list, title);
+            list.SetResourceReference(Control.BackgroundProperty, "Brush.BgElevated");
+            list.SetResourceReference(Control.ForegroundProperty, "Brush.Text");
+            list.SetResourceReference(Control.BorderBrushProperty, "Brush.Border");
+            ScrollViewer.SetHorizontalScrollBarVisibility(list, ScrollBarVisibility.Disabled);
+            DataTemplate template = new DataTemplate();
+            FrameworkElementFactory text = new FrameworkElementFactory(typeof(TextBlock));
+            text.SetBinding(TextBlock.TextProperty, new Binding("Value"));
+            text.SetValue(TextBlock.TextWrappingProperty, TextWrapping.Wrap);
+            text.SetValue(FrameworkElement.MarginProperty, new Thickness(8, 7, 8, 7));
+            template.VisualTree = text;
+            list.ItemTemplate = template;
+            Style itemStyle = new Style(typeof(ListBoxItem));
+            itemStyle.Setters.Add(new Setter(System.Windows.Automation.AutomationProperties.NameProperty, new Binding("Value")));
+            list.ItemContainerStyle = itemStyle;
+            if (multiple)
+            {
+                foreach (int index in selected) list.SelectedItems.Add(entries[index]);
+            }
+            else if (selected.Count > 0) list.SelectedIndex = selected[0];
+            panel.Children.Add(list);
+            Button accept = AddBrowseButton(actions, multiple ? "应用" : "选择", delegate { dialog.DialogResult = true; });
+            accept.IsDefault = true;
+            accept.IsEnabled = multiple || list.SelectedIndex >= 0;
+            list.SelectionChanged += delegate { accept.IsEnabled = multiple || list.SelectedIndex >= 0; };
+            list.MouseDoubleClick += delegate { if (!multiple && list.SelectedIndex >= 0) dialog.DialogResult = true; };
+            AddBrowseButton(actions, "取消", delegate { dialog.DialogResult = false; }).IsCancel = true;
+            dialog.Content = panel;
+            dialog.Loaded += delegate { list.Focus(); };
+            if (dialog.ShowDialog() != true) return null;
+            List<int> result = new List<int>();
+            foreach (KeyValuePair<int, string> entry in list.SelectedItems) result.Add(entry.Key);
+            result.Sort();
+            return result;
+        }
+
+        private void RenderSectionHeader(SourceFeedSection section)
+        {
+            DockPanel row = new DockPanel { Margin = new Thickness(0, 12, 0, 7) };
+            if (section.Target != null)
+            {
+                Button more = AddBrowseButton(row, "查看更多", delegate { SelectBrowseTarget(section.Target); });
+                DockPanel.SetDock(more, Dock.Right);
+                System.Windows.Automation.AutomationProperties.SetName(more, "查看更多：" + section.Title);
+            }
+            TextBlock title = new TextBlock
+            {
+                Text = section.Title, FontSize = 16, FontWeight = FontWeights.SemiBold,
+                TextWrapping = TextWrapping.Wrap, VerticalAlignment = VerticalAlignment.Center
+            };
+            title.SetResourceReference(TextBlock.ForegroundProperty, "Brush.Text");
+            row.Children.Add(title);
+            _comicGrid.Children.Add(row);
         }
 
         private void RenderComicCards(List<ComicCardModel> list)
         {
-            _comicGrid.Children.Clear();
-            if (list == null || list.Count == 0)
-            {
-                _emptyFeedText.Visibility = Visibility.Visible;
-                return;
-            }
-            _emptyFeedText.Visibility = Visibility.Collapsed;
-
+            if (list.Count == 0) return;
+            WrapPanel cards = new WrapPanel();
             double cardW = _services.GridCompact ? 138 : 172;
             double coverH = _services.GridCompact ? 182 : 226;
 
             foreach (ComicCardModel card in list)
-            {
-                _comicGrid.Children.Add(BuildComicCardElement(card, cardW, coverH));
-            }
+                cards.Children.Add(BuildComicCardElement(card, cardW, coverH));
+            _comicGrid.Children.Add(cards);
         }
 
         private Border BuildComicCardElement(ComicCardModel card, double cardW, double coverH)
