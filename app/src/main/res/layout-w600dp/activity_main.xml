@@ -49,6 +49,8 @@
                     android:paddingVertical="6dp"
                     app:itemMinHeight="58dp"
                     app:labelVisibilityMode="labeled"
+                    app:paddingTopSystemWindowInsets="false"
+                    app:paddingBottomSystemWindowInsets="false"
                     app:menu="@menu/nav_main" />
 
                 <ImageButton

@@ -3048,7 +3048,7 @@ namespace KomaComic.Windows
                 Button button = new Button
                 {
                     Width = settings ? 54 : 62, Height = settings ? 54 : 57,
-                    Content = stack, Background = Brushes.Transparent, Cursor = Cursors.Hand,
+                    Content = stack, Background = Brushes.Transparent, BorderThickness = new Thickness(0), Cursor = Cursors.Hand,
                     HorizontalContentAlignment = HorizontalAlignment.Center, VerticalContentAlignment = VerticalAlignment.Center,
                     Template = UiTheme.CreateRoundedButtonTemplate(settings ? 28 : 24, "Brush.NavGlassSelected"),
                     ToolTip = labels[index]
