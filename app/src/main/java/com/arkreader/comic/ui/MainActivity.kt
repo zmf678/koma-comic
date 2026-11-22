@@ -22,6 +22,8 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.os.BundleCompat
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.LinearLayoutManager
@@ -68,6 +70,28 @@ sealed class DisplayComicItem {
     data class PageAction(val text: String, val enabled: Boolean) : DisplayComicItem()
 }
 
+internal data class SourceFeedSnapshot(
+    val query: String,
+    val menu: SourceBrowseMenu,
+    val target: SourceBrowseTarget?,
+    val filterTarget: SourceBrowseTarget?,
+    val filters: SourceBrowseFilters?,
+    val items: List<DisplayComicItem>,
+    val ungroupedIds: Set<String>,
+    val page: Int,
+    val cursor: String?,
+    val hasNext: Boolean,
+    val failedNextPage: Boolean,
+    val firstVisible: Int,
+    val offset: Int
+)
+
+class SourceFeedMemory : ViewModel() {
+    internal val sources = object : LinkedHashMap<String, SourceFeedSnapshot>(8, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, SourceFeedSnapshot>?) = size > 6
+    }
+}
+
 class MainActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityMainBinding
@@ -90,6 +114,10 @@ class MainActivity : AppCompatActivity() {
     private var filterTarget: SourceBrowseTarget? = null
     private var browseFilters: SourceBrowseFilters? = null
     private var categoryJob: Job? = null
+    private val feedMemory by lazy { ViewModelProvider(this)[SourceFeedMemory::class.java] }
+    private var loadedSourceKey: String? = null
+    private var displayedSourceKey: String? = null
+    private var loadedQuery = ""
     private var onlinePage = 0
     private var onlineCursor: String? = null
     private var onlineHasNext = false
@@ -155,6 +183,7 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         })
+        binding.profileButton.setOnClickListener { startActivity(Intent(this, ProfileActivity::class.java)) }
         setupNavigation()
         setupSearchAndFilters()
         setupRecycler()
@@ -166,10 +195,17 @@ class MainActivity : AppCompatActivity() {
         outState.putInt(STATE_NAV_MODE, currentNavMode)
         outState.putString(STATE_HOME_FILTER, activeHomeFilterTag)
         outState.putSerializable(STATE_BROWSE_TARGET, browseTarget)
+        rememberSourceFeed()
+    }
+
+    override fun onPause() {
+        rememberSourceFeed()
+        super.onPause()
     }
 
     override fun onResume() {
         super.onResume()
+        binding.profileButton.showProfileAvatar()
         syncNavigationSelection(currentNavMode)
         applyGridLayoutManager()
         applyLibraryMaterial(binding.root, binding.libraryWallpaper, binding.panelComics)
@@ -178,9 +214,8 @@ class MainActivity : AppCompatActivity() {
         applyNavModePanels(currentNavMode)
         when (currentNavMode) {
             NAV_HOME -> {
-                browseMenu = null
                 rebuildHomeChips()
-                reloadComics()
+                showHomeFeed()
             }
             NAV_BOOKSHELF -> {
                 rebuildCollectionChips()
@@ -221,7 +256,12 @@ class MainActivity : AppCompatActivity() {
 
     private fun switchToNavMode(mode: Int) {
         val changed = mode != currentNavMode
-        if (changed) clearBrowseQuery()
+        if (changed) {
+            rememberSourceFeed()
+            clearBrowseQuery()
+        } else if (mode == NAV_HOME && activeHomeFilterTag.startsWith("src:")) {
+            return
+        }
         currentNavMode = mode
         syncNavigationSelection(mode)
         sourceLoadJob?.cancel()
@@ -234,7 +274,7 @@ class MainActivity : AppCompatActivity() {
                 binding.chipScroll.visibility = View.VISIBLE
                 binding.chipGroupHome.visibility = View.VISIBLE
                 rebuildHomeChips()
-                reloadComics()
+                showHomeFeed()
             }
             NAV_BOOKSHELF -> {
                 binding.chipScroll.visibility = View.VISIBLE
@@ -344,15 +384,18 @@ class MainActivity : AppCompatActivity() {
 
     private fun selectHomeFilter(tag: String) {
         if (activeHomeFilterTag == tag) return
+        rememberSourceFeed()
         if (tag.startsWith("src:") || activeHomeFilterTag.startsWith("src:")) clearBrowseQuery()
         activeHomeFilterTag = tag
         if (tag.startsWith("src:")) app.prefs.lastSource = tag.removePrefix("src:")
+        sourceLoadJob?.cancel()
+        onlineLoading = false
         categoryJob?.cancel()
         browseMenu = null
         browseTarget = null
         filterTarget = null
         rebuildHomeChips()
-        reloadComics()
+        showHomeFeed()
     }
 
     private fun showQuickSourcePicker(sources: List<com.arkreader.comic.data.ComicSourceEntity>) {
@@ -572,6 +615,62 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun rememberSourceFeed() {
+        if (currentNavMode != NAV_HOME || !activeHomeFilterTag.startsWith("src:")) return
+        val key = activeHomeFilterTag.removePrefix("src:")
+        val menu = browseMenu ?: return
+        if (loadedSourceKey != key || loadedQuery != currentQuery || onlinePage <= 0) return
+        val manager = binding.rvComics.layoutManager as? LinearLayoutManager ?: return
+        val first = manager.findFirstVisibleItemPosition().coerceAtLeast(0)
+        val offset = manager.findViewByPosition(first)?.let { manager.getDecoratedTop(it) - binding.rvComics.paddingTop } ?: 0
+        feedMemory.sources[key] = SourceFeedSnapshot(
+            currentQuery, menu, browseTarget, filterTarget, browseFilters, onlineItems.toList(),
+            ungroupedComicIds.toSet(), onlinePage, onlineCursor, onlineHasNext, onlinePageFailed, first, offset
+        )
+    }
+
+    private fun showHomeFeed() {
+        if (!activeHomeFilterTag.startsWith("src:")) {
+            reloadComics()
+            return
+        }
+        val key = activeHomeFilterTag.removePrefix("src:")
+        if (loadedSourceKey == key && loadedQuery == currentQuery &&
+            displayedSourceKey == key && (onlinePage > 0 || sourceLoadJob?.isActive == true)) return
+        val cached = feedMemory.sources[key]
+        if (cached == null) {
+            reloadComics()
+            return
+        }
+        sourceLoadJob?.cancel()
+        searchDebounceJob?.cancel()
+        currentQuery = cached.query
+        if (binding.etSearch.text.toString() != cached.query) binding.etSearch.setText(cached.query)
+        browseMenu = cached.menu
+        browseTarget = cached.target
+        filterTarget = cached.filterTarget
+        browseFilters = cached.filters
+        onlineItems.clear()
+        onlineItems.addAll(cached.items)
+        ungroupedComicIds.clear()
+        ungroupedComicIds.addAll(cached.ungroupedIds)
+        loadedSourceKey = key
+        loadedQuery = cached.query
+        onlinePage = cached.page
+        onlineCursor = cached.cursor
+        onlineHasNext = cached.hasNext
+        onlinePageFailed = cached.failedNextPage
+        onlineLoading = false
+        binding.btnOnlineRetry.visibility = View.GONE
+        binding.tvEmpty.visibility = View.GONE
+        if (cached.items.isEmpty() && !cached.hasNext) {
+            showBrowseStatus(if (cached.query.isEmpty()) "这个栏目暂无漫画" else "没有找到匹配的漫画")
+        }
+        renderBrowseControls(cached.menu, cached.filterTarget, !cached.filters?.fields.isNullOrEmpty())
+        renderOnlineItems(if (cached.failedNextPage) "加载失败，重试" else null)
+        (binding.rvComics.layoutManager as? LinearLayoutManager)?.scrollToPositionWithOffset(cached.firstVisible, cached.offset)
+    }
+
     private fun reloadComics() {
         searchDebounceJob?.cancel()
         sourceLoadJob?.cancel()
@@ -583,6 +682,7 @@ class MainActivity : AppCompatActivity() {
             loadOnlineSourcePage(sourceKey, reset = true)
             return
         }
+        displayedSourceKey = null
         renderBrowseControls(null, null, false)
 
         val activeShelfId = if (currentNavMode == NAV_HOME) 0L else app.prefs.activeBookshelfId
@@ -792,6 +892,7 @@ class MainActivity : AppCompatActivity() {
         else error.message.orEmpty().lineSequence().firstOrNull().orEmpty().take(160).ifBlank { "请求失败" }
 
     private fun renderOnlineItems(action: String? = null, enabled: Boolean = true) {
+        displayedSourceKey = loadedSourceKey
         val items = if (action != null) onlineItems + DisplayComicItem.PageAction(action, enabled) else onlineItems
         comicAdapter.submitList(items)
     }
@@ -801,6 +902,9 @@ class MainActivity : AppCompatActivity() {
         val query = currentQuery
         val page = if (reset) 1 else onlinePage + 1
         if (reset) {
+            feedMemory.sources.remove(sourceKey)
+            loadedSourceKey = sourceKey
+            loadedQuery = query
             onlineItems.clear()
             ungroupedComicIds.clear()
             onlinePage = 0

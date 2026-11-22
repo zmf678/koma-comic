@@ -1,5 +1,5 @@
 ﻿param(
-    [string]$Version = "1.4.0",
+    [string]$Version = "1.4.1",
     [switch]$SkipArchive
 )
 
@@ -78,6 +78,7 @@ $cscArgs = @(
     "/out:$ExePath",
     "/r:System.dll",
     "/r:System.Core.dll",
+    "/r:System.Security.dll",
     "/r:System.Drawing.dll",
     "/r:System.Windows.Forms.dll",
     "/r:System.IO.Compression.dll",

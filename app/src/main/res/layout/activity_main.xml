@@ -39,12 +39,13 @@
                     android:paddingTop="10dp"
                     android:paddingBottom="6dp">
 
-                    <ImageView
-                        android:layout_width="32dp"
-                        android:layout_height="32dp"
+                    <ImageButton
+                        android:id="@+id/profileButton"
+                        android:layout_width="48dp"
+                        android:layout_height="48dp"
                         android:layout_marginEnd="12dp"
-                        android:contentDescription="@string/app_name"
-                        android:src="@drawable/ic_koma_logo" />
+                        android:contentDescription="打开个人页"
+                        android:src="@drawable/ic_profile" />
 
                     <LinearLayout
                         android:layout_width="0dp"

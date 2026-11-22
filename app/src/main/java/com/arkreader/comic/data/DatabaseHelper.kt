@@ -12,6 +12,7 @@ class DatabaseHelper(context: Context) : SQLiteOpenHelper(context, DB_NAME, null
 
     override fun onCreate(db: SQLiteDatabase) {
         createOnlineMetadataTable(db)
+        createReadingTimeTable(db)
         db.execSQL("""
             CREATE TABLE warehouses (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -174,6 +175,49 @@ class DatabaseHelper(context: Context) : SQLiteOpenHelper(context, DB_NAME, null
         if (oldVersion < 4) {
             createOnlineMetadataTable(db)
             db.execSQL("UPDATE comics SET is_favorite = 1 WHERE format = 'ONLINE' AND id IN (SELECT comic_id FROM bookshelf_comics)")
+        }
+        if (oldVersion < 5) createReadingTimeTable(db)
+    }
+
+    private fun createReadingTimeTable(db: SQLiteDatabase) {
+        db.execSQL("""
+            CREATE TABLE IF NOT EXISTS reading_time (
+                day TEXT NOT NULL,
+                comic_id INTEGER NOT NULL,
+                title TEXT NOT NULL,
+                milliseconds INTEGER NOT NULL,
+                PRIMARY KEY (day, comic_id)
+            )
+        """.trimIndent())
+    }
+
+    fun addReadingTime(comicId: Long, title: String, start: java.time.Instant, elapsed: Long) {
+        val portions = readingDays(start, elapsed, java.time.ZoneId.systemDefault())
+        if (portions.isEmpty()) return
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            for ((day, millis) in portions) {
+                db.execSQL("INSERT OR IGNORE INTO reading_time VALUES (?, ?, ?, 0)", arrayOf(day, comicId, title))
+                db.execSQL("UPDATE reading_time SET milliseconds = milliseconds + ?, title = ? WHERE day = ? AND comic_id = ?",
+                    arrayOf(millis, title, day, comicId))
+            }
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+    }
+
+    fun readingTime(): List<ReadingTime> {
+        val privateIds = getHiddenOrLockedComicIds(emptySet())
+        return readableDatabase.rawQuery("SELECT day, comic_id, title, milliseconds FROM reading_time ORDER BY day DESC", null).use { cursor ->
+            buildList {
+                while (cursor.moveToNext()) {
+                    val comicId = cursor.getLong(1)
+                    if (comicId in privateIds) add(ReadingTime(cursor.getString(0), 0L, "私人作品", cursor.getLong(3)))
+                    else add(ReadingTime(cursor.getString(0), comicId, cursor.getString(2), cursor.getLong(3)))
+                }
+            }
         }
     }
 
@@ -1011,7 +1055,7 @@ class DatabaseHelper(context: Context) : SQLiteOpenHelper(context, DB_NAME, null
 
     companion object {
         private const val DB_NAME = "ark_reader.db"
-        private const val DB_VERSION = 4
+        private const val DB_VERSION = 5
 
         fun hashPin(pin: String): String {
             val digest = MessageDigest.getInstance("SHA-256").digest(pin.toByteArray(Charsets.UTF_8))

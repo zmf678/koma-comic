@@ -3,6 +3,8 @@ package com.arkreader.comic
 import com.arkreader.comic.data.DatabaseHelper
 import com.arkreader.comic.data.DoublePageMode
 import com.arkreader.comic.data.ReaderConfig
+import com.arkreader.comic.data.readingDays
+import com.arkreader.comic.engine.MangaTranslation
 import com.arkreader.comic.engine.NaturalSort
 import com.arkreader.comic.engine.PageSlot
 import com.arkreader.comic.engine.SourceRepoClient
@@ -13,9 +15,33 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertArrayEquals
+import org.junit.Assert.assertThrows
 import org.junit.Test
+import java.io.ByteArrayInputStream
+import java.time.Instant
+import java.time.ZoneId
 
 class CoreEngineTest {
+
+    @Test
+    fun readingTimeCrossingMidnightCountsOnBothDates() {
+        val zone = ZoneId.of("Asia/Hong_Kong")
+        val start = Instant.parse("2026-11-22T15:59:58Z")
+        assertEquals(listOf("2026-11-22" to 2_000L, "2026-11-23" to 4_000L), readingDays(start, 6_000L, zone))
+    }
+
+    @Test
+    fun translationStreamSkipsProgressAndReadsOnlyTheTranslatedFrame() {
+        val frames = byteArrayOf(1, 0, 0, 0, 2, 24, 42, 0, 0, 0, 0, 3, 5, 6, 7)
+        assertArrayEquals(byteArrayOf(5, 6, 7), MangaTranslation.readTranslatedFrame(ByteArrayInputStream(frames)))
+        assertThrows(IllegalStateException::class.java) {
+            MangaTranslation.readTranslatedFrame(ByteArrayInputStream(byteArrayOf(2, 0, 0, 0, 1, 5)))
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            MangaTranslation.readTranslatedFrame(ByteArrayInputStream(byteArrayOf(0, -1, -1, -1, -1)))
+        }
+    }
 
     @Test
     fun naturalSortOrdersNumericTokensProperly() {

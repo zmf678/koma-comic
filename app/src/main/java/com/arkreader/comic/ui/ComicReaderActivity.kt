@@ -74,6 +74,10 @@ class ComicReaderActivity : AppCompatActivity() {
     private var widePageFlags: BooleanArray = BooleanArray(0)
     private var slots: List<PageSlot> = emptyList()
     private var currentSlotIndex: Int = 0
+    private var readingClock: Job? = null
+    private var readingStart: java.time.Instant? = null
+    private var readingTick = 0L
+    private var readerForeground = false
     private var translationEnabled = false
     private var translationJob: Job? = null
     private var translationRequest = 0
@@ -172,6 +176,8 @@ class ComicReaderActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        readerForeground = true
+        startReadingClock()
         currentComic?.let { c ->
             val updated = app.db.getReaderConfig(app.db.getComic(c.id)?.readerConfigId ?: 1L)
             if (this::readerConfig.isInitialized && updated != readerConfig) {
@@ -195,6 +201,8 @@ class ComicReaderActivity : AppCompatActivity() {
     }
 
     override fun onPause() {
+        readerForeground = false
+        stopReadingClock()
         super.onPause()
         saveCurrentProgress()
     }
@@ -204,6 +212,39 @@ class ComicReaderActivity : AppCompatActivity() {
         binding.vpHorizontal.unregisterOnPageChangeCallback(vpCallback)
         pageSource?.close()
         bitmapCache.evictAll()
+    }
+
+    private fun startReadingClock() {
+        if (!readerForeground || pageSource == null || currentComic == null || readingStart != null) return
+        readingStart = java.time.Instant.now()
+        readingTick = android.os.SystemClock.uptimeMillis()
+        readingClock = lifecycleScope.launch {
+            while (true) {
+                kotlinx.coroutines.delay(30_000)
+                saveReadingTime()
+            }
+        }
+    }
+
+    private fun saveReadingTime() {
+        val start = readingStart ?: return
+        val comic = currentComic ?: return
+        val now = android.os.SystemClock.uptimeMillis()
+        val elapsed = now - readingTick
+        if (elapsed <= 0) return
+        runCatching { app.db.addReadingTime(comic.id, comic.title, start, elapsed) }.onFailure {
+            android.util.Log.w("ComicReader", "Could not save reading duration", it)
+        }.onSuccess {
+            readingStart = java.time.Instant.now()
+            readingTick = now
+        }
+    }
+
+    private fun stopReadingClock() {
+        readingClock?.cancel()
+        readingClock = null
+        saveReadingTime()
+        readingStart = null
     }
 
     private fun setupOverlayControls() {
@@ -350,6 +391,7 @@ class ComicReaderActivity : AppCompatActivity() {
     }
 
     private fun openChapterSource(chapter: Chapter, initialRawPage: Int) {
+        stopReadingClock()
         val wh = currentComic?.let { app.db.getWarehouse(it.warehouseId) }
         binding.progressBar.visibility = View.VISIBLE
         chapterLoad?.cancel()
@@ -401,6 +443,7 @@ class ComicReaderActivity : AppCompatActivity() {
             }
             binding.progressBar.visibility = View.GONE
             pageSource = result.first
+            startReadingClock()
             widePageFlags = result.second
             app.db.updateChapterPageCount(chapter.id, result.first.pageCount)
             rebuildSlotsAndRender(initialRawPage)
@@ -519,15 +562,19 @@ class ComicReaderActivity : AppCompatActivity() {
         binding.tvTranslationState.text = "翻译中…"
         translationJob = lifecycleScope.launch {
             val result = withContext(Dispatchers.IO) {
-                runCatching { MangaTranslation.translate(this@ComicReaderActivity, original, app.prefs.translationServer, app.prefs.translationConfig) }
+                runCatching {
+                    val prefs = app.prefs
+                    MangaTranslation.translate(this@ComicReaderActivity, original, prefs.translationServer,
+                        prefs.translationConfig, prefs.translationModel(), prefs.translationApiKey(), prefs.translationSession())
+                }
             }
             if (request != translationRequest || view.tag != position || !translationEnabled) return@launch
             result.onSuccess {
                 view.setImageBitmap(it)
                 binding.tvTranslationState.text = "已显示译文"
-            }.onFailure {
+            }.onFailure { error ->
                 translatingView = null
-                binding.tvTranslationState.text = "翻译失败 · 点击重试"
+                binding.tvTranslationState.text = if (error is MangaTranslation.LoginRequired) "请先登录翻译服务" else "翻译失败 · 点击重试"
                 binding.tvTranslationState.setOnClickListener { translateCurrentPage() }
             }
         }

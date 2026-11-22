@@ -42,7 +42,9 @@
 
 Choose a local wallpaper and optionally enable the translucent glass material in Settings.
 
-Connect a self-hosted [manga-image-translator](https://github.com/zyddnys/manga-image-translator) Web API under Settings → Manga Translation. The clients send the visible comic page to the configured server only after you enable Translate in the reader. The server handles OCR, translation, and typesetting. You can configure Ollama or another supported model on the server and use the reader toggle to restore the original page.
+In Settings → Manga Translation, use the server default with [manga-image-translator](https://github.com/zyddnys/manga-image-translator), or sign in to a [manga-translator-ui](https://github.com/hgmzhn/manga-translator-ui) server with support for per-request model settings. Select a custom text or vision model and enter its API base URL, model ID, and API key when required. The configured translation server handles OCR and rendering. Translate in the reader sends the current page to that server. The Original toggle restores the source image.
+
+The profile button opens local reading statistics, avatar selection, and issue feedback. Feedback opens a prefilled GitHub issue after review and confirmation. Browsing state is restored when returning to a source in the same session.
 
 
 ---
@@ -91,7 +93,7 @@ powershell -ExecutionPolicy Bypass -File windows/build-windows.ps1
 gradle assembleWindows
 ```
 Portable output: `build/windows/KomaComic-windows-x64/KomaComic.exe`  
-Release archive: `build/release/KomaComic-v1.4.0-windows-x64.zip`
+Release archive: `build/release/KomaComic-v1.4.1-windows-x64.zip`
 
 ---
 

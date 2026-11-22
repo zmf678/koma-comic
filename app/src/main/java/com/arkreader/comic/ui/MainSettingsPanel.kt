@@ -3,7 +3,11 @@ package com.arkreader.comic.ui
 import android.content.Intent
 import android.view.Gravity
 import android.view.View
+import android.widget.ArrayAdapter
+import android.widget.CheckBox
 import android.widget.EditText
+import android.widget.ScrollView
+import android.widget.Spinner
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
@@ -14,6 +18,8 @@ import androidx.core.content.ContextCompat
 import com.arkreader.comic.ArkReaderApp
 import com.arkreader.comic.R
 import com.arkreader.comic.data.GridSize
+import com.arkreader.comic.data.TranslationMode
+import com.arkreader.comic.data.TranslationModel
 import com.arkreader.comic.databinding.PanelMainSettingsBinding
 import com.google.android.material.card.MaterialCardView
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
@@ -139,7 +145,11 @@ class MainSettingsPanel(
             }
             addDivider(group)
 
-            addActionRow(group, "漫画翻译", if (prefs.translationServer.isBlank()) "设置自托管翻译服务" else prefs.translationServer) {
+            addActionRow(group, "漫画翻译", when {
+                prefs.translationServer.isBlank() -> "选择翻译服务和模型"
+                prefs.translationModel().mode == TranslationMode.SERVER -> "服务端默认"
+                else -> prefs.translationModel().modelId
+            }) {
                 showTranslationSettings()
             }
             addDivider(group)
@@ -197,40 +207,127 @@ class MainSettingsPanel(
     }
 
     private fun showTranslationSettings() {
+        val prefs = app.prefs
+        val saved = prefs.translationModel()
+        val modes = TranslationMode.entries
         val fields = LinearLayout(activity).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(20), dp(8), dp(20), 0)
         }
-        val endpoint = EditText(activity).apply {
-            hint = "https://你的翻译服务"
-            inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_URI
-            setText(app.prefs.translationServer)
+        fun field(parent: LinearLayout, label: String, value: String = "", kind: Int = android.text.InputType.TYPE_CLASS_TEXT): EditText {
+            parent.addView(TextView(activity).apply { text = label; setPadding(0, dp(10), 0, 0) })
+            return EditText(activity).apply {
+                inputType = kind
+                setSingleLine(true)
+                setText(value)
+                parent.addView(this)
+            }
         }
-        val config = EditText(activity).apply {
-            hint = "manga-image-translator 配置 JSON"
-            setText(app.prefs.translationConfig)
-            minLines = 2
+        val endpoint = field(fields, "漫画翻译服务地址", prefs.translationServer,
+            android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_URI)
+        var sessionToken: String? = null
+        var sessionServer = ""
+        val loginStatus = TextView(activity).apply {
+            text = if (prefs.hasTranslationSession) "已保存翻译服务会话" else "自定义模型需登录漫画翻译服务"
         }
-        fields.addView(endpoint)
-        fields.addView(config)
+        fields.addView(loginStatus)
+        fields.addView(com.google.android.material.button.MaterialButton(activity).apply {
+            text = "登录翻译服务"
+            setOnClickListener {
+                val server = endpoint.text.toString().trim()
+                if (runCatching { MangaTranslation.endpoint(server) }.isFailure) {
+                    endpoint.error = "请输入有效的翻译服务地址"
+                    return@setOnClickListener
+                }
+                val accountFields = LinearLayout(activity).apply {
+                    orientation = LinearLayout.VERTICAL
+                    setPadding(dp(20), dp(5), dp(20), 0)
+                }
+                val username = field(accountFields, "翻译服务用户名")
+                val password = field(accountFields, "密码", kind = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD)
+                val login = MaterialAlertDialogBuilder(activity).setTitle("登录翻译服务").setView(accountFields)
+                    .setNegativeButton("取消", null).setPositiveButton("登录", null).show()
+                val button = login.getButton(android.content.DialogInterface.BUTTON_POSITIVE)
+                button.setOnClickListener {
+                    val user = username.text.toString().trim()
+                    val secret = password.text.toString()
+                    if (user.isEmpty() || secret.isEmpty()) {
+                        password.error = "请填写用户名和密码"
+                        return@setOnClickListener
+                    }
+                    button.isEnabled = false
+                    activity.lifecycleScope.launch {
+                        val result = withContext(Dispatchers.IO) { runCatching { MangaTranslation.login(server, user, secret) } }
+                        if (!login.isShowing) return@launch
+                        result.onSuccess {
+                            sessionToken = it
+                            sessionServer = server
+                            loginStatus.text = "登录成功，保存后在阅读器使用"
+                            login.dismiss()
+                        }.onFailure {
+                            button.isEnabled = true
+                            password.error = if (it.message == "请先在翻译服务网页修改初始密码") it.message else "登录失败，请检查服务地址和账户"
+                        }
+                    }
+                }
+            }
+        })
+        fields.addView(TextView(activity).apply { text = "模型来源"; setPadding(0, dp(10), 0, 0) })
+        val mode = Spinner(activity, Spinner.MODE_DROPDOWN).apply {
+            adapter = ArrayAdapter(activity, android.R.layout.simple_spinner_dropdown_item, modes.map { it.label })
+            minimumHeight = dp(48)
+            setSelection(saved.mode.ordinal)
+            fields.addView(this)
+        }
+        val custom = LinearLayout(activity).apply {
+            orientation = LinearLayout.VERTICAL
+            fields.addView(this)
+        }
+        val base = field(custom, "模型 API 地址（兼容接口 /v1）", saved.apiBase)
+        val model = field(custom, "模型 ID", saved.modelId)
+        val key = field(custom, "模型 API 密钥", kind = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD)
+        key.hint = if (prefs.hasTranslationKey) "已保存，留空保留" else "无需鉴权的本地模型可留空"
+        val clear = CheckBox(activity).apply {
+            text = "清除已保存的密钥"
+            visibility = if (prefs.hasTranslationKey) View.VISIBLE else View.GONE
+            custom.addView(this)
+        }
+        custom.addView(TextView(activity).apply {
+            text = "自定义模式需要支持用户模型参数的 manga-translator-ui。翻译时，模型地址和密钥会发送至所填的翻译服务。"
+            setPadding(0, dp(8), 0, dp(4))
+        })
+        mode.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: View?, position: Int, id: Long) {
+                custom.visibility = if (modes[position] == TranslationMode.SERVER) View.GONE else View.VISIBLE
+            }
+            override fun onNothingSelected(parent: android.widget.AdapterView<*>?) = Unit
+        }
+        custom.visibility = if (saved.mode == TranslationMode.SERVER) View.GONE else View.VISIBLE
+        val config = field(fields, "高级翻译配置 JSON", prefs.translationConfig).apply { setSingleLine(false); maxLines = 4 }
         val dialog = MaterialAlertDialogBuilder(activity)
             .setTitle("漫画翻译")
-            .setMessage("阅读器中开启后，当前漫画页才会发送至此服务。语言及翻译器由下方配置决定。")
-            .setView(fields)
+            .setView(ScrollView(activity).apply { addView(fields) })
             .setNegativeButton("取消", null)
             .setPositiveButton("保存", null)
             .show()
         dialog.getButton(android.content.DialogInterface.BUTTON_POSITIVE).setOnClickListener {
             val server = endpoint.text.toString().trim()
-            if (server.isNotBlank() && runCatching { MangaTranslation.endpoint(server) }.isFailure) {
-                endpoint.error = "请输入有效的 HTTP(S) 地址"
-            } else if (runCatching { JSONObject(config.text.toString()) }.isFailure) {
-                config.error = "请输入 JSON 对象"
-            } else {
-                app.prefs.translationServer = server
-                app.prefs.translationConfig = config.text.toString()
-                dialog.dismiss()
-                refresh()
+            val selected = TranslationModel(modes[mode.selectedItemPosition], base.text.toString().trim(), model.text.toString().trim())
+            when {
+                (selected.mode != TranslationMode.SERVER || server.isNotBlank()) && runCatching { MangaTranslation.endpoint(server) }.isFailure ->
+                    endpoint.error = "请输入有效的翻译服务地址"
+                runCatching { MangaTranslation.validateModel(selected) }.isFailure ->
+                    if (selected.modelId.isBlank()) model.error = "请输入模型 ID" else base.error = "请输入有效的 API 地址"
+                runCatching { JSONObject(config.text.toString()) }.isFailure -> config.error = "请输入 JSON 对象"
+                else -> runCatching {
+                    prefs.saveTranslationSettings(server, config.text.toString(), selected, key.text.toString(), clear.isChecked,
+                        sessionToken?.takeIf { sessionServer == server })
+                }.onSuccess {
+                    dialog.dismiss()
+                    refresh()
+                }.onFailure {
+                    Toast.makeText(activity, "暂时无法保存模型密钥", Toast.LENGTH_SHORT).show()
+                }
             }
         }
     }

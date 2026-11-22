@@ -25,21 +25,27 @@ import com.arkreader.comic.R
 import com.google.android.material.chip.Chip
 import java.io.File
 
-internal fun saveLibraryWallpaper(context: Context, uri: Uri) {
+internal fun saveLibraryWallpaper(context: Context, uri: Uri) =
+    savePersonalImage(context, uri, "library-wallpaper.jpg", 2560)
+
+internal fun saveProfileAvatar(context: Context, uri: Uri) =
+    savePersonalImage(context, uri, "profile-avatar.jpg", 512)
+
+private fun savePersonalImage(context: Context, uri: Uri, name: String, maximum: Int) {
     val resolver = context.contentResolver
     val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
     resolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, options) }
     require(options.outWidth > 0 && options.outHeight > 0) { "无法读取这张图片" }
     options.inJustDecodeBounds = false
     options.inSampleSize = 1
-    while (maxOf(options.outWidth, options.outHeight) / options.inSampleSize > 2560) options.inSampleSize *= 2
+    while (maxOf(options.outWidth, options.outHeight) / options.inSampleSize > maximum) options.inSampleSize *= 2
     val bitmap = resolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, options) }
         ?: error("无法读取这张图片")
-    val wallpaper = File(context.filesDir, "library-wallpaper.jpg")
-    val pending = File(context.filesDir, "library-wallpaper.tmp")
+    val wallpaper = File(context.filesDir, name)
+    val pending = File.createTempFile("personal-", ".tmp", context.filesDir)
     try {
         pending.outputStream().use { check(bitmap.compress(Bitmap.CompressFormat.JPEG, 90, it)) }
-        check(pending.renameTo(wallpaper)) { "无法保存壁纸" }
+        check(pending.renameTo(wallpaper)) { "无法保存图片" }
     } finally {
         bitmap.recycle()
         pending.delete()

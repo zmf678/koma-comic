@@ -27,6 +27,8 @@
             </intent-filter>
         </activity>
 
+        <activity android:name=".ui.ProfileActivity" android:exported="false" />
+
         <activity
             android:name=".ui.ComicDetailActivity"
             android:exported="false" />
