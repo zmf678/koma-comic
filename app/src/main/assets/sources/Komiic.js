@@ -1,7 +1,8 @@
 class Komiic extends ComicSource {
     name = "Komiic"
     key = "Komiic"
-    version = "1.8.3"      // 增加详情页 url，支持复制链接
+    version = "1.8.4"
+    website = "https://komiic.com/"
     minAppVersion = "1.0.0"
     url = "https://cdn.jsdelivr.net/gh/LX7kM9/venera-configs@main/Komiic.js"
 
@@ -106,6 +107,7 @@ class Komiic extends ComicSource {
                     return await this._queryJsonWithToken(token, query)
                 }
             }
+            if (/token is expired|no token|unauthor|expired/i.test(msg)) throw new Error("请在设置 → 漫画源与登录中登录 Komiic");
             throw e
         }
     }
@@ -210,7 +212,7 @@ class Komiic extends ComicSource {
     // ========== 探索 ==========
     explore = [
         {
-            title: "Komiic",
+            title: "最近更新",
             type: "multiPageComicList",
             load: async (page) => {
                 return await this.queryComics({
@@ -439,8 +441,7 @@ class Komiic extends ComicSource {
                 this.queryJson({ "operationName": "recommendComicById", "variables": { "comicId": id }, "query": "query recommendComicById($comicId: ID!) {\n recommendComicById(comicId: $comicId)\n}" }),
                 this.queryJson({ "operationName": "chapterByComicId", "variables": { "comicId": id }, "query": "query chapterByComicId($comicId: ID!) {\n chaptersByComicId(comicId: $comicId) {\n id\n serial\n type\n dateCreated\n dateUpdated\n size\n __typename\n }\n}" })
             ])
-            let recommend = recJson.data.recommendComicById
-            recommend.push(id)
+            const recommend = [...new Set([...(recJson.data.recommendComicById || []), id])]
             let all = chapJson.data.chaptersByComicId
             let books = [], chapters = []
             all.forEach((c) => (c.type === 'book' ? books : chapters).push(c))
@@ -453,10 +454,11 @@ class Komiic extends ComicSource {
                 "query": "query comicByIds($comicIds: [ID]!) {\n comicByIds(comicIds: $comicIds) {\n id\n title\n status\n year\n imageUrl\n isFavorite\n authors {\n id\n name\n __typename\n }\n categories {\n id\n name\n __typename\n }\n dateUpdated\n monthViews\n views\n favoriteCount\n lastBookUpdate\n lastChapterUpdate\n __typename\n }\n}"
             })
 
-            let info = res.comics.pop()
+            const info = res.comics.find(item => String(item.id) === String(id));
+            if (!info) throw new Error("Komiic 未返回作品详情");
 
             // 构造详情页链接（用于复制链接）
-            const base = this._apiBase(); // 如 https://komiic.cc 或 https://komiic.com
+            const base = this.website.replace(/\/$/, "");
             const url = `${base}/comic/${id}`;
 
             return {
@@ -464,7 +466,7 @@ class Komiic extends ComicSource {
                 cover: info.cover,
                 tags: { "作者": [info.subTitle], "标签": info.tags },
                 chapters: chapMap,
-                recommend: res.comics,
+                recommend: res.comics.filter(item => String(item.id) !== String(id)),
                 updateTime: info.updateTime,
                 isFavorite: info.isFavorite,
                 url: url   // 添加此字段，使右上角菜单出现“复制链接”
@@ -472,6 +474,7 @@ class Komiic extends ComicSource {
         },
 
         loadEp: async (comicId, epId) => {
+            if (!this.isLogged) throw new Error("请在设置 → 漫画源与登录中登录 Komiic，登录后才能读取章节");
             let cached = this._imageTicketCache[epId]
             let now = Date.now()
             if (cached && Object.keys(cached).length > 0) {

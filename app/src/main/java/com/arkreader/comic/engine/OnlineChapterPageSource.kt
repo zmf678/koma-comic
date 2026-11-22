@@ -6,30 +6,38 @@ import com.arkreader.comic.ArkReaderApp
 import com.arkreader.comic.data.Chapter
 import com.arkreader.comic.data.RemotePageImage
 import kotlinx.coroutines.runBlocking
+import java.util.concurrent.ConcurrentHashMap
 
 class OnlineChapterPageSource(chapter: Chapter) : ComicPageSource {
     private val app = ArkReaderApp.instance
     private val images: List<RemotePageImage>
-    private val sizeCache = HashMap<Int, Pair<Int, Int>>()
+    private val sizeCache = ConcurrentHashMap<Int, Pair<Int, Int>>()
+    private val sourceKey: String
+    private val remoteId: String
+    private val episodeId: String?
 
     init {
-        val parsed = VeneraScriptParser.parseVeneraUri(chapter.sourceUri)
-            ?: throw IllegalStateException("无效的在线章节地址: ${chapter.sourceUri}")
-        val (sourceKey, remoteId, epId) = parsed
-        images = runBlocking {
-            app.veneraRuntime.loadChapterImages(sourceKey, remoteId, epId)
-        }
+        val comicUri = app.db.getComic(chapter.comicId)?.sourceUri
+            ?: error("未找到在线漫画")
+        val (key, id) = VeneraScriptParser.parseVeneraComicUri(comicUri) ?: error("无效的在线漫画地址")
+        val chapterPrefix = "$comicUri/"
+        require(chapter.sourceUri.startsWith(chapterPrefix)) { "无效的在线章节地址" }
+        sourceKey = key
+        remoteId = id
+        episodeId = chapter.sourceUri.removePrefix(chapterPrefix).ifEmpty { null }
+        images = runBlocking { app.veneraRuntime.loadChapterImages(sourceKey, remoteId, episodeId) }
         if (images.isEmpty()) {
             throw IllegalStateException("该章节暂无图片页")
         }
-        if (chapter.id > 0 && chapter.pageCount != images.size) {
-            runCatching {
-                app.db.writableDatabase.execSQL(
-                    "UPDATE chapters SET page_count = ? WHERE id = ?",
-                    arrayOf(images.size, chapter.id)
-                )
-            }
-        }
+    }
+
+    private fun getPageFile(index: Int): java.io.File? {
+        val page = images[index]
+        val key = app.coverCache.makeKey("$sourceKey|$remoteId|$episodeId|$index|${page.url}|${page.headers.toSortedMap()}")
+        val loadBytes = if (page.useSourceLoader) {
+            { runBlocking { app.veneraRuntime.loadPageBytes(sourceKey, remoteId, episodeId, page) } }
+        } else null
+        return app.coverCache.getOrDownloadOnlinePageFile(key, page.url, page.headers, loadBytes)
     }
 
     override val pageCount: Int
@@ -37,8 +45,7 @@ class OnlineChapterPageSource(chapter: Chapter) : ComicPageSource {
 
     override fun loadPageBitmap(index: Int, reqWidth: Int, reqHeight: Int): Bitmap? {
         if (index !in images.indices) return null
-        val img = images[index]
-        val file = app.coverCache.getOrDownloadOnlinePageFile(img.url, img.headers) ?: return null
+        val file = getPageFile(index) ?: return null
         val boundsOpts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         BitmapFactory.decodeFile(file.absolutePath, boundsOpts)
         if (boundsOpts.outWidth > 0 && boundsOpts.outHeight > 0) {
@@ -52,8 +59,7 @@ class OnlineChapterPageSource(chapter: Chapter) : ComicPageSource {
     override fun getPageSize(index: Int): Pair<Int, Int>? {
         sizeCache[index]?.let { return it }
         if (index !in images.indices) return null
-        val img = images[index]
-        val file = app.coverCache.getOrDownloadOnlinePageFile(img.url, img.headers) ?: return null
+        val file = getPageFile(index) ?: return null
         val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         BitmapFactory.decodeFile(file.absolutePath, opts)
         if (opts.outWidth > 0 && opts.outHeight > 0) {

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -89,7 +89,7 @@ namespace KomaComic.Windows
 
     internal static class Program
     {
-        internal const string AppVersion = "1.3.1";
+        internal const string AppVersion = "1.4.0";
 
         [STAThread]
         private static int Main(string[] args)
@@ -166,9 +166,9 @@ namespace KomaComic.Windows
                 }
 
                 List<SourceItem> sources = services.LoadBuiltinSources();
-                if (sources.Count < 148)
+                if (sources.Count == 0 || sources.Exists(source => string.IsNullOrWhiteSpace(services.ReadSourceScript(source))))
                 {
-                    Console.Error.WriteLine("SMOKE_TEST_FAIL: expected >= 148 built-in sources, got " + sources.Count);
+                    Console.Error.WriteLine("SMOKE_TEST_FAIL: invalid built-in source manifest, count=" + sources.Count);
                     return 3;
                 }
 
@@ -292,7 +292,7 @@ namespace KomaComic.Windows
 
         public static bool IsDarkActive { get; private set; }
 
-        public static void ApplyTheme(Application app, string mode)
+        public static void ApplyTheme(Application app, string mode, bool glass = false)
         {
             bool dark = true;
             if (string.Equals(mode, "light", StringComparison.OrdinalIgnoreCase))
@@ -316,10 +316,31 @@ namespace KomaComic.Windows
             Dictionary<string, Color> palette = dark ? DarkColors : LightColors;
             foreach (KeyValuePair<string, Color> kv in palette)
             {
-                SolidColorBrush brush = new SolidColorBrush(kv.Value);
+                Brush brush = new SolidColorBrush(kv.Value);
+                if (glass && (kv.Key == "Surface" || kv.Key == "BgRail" || kv.Key == "BgElevated" || kv.Key == "InputBg" || kv.Key == "AccentSoft"))
+                {
+                    Color light = dark ? Color.FromArgb(238, 46, 63, 93) : Color.FromArgb(246, 255, 255, 255);
+                    Color shade = dark ? Color.FromArgb(210, 23, 36, 60) : Color.FromArgb(221, 203, 222, 246);
+                    if (kv.Key == "AccentSoft")
+                    {
+                        light = dark ? Color.FromArgb(211, 39, 95, 148) : Color.FromArgb(232, 194, 228, 255);
+                        shade = dark ? Color.FromArgb(194, 30, 52, 92) : Color.FromArgb(196, 165, 205, 250);
+                    }
+                    brush = new LinearGradientBrush(light, shade, 100);
+                }
                 brush.Freeze();
                 app.Resources["Brush." + kv.Key] = brush;
             }
+            Color rim = dark ? Color.FromArgb(122, 163, 204, 248) : Color.FromArgb(246, 255, 255, 255);
+            Color shine = dark ? Color.FromArgb(219, 60, 79, 111) : Color.FromArgb(247, 255, 255, 255);
+            Color falloff = dark ? Color.FromArgb(glass ? (byte)158 : (byte)205, 20, 32, 54)
+                : Color.FromArgb(glass ? (byte)170 : (byte)216, 208, 224, 245);
+            app.Resources["Brush.NavGlass"] = new LinearGradientBrush(shine, falloff, 110);
+            app.Resources["Brush.NavGlassRim"] = new SolidColorBrush(rim);
+            app.Resources["Brush.NavGlassSelected"] = new LinearGradientBrush(
+                dark ? Color.FromArgb(214, 78, 124, 178) : Color.FromArgb(242, 219, 241, 255),
+                dark ? Color.FromArgb(184, 38, 65, 109) : Color.FromArgb(221, 161, 203, 242), 115);
+
         }
 
         public static ControlTemplate CreateRoundedButtonTemplate(double radius, string hoverBrushKey)
@@ -462,6 +483,8 @@ namespace KomaComic.Windows
         public bool IsLocal { get; set; }
         public string Title { get; set; }
         public string SubTitle { get; set; }
+        public string Description { get; set; }
+        public string OfficialUrl { get; set; }
         public string CoverUrl { get; set; }
         public string Badge { get; set; }
         public Dictionary<string, string> Headers { get; set; }
@@ -479,6 +502,7 @@ namespace KomaComic.Windows
         public string SubTitle { get; set; }
         public string CoverUrl { get; set; }
         public string Description { get; set; }
+        public string OfficialUrl { get; set; }
         public List<string> Tags { get; set; }
         public List<ChapterItem> Chapters { get; set; }
         public Dictionary<string, string> Headers { get; set; }
@@ -490,6 +514,7 @@ namespace KomaComic.Windows
         public bool IsLocal { get; set; }
         public string LocalComicId { get; set; }
         public int LocalPageIndex { get; set; }
+        public bool UseSourceLoader { get; set; }
         public Dictionary<string, string> Headers { get; set; }
     }
 
@@ -638,6 +663,12 @@ namespace KomaComic.Windows
         public string ThemeMode { get; set; }
         public bool GridCompact { get; set; }
         public string ActiveHomeMode { get; set; }
+        public string LastSource { get; set; }
+        public string WallpaperPath { get { return Path.Combine(DataDir, "library-wallpaper.jpg"); } }
+        public bool GlassMaterial { get; set; }
+        public bool WallpaperEnabled { get; set; }
+        public string TranslationServer { get; set; }
+        public string TranslationConfig { get; set; }
         public List<SourceItem> Sources { get; private set; }
         public List<ComicCardModel> Favorites { get; private set; }
         public List<ComicCardModel> History { get; private set; }
@@ -677,7 +708,10 @@ namespace KomaComic.Windows
             UnlockedCollections = new Dictionary<string, bool>();
             ComicPrefs = new Dictionary<string, ReaderPrefModel>();
             ThemeMode = "dark";
-            ActiveHomeMode = "copy_manga";
+            ActiveHomeMode = "zaimanhua";
+            LastSource = "zaimanhua";
+            TranslationServer = "";
+            TranslationConfig = "{\"translator\":{\"target_lang\":\"CHS\"}}";
             ReaderDefaults = new ReaderPrefModel
             {
                 Mode = "rtl",
@@ -774,6 +808,7 @@ namespace KomaComic.Windows
                 {
                     string html =
                         "<!DOCTYPE html><html><head><meta charset=\"utf-8\"></head><body><script>\n" +
+                        "const bridgeFetch = window.fetch.bind(window);\n" +
                         "window._veneraNative = {\n" +
                         "  dispatch: function(jsonStr) {\n" +
                         "    var xhr = new XMLHttpRequest();\n" +
@@ -783,7 +818,7 @@ namespace KomaComic.Windows
                         "    return xhr.responseText || 'null';\n" +
                         "  },\n" +
                         "  dispatchAsync: function(cbId, jsonStr) {\n" +
-                        "    fetch('/api/venera/async', { method: 'POST', headers: { 'Content-Type': 'application/json; charset=utf-8' }, body: jsonStr })\n" +
+                        "    bridgeFetch('/api/venera/async', { method: 'POST', headers: { 'Content-Type': 'application/json; charset=utf-8' }, body: jsonStr })\n" +
                         "      .then(function(r){ return r.text(); })\n" +
                         "      .then(function(t){ if (window.__veneraResolveAsync) window.__veneraResolveAsync(cbId, t || 'null'); })\n" +
                         "      .catch(function(e){ if (window.__veneraRejectAsync) window.__veneraRejectAsync(cbId, e ? String(e.message || e) : 'Async failed'); });\n" +
@@ -935,6 +970,7 @@ namespace KomaComic.Windows
             }
 
             int status = 0;
+            string responseUrl = urlStr;
             Dictionary<string, object> respHeaders = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
             byte[] rawBytes = new byte[0];
 
@@ -949,6 +985,7 @@ namespace KomaComic.Windows
             using (webResp)
             {
                 status = (int)webResp.StatusCode;
+                responseUrl = webResp.ResponseUri.AbsoluteUri;
                 List<string> setCookies = new List<string>();
                 for (int i = 0; i < webResp.Headers.Count; i++)
                 {
@@ -980,6 +1017,7 @@ namespace KomaComic.Windows
 
             Dictionary<string, object> outObj = new Dictionary<string, object>();
             outObj["status"] = status;
+            outObj["url"] = responseUrl;
             outObj["headers"] = respHeaders;
             if (asBytes) outObj["bodyBase64"] = Convert.ToBase64String(rawBytes);
             else outObj["body"] = Encoding.UTF8.GetString(rawBytes);
@@ -1003,7 +1041,7 @@ namespace KomaComic.Windows
 
         private static void ApplyHeaderSafe(HttpWebRequest webReq, string key, string value, string jarCookie)
         {
-            if (string.IsNullOrEmpty(key)) return;
+            if (string.IsNullOrEmpty(key) || key.Equals("Accept-Encoding", StringComparison.OrdinalIgnoreCase)) return;
             string lk = key.ToLowerInvariant();
             if (lk == "content-length" || lk == "connection" || lk == "transfer-encoding" || lk == "expect" || lk == "accept-encoding") return;
             if (lk == "user-agent") { if (!string.IsNullOrEmpty(value)) webReq.UserAgent = value; return; }
@@ -1341,6 +1379,34 @@ namespace KomaComic.Windows
             return bmp;
         }
 
+        public async Task<BitmapImage> LoadSourcePageBitmapAsync(string key, Func<Task<byte[]>> loadBytes)
+        {
+            string path = Path.Combine(_imageCacheDir, ComputeSha256Hex(key));
+            if (File.Exists(path))
+            {
+                BitmapImage cached = await Task.Run(() => DecodeFrozenImage(File.ReadAllBytes(path), 0));
+                if (cached != null) return cached;
+            }
+
+            await _imgFetchLimit.WaitAsync();
+            try
+            {
+                byte[] bytes = await loadBytes();
+                BitmapImage bitmap = await Task.Run(() => DecodeFrozenImage(bytes, 0));
+                if (bitmap != null && !File.Exists(path))
+                {
+                    try
+                    {
+                        using (FileStream file = new FileStream(path, FileMode.CreateNew))
+                            file.Write(bytes, 0, bytes.Length);
+                    }
+                    catch (IOException) { }
+                }
+                return bitmap;
+            }
+            finally { _imgFetchLimit.Release(); }
+        }
+
         public async Task<BitmapImage> LoadLocalPageBitmapAsync(string localComicId, int pageIndex, int decodeWidth)
         {
             return await Task.Run<BitmapImage>(delegate ()
@@ -1671,7 +1737,12 @@ namespace KomaComic.Windows
                     {
                         ThemeMode = JsonUtil.GetStr(st, "theme", "dark");
                         GridCompact = JsonUtil.GetBool(st, "gridCompact", false);
-                        ActiveHomeMode = JsonUtil.GetStr(st, "activeHomeMode", "copy_manga");
+                        ActiveHomeMode = JsonUtil.GetStr(st, "activeHomeMode", "zaimanhua");
+                        LastSource = JsonUtil.GetStr(st, "lastSource", ActiveHomeMode);
+                        GlassMaterial = JsonUtil.GetBool(st, "glassMaterial", false);
+                        WallpaperEnabled = JsonUtil.GetBool(st, "wallpaperEnabled", false);
+                        TranslationServer = JsonUtil.GetStr(st, "translationServer", "");
+                        TranslationConfig = JsonUtil.GetStr(st, "translationConfig", TranslationConfig);
                         ActiveCollectionId = JsonUtil.GetStr(st, "activeCollectionId", "col_default");
 
                         object wdObj = null;
@@ -1717,6 +1788,14 @@ namespace KomaComic.Windows
                             }
                         }
 
+                        if (!JsonUtil.GetBool(st, "splitShelves", false))
+                        {
+                            foreach (CollectionModel shelf in Collections)
+                                foreach (ComicCardModel comic in shelf.Items)
+                                    if (!comic.IsLocal && !Favorites.Exists(favorite => favorite.Uid == comic.Uid))
+                                        Favorites.Add(comic);
+                        }
+
                         object scObj = null;
                         if (st.TryGetValue("sourceConfigs", out scObj) && scObj is ArrayList)
                         {
@@ -1748,7 +1827,7 @@ namespace KomaComic.Windows
             if (Collections.Count == 0)
             {
                 Collections.Add(new CollectionModel { Id = "col_default", Name = "默认作品集", Pin = "", HideFromAll = false, Items = new List<ComicCardModel>() });
-                ActiveCollectionId = "col_default";
+                ActiveCollectionId = "col_all";
             }
 
             HashSet<string> seen = new HashSet<string>(StringComparer.Ordinal);
@@ -1770,7 +1849,13 @@ namespace KomaComic.Windows
             }
             foreach (SourceItem s in savedList)
             {
-                if (seen.Add(s.Key)) Sources.Add(s);
+                if (!string.IsNullOrWhiteSpace(s.CustomScript) && seen.Add(s.Key)) Sources.Add(s);
+            }
+            if (!Sources.Exists(source => source.Key == ActiveHomeMode) &&
+                ActiveHomeMode != "local" && ActiveHomeMode != "fav" && ActiveHomeMode != "history")
+            {
+                SourceItem first = Sources.Find(source => source.Enabled);
+                ActiveHomeMode = first == null ? "local" : first.Key;
             }
         }
 
@@ -1784,6 +1869,12 @@ namespace KomaComic.Windows
                     root["theme"] = ThemeMode;
                     root["gridCompact"] = GridCompact;
                     root["activeHomeMode"] = ActiveHomeMode;
+                    root["lastSource"] = LastSource;
+                    root["splitShelves"] = true;
+                    root["glassMaterial"] = GlassMaterial;
+                    root["wallpaperEnabled"] = WallpaperEnabled;
+                    root["translationServer"] = TranslationServer;
+                    root["translationConfig"] = TranslationConfig;
                     root["activeCollectionId"] = ActiveCollectionId;
                     root["webdav"] = new Dictionary<string, object> { { "url", WebDavUrl ?? "" }, { "username", WebDavUser ?? "" }, { "password", WebDavPass ?? "" } };
                     root["readerDefaults"] = SerializePref(ReaderDefaults);
@@ -1816,7 +1907,10 @@ namespace KomaComic.Windows
                         });
                     }
                     root["sourceConfigs"] = scs;
-                    File.WriteAllText(_stateFile, JsonUtil.CreateSerializer().Serialize(root), Encoding.UTF8);
+                    string pending = _stateFile + ".tmp";
+                    File.WriteAllText(pending, JsonUtil.CreateSerializer().Serialize(root), Encoding.UTF8);
+                    if (File.Exists(_stateFile)) File.Replace(pending, _stateFile, null);
+                    else File.Move(pending, _stateFile);
                 }
                 catch { }
             }
@@ -1841,6 +1935,8 @@ namespace KomaComic.Windows
                     SubTitle = JsonUtil.GetStr(d, "subTitle", ""),
                     CoverUrl = JsonUtil.GetStr(d, "cover", ""),
                     Badge = JsonUtil.GetStr(d, "badge", ""),
+                    Description = JsonUtil.GetStr(d, "description", ""),
+                    OfficialUrl = JsonUtil.GetStr(d, "officialUrl", ""),
                     Headers = new Dictionary<string, string>()
                 };
                 object hObj = null;
@@ -1866,7 +1962,7 @@ namespace KomaComic.Windows
                 {
                     { "uid", m.Uid }, { "id", m.Id }, { "sourceKey", m.SourceKey ?? "" }, { "isLocal", m.IsLocal },
                     { "title", m.Title }, { "subTitle", m.SubTitle ?? "" }, { "cover", m.CoverUrl ?? "" },
-                    { "badge", m.Badge ?? "" }, { "headers", m.Headers ?? new Dictionary<string, string>() }
+                    { "badge", m.Badge ?? "" }, { "description", m.Description ?? "" }, { "officialUrl", m.OfficialUrl ?? "" }, { "headers", m.Headers ?? new Dictionary<string, string>() }
                 });
             }
             return res;
@@ -2020,6 +2116,8 @@ namespace KomaComic.Windows
     internal sealed class SourceBrowseMenu
     {
         public bool CanSearch { get; set; }
+        public string Website { get; set; }
+        public string AppWebsite { get; set; }
         public List<SourceBrowseTarget> Channels { get; set; }
         public List<SourceCategoryGroup> Groups { get; set; }
         public SourceBrowseTarget Ranking { get; set; }
@@ -2058,6 +2156,138 @@ namespace KomaComic.Windows
         public List<SourceFeedSection> Sections { get; set; }
         public int? MaxPage { get; set; }
         public string NextCursor { get; set; }
+    }
+
+    internal static class MangaTranslation
+    {
+        private const string ApiPath = "/translate/with-form/image";
+        private const int Limit = 32 * 1024 * 1024;
+        private static readonly SemaphoreSlim Queue = new SemaphoreSlim(1);
+
+        public static Uri Endpoint(string baseUrl)
+        {
+            Uri uri;
+            if (!Uri.TryCreate(baseUrl.Trim(), UriKind.Absolute, out uri) || (uri.Scheme != "https" && uri.Scheme != "http") ||
+                string.IsNullOrEmpty(uri.Host) || !string.IsNullOrEmpty(uri.UserInfo) || !string.IsNullOrEmpty(uri.Query) || !string.IsNullOrEmpty(uri.Fragment))
+                throw new ArgumentException("请输入有效的 HTTP(S) 服务地址");
+            string address = uri.AbsoluteUri.TrimEnd('/');
+            return new Uri(address.EndsWith(ApiPath, StringComparison.Ordinal) ? address : address + ApiPath);
+        }
+
+        public static void ValidateConfig(string config)
+        {
+            try
+            {
+                if (!(JsonUtil.CreateSerializer().DeserializeObject(config) is Dictionary<string, object>))
+                    throw new ArgumentException();
+            }
+            catch { throw new ArgumentException("翻译配置必须是 JSON 对象"); }
+        }
+
+        public static async Task<BitmapImage> TranslateAsync(BitmapSource original, string server, string config, string directory, CancellationToken token)
+        {
+            Uri uri = Endpoint(server);
+            ValidateConfig(config);
+            await Queue.WaitAsync(token);
+            try
+            {
+                return await Task.Run(() => Translate(original, uri, config, directory, token), token);
+            }
+            finally { Queue.Release(); }
+        }
+
+        private static BitmapImage Translate(BitmapSource original, Uri uri, string config, string directory, CancellationToken token)
+        {
+            JpegBitmapEncoder encoder = new JpegBitmapEncoder { QualityLevel = 92 };
+            encoder.Frames.Add(BitmapFrame.Create(original));
+            byte[] image;
+            using (MemoryStream output = new MemoryStream())
+            {
+                encoder.Save(output);
+                image = output.ToArray();
+            }
+            if (image.Length > Limit) throw new InvalidOperationException("此页图片过大");
+            string key;
+            using (SHA256 hash = SHA256.Create())
+            {
+                byte[] prefix = Encoding.UTF8.GetBytes(uri.AbsoluteUri + "\n" + config + "\n");
+                hash.TransformBlock(prefix, 0, prefix.Length, prefix, 0);
+                hash.TransformFinalBlock(image, 0, image.Length);
+                key = BitConverter.ToString(hash.Hash).Replace("-", "");
+            }
+            Directory.CreateDirectory(directory);
+            string cache = Path.Combine(directory, key + ".image");
+            if (File.Exists(cache))
+            {
+                try { return Decode(File.ReadAllBytes(cache)); }
+                catch { }
+            }
+
+            string boundary = "Koma" + Guid.NewGuid().ToString("N");
+            byte[] head = Encoding.UTF8.GetBytes("--" + boundary + "\r\nContent-Disposition: form-data; name=\"config\"\r\n\r\n" + config +
+                "\r\n--" + boundary + "\r\nContent-Disposition: form-data; name=\"image\"; filename=\"page.jpg\"\r\nContent-Type: image/jpeg\r\n\r\n");
+            byte[] end = Encoding.ASCII.GetBytes("\r\n--" + boundary + "--\r\n");
+            HttpWebRequest request = (HttpWebRequest)WebRequest.Create(uri);
+            request.Method = "POST";
+            request.AllowAutoRedirect = false;
+            request.Timeout = request.ReadWriteTimeout = 120000;
+            request.ContentType = "multipart/form-data; boundary=" + boundary;
+            request.ContentLength = head.Length + image.Length + end.Length;
+            token.ThrowIfCancellationRequested();
+            using (token.Register(request.Abort))
+            {
+                using (Stream stream = request.GetRequestStream())
+                {
+                    stream.Write(head, 0, head.Length);
+                    stream.Write(image, 0, image.Length);
+                    stream.Write(end, 0, end.Length);
+                }
+                return ReadTranslatedImage(request, cache);
+            }
+        }
+
+        private static BitmapImage ReadTranslatedImage(HttpWebRequest request, string cache)
+        {
+            using (HttpWebResponse response = (HttpWebResponse)request.GetResponse())
+            using (Stream input = response.GetResponseStream())
+            using (MemoryStream output = new MemoryStream())
+            {
+                if ((int)response.StatusCode >= 300) throw new InvalidOperationException("翻译服务地址返回了重定向");
+                byte[] buffer = new byte[16384];
+                int count;
+                while ((count = input.Read(buffer, 0, buffer.Length)) > 0)
+                {
+                    if (output.Length + count > Limit) throw new InvalidOperationException("译图超过大小限制");
+                    output.Write(buffer, 0, count);
+                }
+                byte[] data = output.ToArray();
+                BitmapImage translated = Decode(data);
+                string temporary = cache + ".tmp";
+                try
+                {
+                    File.WriteAllBytes(temporary, data);
+                    if (File.Exists(cache)) File.Replace(temporary, cache, null);
+                    else File.Move(temporary, cache);
+                }
+                catch (IOException) { }
+                finally { if (File.Exists(temporary)) File.Delete(temporary); }
+                return translated;
+            }
+        }
+
+        private static BitmapImage Decode(byte[] bytes)
+        {
+            using (MemoryStream stream = new MemoryStream(bytes))
+            {
+                BitmapImage bitmap = new BitmapImage();
+                bitmap.BeginInit();
+                bitmap.CacheOption = BitmapCacheOption.OnLoad;
+                bitmap.StreamSource = stream;
+                bitmap.EndInit();
+                bitmap.Freeze();
+                return bitmap;
+            }
+        }
     }
 
     internal sealed class VeneraJsRunner : IDisposable
@@ -2194,7 +2424,7 @@ namespace KomaComic.Windows
             await ExecuteCallAsync(js, callId);
         }
 
-        private async Task<string> ExecuteCallAsync(string wrappedJs, string explicitCallId)
+        private async Task<string> ExecuteCallAsync(string wrappedJs, string explicitCallId, int timeoutMs = 35000)
         {
             string callId = explicitCallId ?? Guid.NewGuid().ToString("N");
             TaskCompletionSource<string> tcs = new TaskCompletionSource<string>();
@@ -2205,17 +2435,17 @@ namespace KomaComic.Windows
                 _webView.CoreWebView2.ExecuteScriptAsync(wrappedJs);
             });
 
-            Task timeoutTask = Task.Delay(35000);
+            Task timeoutTask = Task.Delay(timeoutMs);
             Task completed = await Task.WhenAny(tcs.Task, timeoutTask);
             if (completed == timeoutTask)
             {
                 lock (_lock) { _pendingCalls.Remove(callId); }
-                throw new TimeoutException("漫画源请求超时 (35s)");
+                throw new TimeoutException("漫画源请求超时");
             }
             return await tcs.Task;
         }
 
-        private async Task<string> InvokeSourceAsync(SourceItem item, string bodyJs)
+        private async Task<string> InvokeSourceAsync(SourceItem item, string bodyJs, int timeoutMs = 35000)
         {
             await EnsureSourceLoadedAsync(item);
             string callId = Guid.NewGuid().ToString("N");
@@ -2226,7 +2456,7 @@ namespace KomaComic.Windows
                 "  if (!src) throw new Error('Source not initialized');\n" +
                 bodyJs + "\n" +
                 "});";
-            return await ExecuteCallAsync(wrapped, callId);
+            return await ExecuteCallAsync(wrapped, callId, timeoutMs);
         }
 
         private async Task<T> LoadBrowseDataAsync<T>(SourceItem item, string js)
@@ -2274,6 +2504,7 @@ namespace KomaComic.Windows
                         Title = JsonUtil.GetStr(comic, "title", id),
                         SubTitle = JsonUtil.GetStr(comic, "subTitle", item.Name),
                         CoverUrl = JsonUtil.GetStr(comic, "cover", ""),
+                        Description = JsonUtil.GetStr(comic, "description", ""),
                         Badge = item.Name,
                         Headers = ExtractHeadersMap(comic)
                     });
@@ -2285,13 +2516,7 @@ namespace KomaComic.Windows
         public async Task<ComicDetailModel> LoadComicDetailAsync(SourceItem item, string remoteId, Dictionary<string, string> fallbackCardHeaders)
         {
             JavaScriptSerializer ser = JsonUtil.CreateSerializer();
-            string js =
-                "if (!src.comic || typeof src.comic.loadInfo !== 'function') throw new Error('Source does not implement comic.loadInfo');\n" +
-                "const res = await src.comic.loadInfo(" + ser.Serialize(remoteId) + ");\n" +
-                "const fh = window.__extractSourceImageHeaders(src);\n" +
-                "if (res && !res.headers && Object.keys(fh).length > 0) res.headers = fh;\n" +
-                "return res;";
-            string raw = await InvokeSourceAsync(item, js);
+            string raw = await InvokeSourceAsync(item, "return window.__sourceComicDetails(src, " + ser.Serialize(remoteId) + ");");
             Dictionary<string, object> d = ser.Deserialize<Dictionary<string, object>>(raw);
             ComicDetailModel detail = new ComicDetailModel
             {
@@ -2299,6 +2524,7 @@ namespace KomaComic.Windows
                 SubTitle = JsonUtil.GetStr(d, "subTitle", item.Name),
                 CoverUrl = JsonUtil.GetStr(d, "cover", ""),
                 Description = JsonUtil.GetStr(d, "description", ""),
+                OfficialUrl = JsonUtil.GetStr(d, "url", ""),
                 Tags = new List<string>(),
                 Chapters = new List<ChapterItem>(),
                 Headers = ExtractHeadersMap(d)
@@ -2315,33 +2541,15 @@ namespace KomaComic.Windows
             {
                 ExtractChapters((Dictionary<string, object>)chObj, "", detail.Chapters);
             }
+            if (detail.Chapters.Count == 0 && JsonUtil.GetBool(d, "wholeBook", false))
+                detail.Chapters.Add(new ChapterItem { Id = null, Title = "全本" });
             return detail;
         }
 
         public async Task<List<PageImageModel>> LoadChapterPagesAsync(SourceItem item, string remoteId, string epId)
         {
             JavaScriptSerializer ser = JsonUtil.CreateSerializer();
-            string qId = ser.Serialize(remoteId);
-            string qEp = ser.Serialize(epId);
-            string js =
-                "if (!src.comic || typeof src.comic.loadEp !== 'function') throw new Error('Source does not implement comic.loadEp');\n" +
-                "const r = await src.comic.loadEp(" + qId + ", " + qEp + ");\n" +
-                "const urls = (r && r.images) || [];\n" +
-                "const fh = window.__extractSourceImageHeaders(src);\n" +
-                "const out = [];\n" +
-                "for (const u of urls) {\n" +
-                "  let fu = typeof u === 'string' ? u : (u && u.url) || '';\n" +
-                "  let h = Object.assign({}, fh, (u && u.headers) || {});\n" +
-                "  if (typeof src.comic.onImageLoad === 'function') {\n" +
-                "    try {\n" +
-                "      const cfg = await src.comic.onImageLoad(fu, " + qId + ", " + qEp + ");\n" +
-                "      if (cfg && cfg.url) fu = cfg.url;\n" +
-                "      if (cfg && cfg.headers) h = Object.assign({}, h, cfg.headers);\n" +
-                "    } catch (_) {}\n" +
-                "  }\n" +
-                "  if (fu) out.push({ url: fu, headers: h });\n" +
-                "}\n" +
-                "return out;";
+            string js = "return window.__sourceChapterPages(src, " + ser.Serialize(remoteId) + ", " + ser.Serialize(epId) + ");";
             string raw = await InvokeSourceAsync(item, js);
             ArrayList arr = ser.Deserialize<ArrayList>(raw);
             List<PageImageModel> pages = new List<PageImageModel>();
@@ -2354,11 +2562,25 @@ namespace KomaComic.Windows
                     string u = JsonUtil.GetStr(pd, "url", "");
                     if (!string.IsNullOrEmpty(u))
                     {
-                        pages.Add(new PageImageModel { Url = u, IsLocal = false, Headers = ExtractHeadersMap(pd) });
+                        pages.Add(new PageImageModel
+                        {
+                            Url = u,
+                            Headers = ExtractHeadersMap(pd),
+                            UseSourceLoader = JsonUtil.GetBool(pd, "useSourceLoader", false)
+                        });
                     }
                 }
             }
             return pages;
+        }
+
+        public async Task<byte[]> LoadPageBytesAsync(SourceItem item, string comicId, string episode, PageImageModel page)
+        {
+            JavaScriptSerializer serializer = JsonUtil.CreateSerializer();
+            string args = string.Join(", ", serializer.Serialize(comicId), serializer.Serialize(episode),
+                serializer.Serialize(page.Url), serializer.Serialize(page.Headers));
+            string raw = await InvokeSourceAsync(item, "return window.__sourcePageBytes(src, " + args + ", true);", 80000);
+            return Convert.FromBase64String(serializer.Deserialize<string>(raw));
         }
 
         public async Task<AccountCapModel> GetAccountCapabilitiesAsync(SourceItem item)
@@ -2566,7 +2788,7 @@ namespace KomaComic.Windows
         private readonly AppServices _services;
         private readonly VeneraJsRunner _jsRunner;
 
-        private Border[] _railButtons;
+        private Button[] _railButtons;
         private Grid _viewHome;
         private Grid _viewCollections;
         private Grid _viewWarehouse;
@@ -2578,19 +2800,22 @@ namespace KomaComic.Windows
         private StackPanel _chipsPanel;
         private Border _browseBar;
         private TextBlock _sourceHeading;
-        private Button _channelsButton;
+        private StackPanel _channelTabs;
+        private Button _sourceActionsButton;
+        private TextBlock _searchHint;
+        private Image _wallpaper;
+        private bool _feedBusy;
+        private bool _feedHasMore;
+        private bool _feedPageFailed;
+        private readonly HashSet<string> _seenFeedItems = new HashSet<string>(StringComparer.Ordinal);
         private Button _categoriesButton;
         private Button _sourceFiltersButton;
-        private Button _clearSourceSearchButton;
         private TextBlock _statusBanner;
         private Button _retryFeedButton;
         private ScrollViewer _homeFeedScroll;
         private StackPanel _comicGrid;
         private TextBlock _emptyFeedText;
         private Grid _paginationBar;
-        private Button _btnPrevPage;
-        private Button _btnNextPage;
-        private TextBlock _pageLabel;
         private int _currentPage = 1;
         private int _feedRequestId;
         private int _categoryRequestId;
@@ -2629,6 +2854,18 @@ namespace KomaComic.Windows
         private Rectangle _readerBrightnessScrim;
         private ScaleTransform _readerZoomTransform;
         private Border _readerTopBar;
+        private TextBlock _readerTranslationStatus;
+        private Button _readerTranslationButton;
+        private bool _readerTranslationEnabled;
+        private int _readerTranslationEpoch;
+        private bool _translationDispatchPending;
+        private CancellationTokenSource _readerTranslationCancellation = new CancellationTokenSource();
+
+        private sealed class ReaderImageState
+        {
+            public BitmapImage Original;
+            public int TranslationEpoch = -1;
+        }
         private TextBlock _readerTitleText;
         private TextBlock _readerChapterText;
         private Button _btnSpreadPairShift;
@@ -2638,6 +2875,11 @@ namespace KomaComic.Windows
         private Border _readerPageBadge;
         private TextBlock _readerPageBadgeText;
         private Border _readerLoadingBox;
+        private TextBlock _readerLoadMessage;
+        private Button _readerRetryButton;
+        private Action _readerRetry;
+        private int _readerChapterRequest;
+        private int _readerRenderRequest;
         private Border _readerDrawer;
         private Slider _drawerBrightnessSlider;
         private TextBlock _drawerBrightnessText;
@@ -2672,7 +2914,7 @@ namespace KomaComic.Windows
             _services = services;
             _jsRunner = new VeneraJsRunner(services, Dispatcher);
 
-            Title = "KomaComic (漫格漫画) v" + Program.AppVersion;
+            Title = "页光 Koma v" + Program.AppVersion;
             Width = 1360;
             Height = 860;
             MinWidth = 960;
@@ -2712,22 +2954,23 @@ namespace KomaComic.Windows
         private void OnMainWindowLoaded(object sender, RoutedEventArgs e)
         {
             // Render Home UI immediately from local/built-in data, then start headless JS worker in background
-            RebuildHomeChips();
-            SwitchMainTab(0);
             _jsRunner.InitializeAsync();
-            LoadActiveFeedAsync(1);
+            ApplyLibraryMaterial();
+            SwitchMainTab(_services.ActiveHomeMode == "fav" ? 2 : 0);
         }
 
         private void BuildRootLayout()
         {
             Grid outer = new Grid();
+            _wallpaper = new Image { Stretch = Stretch.UniformToFill, IsHitTestVisible = false };
+            outer.Children.Add(_wallpaper);
 
             // Subtle 1x1 hidden WebView2 container inside outer root
             outer.Children.Add(_jsRunner.CreateHiddenHost());
 
             // Main Shell: Left Rail + Right Content
             Grid shell = new Grid();
-            shell.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(82) });
+            shell.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(96) });
             shell.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
 
             shell.Children.Add(BuildLeftRail());
@@ -2774,112 +3017,105 @@ namespace KomaComic.Windows
 
         private UIElement BuildLeftRail()
         {
-            Border rail = new Border
-            {
-                BorderThickness = new Thickness(0, 0, 1, 0),
-                Padding = new Thickness(8, 16, 8, 14)
-            };
-            rail.SetResourceReference(Border.BackgroundProperty, "Brush.BgRail");
-            rail.SetResourceReference(Border.BorderBrushProperty, "Brush.Border");
+            Grid rail = new Grid { Margin = new Thickness(8, 14, 8, 12) };
+            BitmapImage logo = _services.LoadAssetImage("ic_koma_logo.png", 128);
+            if (logo != null)
+                rail.Children.Add(new Image { Source = logo, Width = 42, Height = 42,
+                    VerticalAlignment = VerticalAlignment.Top, HorizontalAlignment = HorizontalAlignment.Center });
 
-            DockPanel dp = new DockPanel { LastChildFill = true };
+            StackPanel dock = new StackPanel { VerticalAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.Center };
+            StackPanel destinations = new StackPanel();
+            Border capsule = MakeDockPlate(destinations, 34);
+            capsule.Padding = new Thickness(5, 6, 5, 6);
+            dock.Children.Add(capsule);
 
-            // Top Logo
-            StackPanel brand = new StackPanel { HorizontalAlignment = HorizontalAlignment.Center, Margin = new Thickness(0, 0, 0, 14) };
-            DockPanel.SetDock(brand, Dock.Top);
-            Border logoFrame = new Border { Width = 44, Height = 44, CornerRadius = new CornerRadius(12), ClipToBounds = true };
-            BitmapImage logoBmp = _services.LoadAssetImage("ic_koma_logo.png", 128);
-            if (logoBmp != null)
+            string[] icons = new string[] { "\uE80F", "\uE8A5", "\uEB51", "\uE713" };
+            string[] labels = new string[] { "首页", "本地书架", "在线收藏", "设置" };
+            _railButtons = new Button[4];
+            for (int index = 0; index < labels.Length; index++)
             {
-                Image img = new Image { Source = logoBmp, Stretch = Stretch.UniformToFill };
-                logoFrame.Child = img;
-            }
-            TextBlock brandTxt = new TextBlock
-            {
-                Text = "Koma",
-                FontSize = 11,
-                FontWeight = FontWeights.Bold,
-                HorizontalAlignment = HorizontalAlignment.Center,
-                Margin = new Thickness(0, 4, 0, 0)
-            };
-            brandTxt.SetResourceReference(TextBlock.ForegroundProperty, "Brush.TextMuted");
-            brand.Children.Add(logoFrame);
-            brand.Children.Add(brandTxt);
-            dp.Children.Add(brand);
-
-            // Bottom Footer
-            StackPanel footer = new StackPanel { HorizontalAlignment = HorizontalAlignment.Center };
-            DockPanel.SetDock(footer, Dock.Bottom);
-            Button btnThemeQuick = UiTheme.MakeButton("◐", false, false);
-            btnThemeQuick.Width = 36;
-            btnThemeQuick.Height = 36;
-            btnThemeQuick.Padding = new Thickness(0);
-            btnThemeQuick.ToolTip = "切换明暗主题";
-            btnThemeQuick.Click += delegate (object s, RoutedEventArgs e)
-            {
-                SwitchTheme(UiTheme.IsDarkActive ? "light" : "dark");
-            };
-            TextBlock verTxt = new TextBlock { Text = "v" + Program.AppVersion, FontSize = 10, HorizontalAlignment = HorizontalAlignment.Center, Margin = new Thickness(0, 6, 0, 0) };
-            verTxt.SetResourceReference(TextBlock.ForegroundProperty, "Brush.TextMuted");
-            footer.Children.Add(btnThemeQuick);
-            footer.Children.Add(verTxt);
-            dp.Children.Add(footer);
-
-            // Middle Nav Items
-            StackPanel navStack = new StackPanel();
-            string[] icons = new string[] { "\u2302", "\u2750", "\u25EB", "\u2699" };
-            string[] labels = new string[] { "首页", "作品集", "仓库", "设置" };
-            _railButtons = new Border[4];
-
-            for (int i = 0; i < 4; i++)
-            {
-                int idx = i;
-                Border itemBorder = new Border
+                int tab = index;
+                bool settings = index == 3;
+                StackPanel stack = new StackPanel { HorizontalAlignment = HorizontalAlignment.Center };
+                stack.Children.Add(new TextBlock
                 {
-                    CornerRadius = new CornerRadius(14),
-                    Padding = new Thickness(4, 10, 4, 10),
-                    Margin = new Thickness(0, 0, 0, 6),
-                    Cursor = Cursors.Hand,
-                    Background = Brushes.Transparent
+                    Text = icons[index], FontFamily = new FontFamily("Segoe MDL2 Assets"), FontSize = settings ? 20 : 18,
+                    HorizontalAlignment = HorizontalAlignment.Center
+                });
+                if (!settings)
+                    stack.Children.Add(new TextBlock { Text = labels[index], FontSize = 11.5, FontWeight = FontWeights.Medium,
+                        HorizontalAlignment = HorizontalAlignment.Center, Margin = new Thickness(0, 4, 0, 0) });
+                Button button = new Button
+                {
+                    Width = settings ? 54 : 62, Height = settings ? 54 : 57,
+                    Content = stack, Background = Brushes.Transparent, Cursor = Cursors.Hand,
+                    HorizontalContentAlignment = HorizontalAlignment.Center, VerticalContentAlignment = VerticalAlignment.Center,
+                    Template = UiTheme.CreateRoundedButtonTemplate(settings ? 28 : 24, "Brush.NavGlassSelected"),
+                    ToolTip = labels[index]
                 };
-                StackPanel sp = new StackPanel { HorizontalAlignment = HorizontalAlignment.Center };
-                TextBlock ic = new TextBlock { Text = icons[i], FontSize = 18, HorizontalAlignment = HorizontalAlignment.Center };
-                TextBlock lb = new TextBlock { Text = labels[i], FontSize = 12, FontWeight = FontWeights.SemiBold, HorizontalAlignment = HorizontalAlignment.Center, Margin = new Thickness(0, 3, 0, 0) };
-                sp.Children.Add(ic);
-                sp.Children.Add(lb);
-                itemBorder.Child = sp;
-                itemBorder.MouseLeftButtonUp += delegate (object s, MouseButtonEventArgs e) { SwitchMainTab(idx); };
-                _railButtons[i] = itemBorder;
-                navStack.Children.Add(itemBorder);
+                System.Windows.Automation.AutomationProperties.SetName(button, labels[index]);
+                button.Click += delegate { SwitchMainTab(tab); };
+                _railButtons[index] = button;
+                if (settings)
+                {
+                    Border plate = MakeDockPlate(button, 28);
+                    plate.HorizontalAlignment = HorizontalAlignment.Center;
+                    plate.Margin = new Thickness(0, 12, 0, 0);
+                    dock.Children.Add(plate);
+                }
+                else destinations.Children.Add(button);
             }
-            dp.Children.Add(navStack);
-            rail.Child = dp;
+            rail.Children.Add(dock);
             return rail;
+        }
+
+        private static Border MakeDockPlate(UIElement content, double radius)
+        {
+            Border plate = new Border { Child = content, CornerRadius = new CornerRadius(radius), BorderThickness = new Thickness(1) };
+            plate.SetResourceReference(Border.BackgroundProperty, "Brush.NavGlass");
+            plate.SetResourceReference(Border.BorderBrushProperty, "Brush.NavGlassRim");
+            plate.Effect = new System.Windows.Media.Effects.DropShadowEffect
+            {
+                Color = Color.FromRgb(25, 44, 72), BlurRadius = 14, ShadowDepth = 3, Direction = 270, Opacity = 0.24
+            };
+            return plate;
         }
 
         private void SwitchMainTab(int idx)
         {
-            _viewHome.Visibility = idx == 0 ? Visibility.Visible : Visibility.Collapsed;
+            _viewHome.Visibility = idx == 0 || idx == 2 ? Visibility.Visible : Visibility.Collapsed;
             _viewCollections.Visibility = idx == 1 ? Visibility.Visible : Visibility.Collapsed;
-            _viewWarehouse.Visibility = idx == 2 ? Visibility.Visible : Visibility.Collapsed;
+            _viewWarehouse.Visibility = idx == 4 ? Visibility.Visible : Visibility.Collapsed;
             _viewSettings.Visibility = idx == 3 ? Visibility.Visible : Visibility.Collapsed;
 
             for (int i = 0; i < _railButtons.Length; i++)
             {
-                Border b = _railButtons[i];
-                if (i == idx)
+                Button b = _railButtons[i];
+                if (i == idx || idx == 4 && i == 3)
                 {
-                    b.SetResourceReference(Border.BackgroundProperty, "Brush.AccentSoft");
-                    b.SetResourceReference(System.Windows.Documents.TextElement.ForegroundProperty, "Brush.Accent");
+                    b.SetResourceReference(Control.BackgroundProperty, "Brush.NavGlassSelected");
+                    b.SetResourceReference(Control.ForegroundProperty, "Brush.Text");
                 }
                 else
                 {
                     b.Background = Brushes.Transparent;
-                    b.SetResourceReference(System.Windows.Documents.TextElement.ForegroundProperty, "Brush.TextMuted");
+                    b.SetResourceReference(Control.ForegroundProperty, "Brush.TextMuted");
                 }
             }
+            if (idx == 0)
+            {
+                string source = _services.ActiveHomeMode == "history" ? "history" : LastEnabledSource();
+                SwitchHomeMode(source);
+            }
             if (idx == 1) RenderCollectionsView();
-            if (idx == 2) RenderWarehouseView();
+            if (idx == 2) SwitchHomeMode("fav");
+            if (idx == 4) RenderWarehouseView();
+            if (SystemParameters.ClientAreaAnimation)
+            {
+                Grid selected = idx == 1 ? _viewCollections : idx == 3 ? _viewSettings : idx == 4 ? _viewWarehouse : _viewHome;
+                selected.BeginAnimation(UIElement.OpacityProperty, new System.Windows.Media.Animation.DoubleAnimation(
+                    0.76, 1, TimeSpan.FromMilliseconds(180)) { EasingFunction = new System.Windows.Media.Animation.CubicEase() });
+            }
         }
 
         private Grid BuildHomeView()
@@ -2924,7 +3160,17 @@ namespace KomaComic.Windows
             {
                 if (e.Key == Key.Enter) SubmitHomeSearch();
             };
-            searchDock.Children.Add(_searchBox);
+            Grid searchField = new Grid();
+            searchField.Children.Add(_searchBox);
+            _searchHint = new TextBlock
+            {
+                Text = "搜索当前漫画源", VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(4, 0, 0, 0), IsHitTestVisible = false
+            };
+            _searchHint.SetResourceReference(TextBlock.ForegroundProperty, "Brush.TextMuted");
+            searchField.Children.Add(_searchHint);
+            _searchBox.TextChanged += delegate { _searchHint.Visibility = _searchBox.Text.Length == 0 ? Visibility.Visible : Visibility.Collapsed; };
+            searchDock.Children.Add(searchField);
             searchBorder.Child = searchDock;
             toolbar.Children.Add(searchBorder);
 
@@ -2940,7 +3186,7 @@ namespace KomaComic.Windows
             {
                 _services.GridCompact = !_services.GridCompact;
                 _services.SaveState();
-                LoadActiveFeedAsync(_currentPage);
+                LoadActiveFeedAsync(1);
             };
             rightBtns.Children.Add(btnRefresh);
             rightBtns.Children.Add(btnDensity);
@@ -2975,14 +3221,17 @@ namespace KomaComic.Windows
             };
             _sourceHeading.SetResourceReference(TextBlock.ForegroundProperty, "Brush.Text");
             browseStack.Children.Add(_sourceHeading);
-            WrapPanel browseActions = new WrapPanel();
-            _channelsButton = AddBrowseButton(browseActions, "栏目", OpenBrowseChannels);
-            _categoriesButton = AddBrowseButton(browseActions, "分类", OpenBrowseCategoryGroups);
-            _sourceFiltersButton = AddBrowseButton(browseActions, "筛选", OpenBrowseFilters);
-            _clearSourceSearchButton = AddBrowseButton(browseActions, "清除搜索", delegate
+            DockPanel browseActions = new DockPanel();
+            StackPanel tools = new StackPanel { Orientation = Orientation.Horizontal };
+            DockPanel.SetDock(tools, Dock.Right);
+            _categoriesButton = AddBrowseButton(tools, "分类", OpenBrowseCategoryGroups);
+            _sourceFiltersButton = AddBrowseButton(tools, "筛选", OpenBrowseFilters);
+            browseActions.Children.Add(tools);
+            _channelTabs = new StackPanel { Orientation = Orientation.Horizontal };
+            browseActions.Children.Add(new ScrollViewer
             {
-                _searchBox.Clear();
-                SubmitHomeSearch();
+                Content = _channelTabs, HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
+                VerticalScrollBarVisibility = ScrollBarVisibility.Disabled
             });
             browseStack.Children.Add(browseActions);
             _browseBar.Child = browseStack;
@@ -3022,22 +3271,11 @@ namespace KomaComic.Windows
             _emptyFeedText.SetResourceReference(TextBlock.ForegroundProperty, "Brush.TextMuted");
             feedStack.Children.Add(_emptyFeedText);
 
-            _paginationBar = new Grid { Margin = new Thickness(0, 18, 0, 12), HorizontalAlignment = HorizontalAlignment.Center, Visibility = Visibility.Collapsed };
-            _paginationBar.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-            _paginationBar.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-            _paginationBar.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-            _btnPrevPage = UiTheme.MakeButton("← 上一页", false, false);
-            _btnPrevPage.Click += delegate (object s, RoutedEventArgs e) { if (_currentPage > 1) LoadActiveFeedAsync(_currentPage - 1); };
-            _pageLabel = new TextBlock { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(16, 0, 16, 0), FontSize = 13, FontWeight = FontWeights.SemiBold };
-            _pageLabel.SetResourceReference(TextBlock.ForegroundProperty, "Brush.TextMuted");
-            _btnNextPage = UiTheme.MakeButton("下一页 →", false, false);
-            _btnNextPage.Click += delegate (object s, RoutedEventArgs e) { LoadActiveFeedAsync(_currentPage + 1); };
-            Grid.SetColumn(_pageLabel, 1);
-            Grid.SetColumn(_btnNextPage, 2);
-            _paginationBar.Children.Add(_btnPrevPage);
-            _paginationBar.Children.Add(_pageLabel);
-            _paginationBar.Children.Add(_btnNextPage);
+            _paginationBar = new Grid { Margin = new Thickness(0, 14, 0, 8), HorizontalAlignment = HorizontalAlignment.Center, Visibility = Visibility.Collapsed };
+            ProgressBar more = new ProgressBar { Width = 96, Height = 3, IsIndeterminate = true };
+            _paginationBar.Children.Add(more);
             feedStack.Children.Add(_paginationBar);
+            _homeFeedScroll.ScrollChanged += delegate { QueueNextSourcePage(); };
 
             _homeFeedScroll.Content = feedStack;
             g.Children.Add(_homeFeedScroll);
@@ -3047,14 +3285,38 @@ namespace KomaComic.Windows
         private void RebuildHomeChips()
         {
             _chipsPanel.Children.Clear();
-            List<SourceItem> enabled = _services.Sources.FindAll(delegate (SourceItem s) { return s.Enabled; });
+            if (_services.ActiveHomeMode == "fav")
+            {
+                _chipsPanel.Children.Add(new TextBlock { Text = "在线收藏", FontSize = 18, FontWeight = FontWeights.SemiBold, Margin = new Thickness(4, 6, 0, 4) });
+                return;
+            }
+            SourceItem active = _services.Sources.Find(source => source.Key == LastEnabledSource());
+            if (active != null)
+            {
+                AddChipButton(active.Name, _services.ActiveHomeMode == active.Key, false, delegate { SwitchHomeMode(active.Key); });
+                AddChipButton("切换源", false, true, OpenQuickSourcePicker);
+            }
+            if (_services.ActiveHomeMode == "history") AddChipButton("最近阅读", true, false, delegate { SwitchHomeMode("history"); });
+            _sourceActionsButton = AddBrowseButton(_chipsPanel, "更多", OpenBrowseActions);
+        }
 
-            AddChipButton("本地全部", _services.ActiveHomeMode == "local", false, delegate () { SwitchHomeMode("local"); });
-            AddChipButton("收藏", _services.ActiveHomeMode == "fav", false, delegate () { SwitchHomeMode("fav"); });
-            AddChipButton("最近阅读", _services.ActiveHomeMode == "history", false, delegate () { SwitchHomeMode("history"); });
-            SourceItem active = enabled.Find(source => source.Key == _services.ActiveHomeMode);
-            AddChipButton("漫画源", active != null, true, OpenQuickSourcePicker);
-            AddChipButton("源管理", false, true, OpenSourceManagerDialog);
+        private string LastEnabledSource()
+        {
+            SourceItem selected = _services.Sources.Find(source => source.Enabled && source.Key == _services.LastSource)
+                ?? _services.Sources.Find(source => source.Enabled);
+            return selected == null ? "local" : selected.Key;
+        }
+
+        private void QueueNextSourcePage()
+        {
+            if (!_feedHasMore || _feedBusy || _feedPageFailed || !_viewHome.IsVisible ||
+                _homeFeedScroll.ScrollableHeight - _homeFeedScroll.VerticalOffset > 420) return;
+            Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(delegate
+            {
+                if (_feedHasMore && !_feedBusy && !_feedPageFailed && _viewHome.IsVisible &&
+                    _homeFeedScroll.ScrollableHeight - _homeFeedScroll.VerticalOffset <= 420)
+                    LoadActiveFeedAsync(_currentPage + 1);
+            }));
         }
 
         private void AddChipButton(string label, bool active, bool actionStyle, Action onClick)
@@ -3109,6 +3371,7 @@ namespace KomaComic.Windows
                 }
             }
             _services.ActiveHomeMode = mode;
+            if (!IsLocalHomeMode(mode)) _services.LastSource = mode;
             _services.SaveState();
             RebuildHomeChips();
             LoadActiveFeedAsync(1);
@@ -3143,19 +3406,62 @@ namespace KomaComic.Windows
             return button;
         }
 
+        private void OpenComicWebsite(string url)
+        {
+            Uri uri;
+            if (!Uri.TryCreate(url, UriKind.Absolute, out uri) || (uri.Scheme != "https" && uri.Scheme != "http"))
+            {
+                ShowToast("这个漫画源未提供官方网站");
+                return;
+            }
+            try { Process.Start(new ProcessStartInfo(uri.AbsoluteUri) { UseShellExecute = true }); }
+            catch (Exception ex) { ShowToast("无法打开网址：" + ex.Message); }
+        }
+
         private void RenderBrowseControls(SourceBrowseMenu menu, SourceBrowseTarget target, bool filters)
         {
             _searchBox.IsEnabled = _btnSearch.IsEnabled = menu != null && menu.CanSearch;
             _searchBox.ToolTip = menu == null ? "正在读取漫画源" : menu.CanSearch ? "搜索当前漫画源" : "当前源不支持搜索";
             System.Windows.Automation.AutomationProperties.SetName(_searchBox, (string)_searchBox.ToolTip);
-            _channelsButton.Visibility = menu != null && (menu.Channels.Count > 0 || menu.Ranking != null)
-                ? Visibility.Visible : Visibility.Collapsed;
+            _channelTabs.Children.Clear();
+            if (menu != null)
+            {
+                List<SourceBrowseTarget> channels = new List<SourceBrowseTarget>(menu.Channels);
+                if (menu.Ranking != null) channels.Add(menu.Ranking);
+                foreach (SourceBrowseTarget channel in channels)
+                    AddChipTo(_channelTabs, channel.Title, SameBrowseTarget(target, channel), delegate { SelectBrowseTarget(channel); });
+            }
             _categoriesButton.Visibility = menu != null && menu.Groups.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
-            _categoriesButton.IsEnabled = true;
-            _categoriesButton.Content = "分类";
             _sourceFiltersButton.Visibility = filters ? Visibility.Visible : Visibility.Collapsed;
-            _clearSourceSearchButton.Visibility = target != null && target.Kind == "search" && _homeQuery.Length > 0
-                ? Visibility.Visible : Visibility.Collapsed;
+            _sourceHeading.Visibility = target != null && target.Kind == "category" ? Visibility.Visible : Visibility.Collapsed;
+            _searchHint.Text = menu == null || menu.CanSearch ? "搜索当前漫画源" : "当前源不支持搜索";
+        }
+
+        private void AddChipTo(Panel panel, string label, bool selected, Action action)
+        {
+            Button button = UiTheme.MakeButton(label, selected, false);
+            button.Margin = new Thickness(0, 0, 8, 4);
+            button.Click += delegate { action(); };
+            panel.Children.Add(button);
+        }
+
+        private void OpenBrowseActions()
+        {
+            ContextMenu menu = new ContextMenu { PlacementTarget = _sourceActionsButton, Placement = PlacementMode.Bottom };
+            Action<string, Action> add = delegate (string title, Action action)
+            {
+                MenuItem item = new MenuItem { Header = title };
+                item.Click += delegate { action(); };
+                menu.Items.Add(item);
+            };
+            add("最近阅读", delegate { SwitchHomeMode("history"); });
+            if (_homeQuery.Length > 0) add("清除搜索", delegate { _searchBox.Clear(); SubmitHomeSearch(); });
+            if (!IsLocalHomeMode(_services.ActiveHomeMode) && _browseMenu != null && !string.IsNullOrEmpty(_browseMenu.Website))
+                add(_browseMenu.Website == _browseMenu.AppWebsite ? "官网 / 官方 App" : "官方网站",
+                    delegate { OpenComicWebsite(_browseMenu.Website); });
+            if (!IsLocalHomeMode(_services.ActiveHomeMode) && _browseMenu != null && !string.IsNullOrEmpty(_browseMenu.AppWebsite) && _browseMenu.AppWebsite != _browseMenu.Website)
+                add("官方 App", delegate { OpenComicWebsite(_browseMenu.AppWebsite); });
+            menu.IsOpen = true;
         }
 
         private async void LoadActiveFeedAsync(int page)
@@ -3163,12 +3469,20 @@ namespace KomaComic.Windows
             int request = ++_feedRequestId;
             _currentPage = Math.Max(1, page);
             page = _currentPage;
-            if (page == 1) _feedCursors.Clear();
+            bool reset = page == 1;
+            _feedBusy = true;
+            _feedHasMore = false;
+            _feedPageFailed = false;
+            if (reset)
+            {
+                _feedCursors.Clear();
+                _seenFeedItems.Clear();
+                _homeFeedScroll.ScrollToTop();
+                _comicGrid.Children.Clear();
+            }
             string mode = _services.ActiveHomeMode;
             string kw = _homeQuery;
 
-            _homeFeedScroll.ScrollToTop();
-            _comicGrid.Children.Clear();
             _emptyFeedText.Visibility = Visibility.Collapsed;
             _paginationBar.Visibility = Visibility.Collapsed;
             _statusBanner.Visibility = Visibility.Collapsed;
@@ -3179,6 +3493,7 @@ namespace KomaComic.Windows
                 _browseBar.Visibility = Visibility.Collapsed;
                 _searchBox.IsEnabled = _btnSearch.IsEnabled = true;
                 _searchBox.ToolTip = "搜索当前书库";
+                _searchHint.Text = mode == "fav" ? "搜索在线收藏" : "搜索当前书库";
                 System.Windows.Automation.AutomationProperties.SetName(_searchBox, "搜索当前书库");
                 List<ComicCardModel> list;
                 if (mode == "local")
@@ -3195,7 +3510,8 @@ namespace KomaComic.Windows
                 }
                 else
                 {
-                    list = new List<ComicCardModel>(mode == "fav" ? _services.Favorites : _services.History);
+                    list = mode == "fav" ? _services.Favorites.FindAll(card => !card.IsLocal && !HiddenFromOnlineFavorites(card))
+                        : new List<ComicCardModel>(_services.History);
                 }
 
                 if (!string.IsNullOrEmpty(kw))
@@ -3208,6 +3524,7 @@ namespace KomaComic.Windows
                 }
                 if (list.Count == 0) ShowEmptyFeed(kw.Length > 0 ? "没有找到匹配的漫画" : "这里暂无漫画");
                 else RenderComicCards(list);
+                _feedBusy = false;
                 return;
             }
 
@@ -3216,7 +3533,8 @@ namespace KomaComic.Windows
             {
                 _browseBar.Visibility = Visibility.Collapsed;
                 RenderBrowseControls(null, null, false);
-                ShowEmptyFeed("请通过「漫画源」选择一个可用来源");
+                ShowEmptyFeed("请通过「切换源」选择一个可用来源");
+                _feedBusy = false;
                 return;
             }
 
@@ -3226,7 +3544,8 @@ namespace KomaComic.Windows
             SourceBrowseMenu menu = _browseSourceKey == mode ? _browseMenu : null;
             RenderBrowseControls(menu, null, false);
             _statusBanner.Text = "正在加载…";
-            _statusBanner.Visibility = Visibility.Visible;
+            _statusBanner.Visibility = reset ? Visibility.Visible : Visibility.Collapsed;
+            _paginationBar.Visibility = reset ? Visibility.Collapsed : Visibility.Visible;
 
             try
             {
@@ -3266,25 +3585,59 @@ namespace KomaComic.Windows
 
                 if (feed.NextCursor != null) _feedCursors[page + 1] = feed.NextCursor;
                 else _feedCursors.Remove(page + 1);
+                int added = 0;
                 foreach (SourceFeedSection section in feed.Sections)
                 {
+                    List<ComicCardModel> novel = section.Cards.FindAll(card => _seenFeedItems.Add(card.Uid));
+                    if (novel.Count == 0) continue;
+                    added += novel.Count;
                     if (!string.IsNullOrWhiteSpace(section.Title) || section.Target != null) RenderSectionHeader(section);
-                    RenderComicCards(section.Cards);
+                    AppendFeedCards(novel);
                 }
-                bool canAdvance = feed.NextCursor != null || (feed.MaxPage.HasValue
-                    ? page < feed.MaxPage.Value : feed.Sections.Exists(section => section.Cards.Count > 0));
-                if (feed.Sections.Count == 0 && !canAdvance)
+                _feedHasMore = (added > 0 || reset) && (feed.NextCursor != null || (feed.MaxPage.HasValue
+                    ? page < feed.MaxPage.Value : added > 0));
+                if (_seenFeedItems.Count == 0 && !_feedHasMore)
                     ShowEmptyFeed(target.Kind == "search" ? "没有找到匹配的漫画" : "这个栏目暂无漫画");
-                RenderBrowsePagination(page, feed.MaxPage, canAdvance);
             }
             catch (Exception ex)
             {
                 if (request != _feedRequestId) return;
+                _feedPageFailed = true;
                 _statusBanner.Text = "加载失败\n" + BrowseError(ex);
                 _statusBanner.Visibility = Visibility.Visible;
                 _retryFeedButton.Visibility = Visibility.Visible;
-                RenderBrowsePagination(page, null, false);
+                if (!reset) ShowToast("续页加载失败，按刷新重试");
             }
+            finally
+            {
+                if (request == _feedRequestId)
+                {
+                    _feedBusy = false;
+                    _paginationBar.Visibility = Visibility.Collapsed;
+                    QueueNextSourcePage();
+                }
+            }
+        }
+
+        private void AppendFeedCards(List<ComicCardModel> cards)
+        {
+            WrapPanel last = _comicGrid.Children.Count == 0 ? null : _comicGrid.Children[_comicGrid.Children.Count - 1] as WrapPanel;
+            if (last == null) { RenderComicCards(cards); return; }
+            double width = _services.GridCompact ? 142 : 172;
+            double height = _services.GridCompact ? 184 : 226;
+            foreach (ComicCardModel card in cards) last.Children.Add(BuildComicCardElement(card, width, height));
+        }
+
+        private bool HiddenFromOnlineFavorites(ComicCardModel card)
+        {
+            foreach (CollectionModel shelf in _services.Collections)
+            {
+                bool unlocked;
+                _services.UnlockedCollections.TryGetValue(shelf.Id, out unlocked);
+                if ((shelf.HideFromAll || !string.IsNullOrEmpty(shelf.Pin) && !unlocked) && shelf.Items.Exists(item => item.Uid == card.Uid))
+                    return true;
+            }
+            return false;
         }
 
         private static bool SameBrowseTarget(SourceBrowseTarget first, SourceBrowseTarget second)
@@ -3306,24 +3659,7 @@ namespace KomaComic.Windows
             _emptyFeedText.Visibility = Visibility.Visible;
         }
 
-        private void RenderBrowsePagination(int page, int? maxPage, bool canAdvance)
-        {
-            if (page == 1 && !canAdvance) return;
-            _paginationBar.Visibility = Visibility.Visible;
-            _btnPrevPage.IsEnabled = page > 1;
-            _btnNextPage.IsEnabled = canAdvance;
-            _pageLabel.Text = maxPage.HasValue && maxPage.Value >= page
-                ? string.Format("第 {0} / {1} 页", page, maxPage.Value) : string.Format("第 {0} 页", page);
-        }
 
-        private void OpenBrowseChannels()
-        {
-            if (_browseMenu == null) return;
-            List<SourceBrowseTarget> channels = new List<SourceBrowseTarget>(_browseMenu.Channels);
-            if (_browseMenu.Ranking != null) channels.Add(_browseMenu.Ranking);
-            int selected = PickBrowseChoice("浏览栏目", channels.ConvertAll(target => target.Title), channels.IndexOf(_filterTarget));
-            if (selected >= 0) SelectBrowseTarget(channels[selected]);
-        }
 
         private async void OpenBrowseCategoryGroups()
         {
@@ -3512,12 +3848,17 @@ namespace KomaComic.Windows
             outer.MouseLeave += delegate (object s, MouseEventArgs e) { outer.SetResourceReference(Border.BorderBrushProperty, "Brush.Border"); };
 
             StackPanel stack = new StackPanel();
-            Grid imgBox = new Grid { Height = coverH, ClipToBounds = true, Background = new SolidColorBrush(Color.FromRgb(26, 32, 44)) };
+            Grid imgBox = new Grid { Height = coverH, ClipToBounds = true };
+            imgBox.SetResourceReference(Panel.BackgroundProperty, "Brush.Surface");
             Image coverImg = new Image { Stretch = Stretch.UniformToFill };
             RenderOptions.SetBitmapScalingMode(coverImg, BitmapScalingMode.HighQuality);
+            TextBlock coverStatus = new TextBlock { Text = card.IsLocal || !string.IsNullOrEmpty(card.CoverUrl) ? "加载中" : "暂无封面",
+                HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
+            coverStatus.SetResourceReference(TextBlock.ForegroundProperty, "Brush.TextMuted");
+            imgBox.Children.Add(coverStatus);
             imgBox.Children.Add(coverImg);
 
-            if (!string.IsNullOrEmpty(card.Badge))
+            if (!string.IsNullOrEmpty(card.Badge) && card.SourceKey != _services.ActiveHomeMode)
             {
                 Border badge = new Border
                 {
@@ -3557,8 +3898,18 @@ namespace KomaComic.Windows
             stack.Children.Add(meta);
             outer.Child = stack;
 
+            ContextMenu actions = new ContextMenu();
+            MenuItem favoriteAction = new MenuItem();
+            MenuItem shelfAction = new MenuItem { Header = "管理书架" };
+            actions.Opened += delegate { favoriteAction.Header = IsFavorite(card) ? "取消收藏" : "加入收藏"; };
+            favoriteAction.Click += delegate { ToggleFavorite(card); };
+            shelfAction.Click += delegate { OpenAddToCollectionDialog(card, this); };
+            actions.Items.Add(favoriteAction);
+            if (card.IsLocal) actions.Items.Add(shelfAction);
+            outer.ContextMenu = actions;
+
             // Asynchronous image load without blocking WPF UI thread
-            LoadCardThumbnailAsync(card, coverImg);
+            LoadCardThumbnailAsync(card, coverImg, coverStatus);
 
             outer.MouseLeftButtonUp += delegate (object s, MouseButtonEventArgs e)
             {
@@ -3568,7 +3919,7 @@ namespace KomaComic.Windows
             return outer;
         }
 
-        private async void LoadCardThumbnailAsync(ComicCardModel card, Image targetImg)
+        private async void LoadCardThumbnailAsync(ComicCardModel card, Image targetImg, TextBlock status)
         {
             BitmapImage bmp = card.IsLocal
                 ? await _services.LoadLocalPageBitmapAsync(card.Id, 0, 340)
@@ -3576,7 +3927,11 @@ namespace KomaComic.Windows
             if (bmp != null)
             {
                 targetImg.Source = bmp;
+                status.Visibility = Visibility.Collapsed;
+                if (SystemParameters.ClientAreaAnimation)
+                    targetImg.BeginAnimation(UIElement.OpacityProperty, new System.Windows.Media.Animation.DoubleAnimation(0.55, 1, TimeSpan.FromMilliseconds(180)));
             }
+            else status.Text = "暂无封面";
         }
 
         private void OpenQuickSourcePicker()
@@ -4103,17 +4458,40 @@ namespace KomaComic.Windows
         private async void OpenComicDetailDialog(ComicCardModel card)
         {
             SourceItem src = _services.Sources.Find(delegate (SourceItem s) { return s.Key == card.SourceKey; });
-            if (src == null) return;
-
             Window dlg = CreateStyledDialog(card.Title, 820, 620);
-            StackPanel loadingPanel = new StackPanel { VerticalAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.Center };
-            loadingPanel.Children.Add(new TextBlock { Text = "正在加载漫画详情与章节列表...", FontSize = 14 });
+            StackPanel loadingPanel = new StackPanel { Margin = new Thickness(24) };
+            TextBlock status = new TextBlock { Text = "正在加载漫画详情与章节列表…", TextWrapping = TextWrapping.Wrap };
+            if (!string.IsNullOrWhiteSpace(card.Description))
+                loadingPanel.Children.Add(new TextBlock { Text = card.Description, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 8, 0, 10), MaxHeight = 200 });
+            if (!string.IsNullOrEmpty(card.OfficialUrl))
+                AddBrowseButton(loadingPanel, "打开原作品", delegate { OpenComicWebsite(card.OfficialUrl); });
+            if (!string.IsNullOrEmpty(card.CoverUrl))
+            {
+                Image cachedCover = new Image { Width = 126, Height = 164, HorizontalAlignment = HorizontalAlignment.Left, Stretch = Stretch.Uniform };
+                loadingPanel.Children.Add(cachedCover);
+                LoadDetailCoverAsync(card.CoverUrl, null, card.Headers, cachedCover);
+            }
+            loadingPanel.Children.Add(status);
+            Panel libraryActions = BuildComicLibraryActions(card, dlg);
+            loadingPanel.Children.Add(libraryActions);
             dlg.Content = loadingPanel;
             dlg.Show();
 
             try
             {
+                if (src == null) throw new InvalidOperationException("找不到所属漫画源");
                 ComicDetailModel detail = await _jsRunner.LoadComicDetailAsync(src, card.Id, card.Headers);
+                if (!string.IsNullOrEmpty(detail.Description)) card.Description = detail.Description;
+                if (!string.IsNullOrEmpty(detail.OfficialUrl)) card.OfficialUrl = detail.OfficialUrl;
+                foreach (ComicCardModel saved in _services.Favorites)
+                    if (saved.Uid == card.Uid)
+                    {
+                        saved.Description = card.Description;
+                        saved.OfficialUrl = card.OfficialUrl;
+                        if (!string.IsNullOrEmpty(detail.CoverUrl)) saved.CoverUrl = detail.CoverUrl;
+                    }
+                if (!string.IsNullOrEmpty(detail.CoverUrl)) card.CoverUrl = detail.CoverUrl;
+                _services.SaveState();
                 DockPanel root = new DockPanel { Margin = new Thickness(18) };
 
                 // Hero section
@@ -4162,14 +4540,9 @@ namespace KomaComic.Windows
                 descBox.SetResourceReference(TextBox.ForegroundProperty, "Brush.TextMuted");
                 infoStack.Children.Add(descBox);
 
-                StackPanel actionRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 10, 0, 0) };
+                WrapPanel actionRow = new WrapPanel { Margin = new Thickness(0, 10, 0, 0) };
                 Button btnRead = UiTheme.MakeButton(string.Format("开始阅读 ({0} 话)", detail.Chapters.Count), true, false);
-                bool isFav = _services.Favorites.Exists(delegate (ComicCardModel f) { return f.Uid == card.Uid; });
-                Button btnFav = UiTheme.MakeButton(isFav ? "已收藏 ★" : "加入收藏 ☆", false, false);
-                Button btnCol = UiTheme.MakeButton("加入作品集", false, false);
-                btnFav.Margin = new Thickness(8, 0, 0, 0);
-                btnCol.Margin = new Thickness(8, 0, 0, 0);
-
+                btnRead.IsEnabled = detail.Chapters.Count > 0;
                 btnRead.Click += delegate (object s, RoutedEventArgs e)
                 {
                     if (detail.Chapters.Count == 0) { ShowToast("暂无可读章节"); return; }
@@ -4183,17 +4556,11 @@ namespace KomaComic.Windows
                     dlg.Close();
                     StartOnlineReader(card, detail.Chapters, chIdx, pIdx);
                 };
-                btnFav.Click += delegate (object s, RoutedEventArgs e)
-                {
-                    ToggleFavorite(card);
-                    bool nowFav = _services.Favorites.Exists(delegate (ComicCardModel f) { return f.Uid == card.Uid; });
-                    btnFav.Content = nowFav ? "已收藏 ★" : "加入收藏 ☆";
-                };
-                btnCol.Click += delegate (object s, RoutedEventArgs e) { OpenAddToCollectionDialog(card, dlg); };
-
                 actionRow.Children.Add(btnRead);
-                actionRow.Children.Add(btnFav);
-                actionRow.Children.Add(btnCol);
+                loadingPanel.Children.Remove(libraryActions);
+                actionRow.Children.Add(libraryActions);
+                if (!string.IsNullOrEmpty(detail.OfficialUrl))
+                    AddBrowseButton(actionRow, "打开原作品", delegate { OpenComicWebsite(detail.OfficialUrl); });
                 infoStack.Children.Add(actionRow);
                 hero.Children.Add(infoStack);
                 root.Children.Add(hero);
@@ -4220,7 +4587,11 @@ namespace KomaComic.Windows
             }
             catch (Exception ex)
             {
-                dlg.Content = new TextBlock { Text = "加载详情失败：" + ex.Message, Margin = new Thickness(24), TextWrapping = TextWrapping.Wrap };
+                status.Text = "加载详情失败：" + ex.Message.Split('\n')[0];
+                Button retry = UiTheme.MakeButton("重试", true, false);
+                retry.HorizontalAlignment = HorizontalAlignment.Left;
+                retry.Click += delegate { dlg.Close(); OpenComicDetailDialog(card); };
+                loadingPanel.Children.Add(retry);
             }
         }
 
@@ -4229,6 +4600,28 @@ namespace KomaComic.Windows
             string u = !string.IsNullOrEmpty(primaryUrl) ? primaryUrl : fallbackUrl;
             BitmapImage bmp = await _services.LoadComicImageAsync(u, headers, 320);
             if (bmp != null) img.Source = bmp;
+        }
+
+        private bool IsFavorite(ComicCardModel card)
+        {
+            return _services.Favorites.Exists(item => item.Uid == card.Uid);
+        }
+
+        private Panel BuildComicLibraryActions(ComicCardModel card, Window owner)
+        {
+            WrapPanel actions = new WrapPanel { Margin = new Thickness(8, 0, 0, 0) };
+            Button favorite = UiTheme.MakeButton(IsFavorite(card) ? "已收藏 ★" : "加入收藏 ☆", false, false);
+            Button shelf = UiTheme.MakeButton("管理书架", false, false);
+            shelf.Margin = new Thickness(8, 0, 8, 0);
+            favorite.Click += delegate
+            {
+                ToggleFavorite(card);
+                favorite.Content = IsFavorite(card) ? "已收藏 ★" : "加入收藏 ☆";
+            };
+            shelf.Click += delegate { OpenAddToCollectionDialog(card, owner); };
+            actions.Children.Add(favorite);
+            if (card.IsLocal) actions.Children.Add(shelf);
+            return actions;
         }
 
         private void ToggleFavorite(ComicCardModel card)
@@ -4280,8 +4673,8 @@ namespace KomaComic.Windows
             header.Children.Add(btns);
 
             StackPanel titles = new StackPanel();
-            titles.Children.Add(new TextBlock { Text = "作品集", FontSize = 22, FontWeight = FontWeights.Bold });
-            TextBlock sub = new TextBlock { Text = "分类收纳本地与在线漫画，支持 PIN 密码锁与「本地全部」隐藏", FontSize = 13, Margin = new Thickness(0, 4, 0, 0) };
+            titles.Children.Add(new TextBlock { Text = "本地书架", FontSize = 22, FontWeight = FontWeights.Bold });
+            TextBlock sub = new TextBlock { Text = "分组整理导入的漫画，可为书架设置 PIN", FontSize = 13, Margin = new Thickness(0, 4, 0, 0) };
             sub.SetResourceReference(TextBlock.ForegroundProperty, "Brush.TextMuted");
             titles.Children.Add(sub);
             header.Children.Add(titles);
@@ -4315,7 +4708,7 @@ namespace KomaComic.Windows
 
             _collectionEmptyText = new TextBlock
             {
-                Text = "当前作品集为空，可在漫画详情页点击「加入作品集」。",
+                Text = "当前书架为空。可在漫画详情或封面右键菜单中管理书架。",
                 VerticalAlignment = VerticalAlignment.Center,
                 HorizontalAlignment = HorizontalAlignment.Center,
                 FontSize = 14,
@@ -4330,6 +4723,24 @@ namespace KomaComic.Windows
         private void RenderCollectionsView()
         {
             _collectionChipsPanel.Children.Clear();
+            AddChipTo(_collectionChipsPanel, "全部本地", _services.ActiveCollectionId == "col_all", delegate
+            {
+                _services.ActiveCollectionId = "col_all";
+                _services.SaveState();
+                RenderCollectionsView();
+            });
+            if (_services.ActiveCollectionId == "col_all")
+            {
+                HashSet<string> hidden = new HashSet<string>(StringComparer.Ordinal);
+                foreach (CollectionModel shelf in _services.Collections)
+                    if (shelf.HideFromAll)
+                        foreach (ComicCardModel item in shelf.Items) hidden.Add(item.Uid);
+                _collectionGrid.Children.Clear();
+                foreach (ComicCardModel comic in _services.GetLocalComicCards())
+                    if (!hidden.Contains(comic.Uid)) _collectionGrid.Children.Add(BuildComicCardElement(comic, 172, 226));
+                _collectionLockedPanel.Visibility = Visibility.Collapsed;
+                _collectionEmptyText.Visibility = _collectionGrid.Children.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+            }
             foreach (CollectionModel col in _services.Collections)
             {
                 CollectionModel capCol = col;
@@ -4346,6 +4757,7 @@ namespace KomaComic.Windows
                 _collectionChipsPanel.Children.Add(b);
             }
 
+            if (_services.ActiveCollectionId == "col_all") return;
             CollectionModel cur = _services.Collections.Find(delegate (CollectionModel c) { return c.Id == _services.ActiveCollectionId; }) ?? _services.Collections[0];
             _collectionGrid.Children.Clear();
             bool unlocked = false;
@@ -4359,13 +4771,13 @@ namespace KomaComic.Windows
             }
 
             _collectionLockedPanel.Visibility = Visibility.Collapsed;
-            if (cur.Items == null || cur.Items.Count == 0)
+            if (cur.Items == null || !cur.Items.Exists(item => item.IsLocal))
             {
                 _collectionEmptyText.Visibility = Visibility.Visible;
                 return;
             }
             _collectionEmptyText.Visibility = Visibility.Collapsed;
-            foreach (ComicCardModel card in cur.Items)
+            foreach (ComicCardModel card in cur.Items.FindAll(item => item.IsLocal))
             {
                 _collectionGrid.Children.Add(BuildComicCardElement(card, 172, 226));
             }
@@ -4373,30 +4785,54 @@ namespace KomaComic.Windows
 
         private void OpenAddToCollectionDialog(ComicCardModel card, Window owner)
         {
-            Window dlg = CreateStyledDialog("加入作品集", 420, 360);
-            dlg.Owner = owner;
-            StackPanel stack = new StackPanel { Margin = new Thickness(16) };
-            foreach (CollectionModel col in _services.Collections)
+            Window dlg = CreateStyledDialog("管理书架", 420, 380);
+            if (owner != null && owner.IsLoaded) dlg.Owner = owner;
+            DockPanel body = new DockPanel { Margin = new Thickness(16) };
+            WrapPanel actions = new WrapPanel { Margin = new Thickness(0, 12, 0, 0) };
+            DockPanel.SetDock(actions, Dock.Bottom);
+            body.Children.Add(actions);
+            StackPanel list = new StackPanel();
+            body.Children.Add(new ScrollViewer { Content = list, VerticalScrollBarVisibility = ScrollBarVisibility.Auto });
+            Dictionary<CollectionModel, CheckBox> choices = new Dictionary<CollectionModel, CheckBox>();
+
+            Action<CollectionModel, bool> addChoice = delegate (CollectionModel collection, bool selected)
             {
-                CollectionModel capCol = col;
-                if (col.Items == null) col.Items = new List<ComicCardModel>();
-                bool exists = col.Items.Exists(delegate (ComicCardModel x) { return x.Uid == card.Uid; });
-                DockPanel row = new DockPanel { Margin = new Thickness(0, 0, 0, 10) };
-                Button btn = UiTheme.MakeButton(exists ? "移出" : "加入", !exists, exists);
-                DockPanel.SetDock(btn, Dock.Right);
-                row.Children.Add(btn);
-                row.Children.Add(new TextBlock { Text = col.Name + " (" + col.Items.Count + ")", VerticalAlignment = VerticalAlignment.Center, FontSize = 14 });
-                btn.Click += delegate (object s, RoutedEventArgs e)
+                CheckBox choice = new CheckBox { Content = collection.Name, IsChecked = selected, Margin = new Thickness(0, 0, 0, 10) };
+                choice.SetResourceReference(Control.ForegroundProperty, "Brush.Text");
+                list.Children.Add(choice);
+                choices.Add(collection, choice);
+            };
+            foreach (CollectionModel collection in _services.Collections)
+                addChoice(collection, collection.Items.Exists(item => item.Uid == card.Uid));
+
+            AddBrowseButton(actions, "新建书架", delegate
+            {
+                string name = PromptStringDialog("新建书架", "书架名称", "", dlg);
+                if (string.IsNullOrWhiteSpace(name)) return;
+                CollectionModel collection = new CollectionModel
                 {
-                    if (exists) capCol.Items.RemoveAll(delegate (ComicCardModel x) { return x.Uid == card.Uid; });
-                    else capCol.Items.Insert(0, card);
-                    _services.SaveState();
-                    dlg.Close();
-                    ShowToast(exists ? "已移出作品集" : "已加入「" + capCol.Name + "」");
+                    Id = "col_" + Guid.NewGuid().ToString("N"), Name = name.Trim(), Pin = "", Items = new List<ComicCardModel>()
                 };
-                stack.Children.Add(row);
-            }
-            dlg.Content = new ScrollViewer { Content = stack };
+                addChoice(collection, true);
+            });
+            AddBrowseButton(actions, "保存", delegate
+            {
+                foreach (KeyValuePair<CollectionModel, CheckBox> entry in choices)
+                {
+                    CollectionModel collection = entry.Key;
+                    if (!_services.Collections.Contains(collection)) _services.Collections.Add(collection);
+                    bool member = collection.Items.Exists(item => item.Uid == card.Uid);
+                    if (entry.Value.IsChecked == true && !member) collection.Items.Insert(0, card);
+                    if (entry.Value.IsChecked != true && member) collection.Items.RemoveAll(item => item.Uid == card.Uid);
+                }
+                _services.SaveState();
+                if (_viewCollections.Visibility == Visibility.Visible) RenderCollectionsView();
+                if (_services.ActiveHomeMode == "local") LoadActiveFeedAsync(1);
+                ShowToast("已更新书架");
+                dlg.Close();
+            });
+            AddBrowseButton(actions, "取消", dlg.Close);
+            dlg.Content = body;
             dlg.ShowDialog();
         }
 
@@ -4651,9 +5087,7 @@ namespace KomaComic.Windows
 
             StackPanel header = new StackPanel { Margin = new Thickness(0, 0, 0, 16) };
             header.Children.Add(new TextBlock { Text = "应用设置", FontSize = 22, FontWeight = FontWeights.Bold });
-            TextBlock sub = new TextBlock { Text = "原生 DirectX 高清渲染界面、默认阅读器配置与 148 动漫源数据管理", FontSize = 13, Margin = new Thickness(0, 4, 0, 0) };
-            sub.SetResourceReference(TextBlock.ForegroundProperty, "Brush.TextMuted");
-            header.Children.Add(sub);
+
             g.Children.Add(header);
 
             ScrollViewer sv = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
@@ -4677,6 +5111,14 @@ namespace KomaComic.Windows
             themeRow.Children.Add(bLight);
             themeRow.Children.Add(bSys);
             tc.Children.Add(themeRow);
+            WrapPanel materials = new WrapPanel { Margin = new Thickness(0, 12, 0, 0) };
+            CheckBox glass = new CheckBox { Content = "液态玻璃", IsChecked = _services.GlassMaterial, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 14, 4) };
+            glass.SetResourceReference(Control.ForegroundProperty, "Brush.Text");
+            glass.Click += delegate { _services.GlassMaterial = glass.IsChecked == true; _services.SaveState(); ApplyLibraryMaterial(); };
+            materials.Children.Add(glass);
+            AddBrowseButton(materials, "选择背景壁纸", ChooseWallpaper);
+            AddBrowseButton(materials, "关闭壁纸", delegate { _services.WallpaperEnabled = false; _services.SaveState(); ApplyLibraryMaterial(); });
+            tc.Children.Add(materials);
             themeCard.Child = tc;
             stack.Children.Add(themeCard);
 
@@ -4716,6 +5158,9 @@ namespace KomaComic.Windows
             rowSp.Children.Add(spBtns);
             rowSp.Children.Add(new TextBlock { Text = "宽屏单双页布局", VerticalAlignment = VerticalAlignment.Center, FontSize = 13.5 });
             rdc.Children.Add(rowSp);
+            Button translate = AddBrowseButton(rdc, "漫画翻译设置", OpenTranslationSettings);
+            translate.HorizontalAlignment = HorizontalAlignment.Left;
+            translate.Margin = new Thickness(0, 12, 0, 0);
             rdCard.Child = rdc;
             stack.Children.Add(rdCard);
 
@@ -4728,8 +5173,10 @@ namespace KomaComic.Windows
             DockPanel.SetDock(bOpenMgr, Dock.Right);
             rowMgr.Children.Add(bOpenMgr);
             bOpenMgr.Click += delegate (object s, RoutedEventArgs e) { OpenSourceManagerDialog(); };
-            rowMgr.Children.Add(new TextBlock { Text = string.Format("内置 Venera 漫画源管理 ({0} 个)", _services.Sources.Count), VerticalAlignment = VerticalAlignment.Center, FontSize = 13.5 });
+            rowMgr.Children.Add(new TextBlock { Text = string.Format("漫画源与登录（{0} 个）", _services.Sources.Count), VerticalAlignment = VerticalAlignment.Center, FontSize = 13.5 });
             sc.Children.Add(rowMgr);
+            Button warehouses = AddBrowseButton(sc, "本地仓库与 WebDAV", delegate { SwitchMainTab(4); });
+            warehouses.HorizontalAlignment = HorizontalAlignment.Left;
 
             DockPanel rowCache = new DockPanel { Margin = new Thickness(0, 0, 0, 12) };
             Button bClrCache = UiTheme.MakeButton("清理图片缓存", false, true);
@@ -4745,7 +5192,7 @@ namespace KomaComic.Windows
 
             TextBlock about = new TextBlock
             {
-                Text = string.Format("KomaComic (漫格漫画) v{0} · Windows 原生 WPF DirectX 高清版 (Per-Monitor V2 DPI)", Program.AppVersion),
+                Text = string.Format("页光 Koma v{0} · Windows 原生 WPF DirectX 高清版 (Per-Monitor V2 DPI)", Program.AppVersion),
                 FontSize = 12
             };
             about.SetResourceReference(TextBlock.ForegroundProperty, "Brush.TextMuted");
@@ -4758,10 +5205,100 @@ namespace KomaComic.Windows
             return g;
         }
 
+        private void ApplyLibraryMaterial()
+        {
+            UiTheme.ApplyTheme(Application.Current, _services.ThemeMode, _services.GlassMaterial);
+            if (_wallpaper == null) return;
+            _wallpaper.Source = null;
+            _wallpaper.Effect = null;
+            if (!_services.WallpaperEnabled || !File.Exists(_services.WallpaperPath)) return;
+            try
+            {
+                BitmapImage source = new BitmapImage();
+                source.BeginInit();
+                source.CacheOption = BitmapCacheOption.OnLoad;
+                source.UriSource = new Uri(_services.WallpaperPath);
+                source.CreateOptions = BitmapCreateOptions.IgnoreImageCache;
+                source.EndInit();
+                source.Freeze();
+                _wallpaper.Source = source;
+                _wallpaper.Opacity = UiTheme.IsDarkActive ? 0.25 : 0.34;
+                if (_services.GlassMaterial) _wallpaper.Effect = new System.Windows.Media.Effects.BlurEffect { Radius = 16 };
+            }
+            catch (Exception ex) { ShowToast("无法读取壁纸：" + ex.Message); }
+        }
+
+        private void ChooseWallpaper()
+        {
+            Microsoft.Win32.OpenFileDialog dialog = new Microsoft.Win32.OpenFileDialog
+            {
+                Filter = "图片|*.jpg;*.jpeg;*.png;*.bmp;*.gif;*.tiff|所有文件|*.*"
+            };
+            if (dialog.ShowDialog(this) != true) return;
+            string pending = _services.WallpaperPath + ".tmp";
+            try
+            {
+                BitmapImage picture = new BitmapImage();
+                picture.BeginInit();
+                picture.UriSource = new Uri(dialog.FileName);
+                picture.CacheOption = BitmapCacheOption.OnLoad;
+                picture.DecodePixelWidth = 2560;
+                picture.EndInit();
+                JpegBitmapEncoder encoder = new JpegBitmapEncoder { QualityLevel = 90 };
+                encoder.Frames.Add(BitmapFrame.Create(picture));
+                using (FileStream stream = File.Create(pending)) encoder.Save(stream);
+                if (File.Exists(_services.WallpaperPath)) File.Replace(pending, _services.WallpaperPath, null);
+                else File.Move(pending, _services.WallpaperPath);
+                _services.WallpaperEnabled = true;
+                _services.SaveState();
+                ApplyLibraryMaterial();
+            }
+            catch (Exception ex) { ShowToast("无法保存壁纸：" + ex.Message); }
+            finally { if (File.Exists(pending)) File.Delete(pending); }
+        }
+
+        private void OpenTranslationSettings()
+        {
+            Window dialog = CreateStyledDialog("漫画翻译", 560, 340);
+            StackPanel fields = new StackPanel { Margin = new Thickness(22) };
+            TextBox endpoint = MakeStyledTextBox();
+            endpoint.Text = _services.TranslationServer;
+            TextBox config = MakeStyledTextBox();
+            config.AcceptsReturn = true;
+            config.TextWrapping = TextWrapping.Wrap;
+            config.Height = 86;
+            config.Text = _services.TranslationConfig;
+            fields.Children.Add(new TextBlock { Text = "manga-image-translator 服务地址（HTTP 或 HTTPS）", Margin = new Thickness(0, 0, 0, 6) });
+            fields.Children.Add(endpoint);
+            fields.Children.Add(new TextBlock { Text = "翻译配置 JSON", Margin = new Thickness(0, 14, 0, 6) });
+            fields.Children.Add(config);
+            TextBlock status = new TextBlock { Text = "阅读器中开启翻译后，当前漫画页才会发送至服务。", TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 10, 0, 8) };
+            fields.Children.Add(status);
+            WrapPanel actions = new WrapPanel();
+            AddBrowseButton(actions, "保存", delegate
+            {
+                try
+                {
+                    string server = endpoint.Text.Trim();
+                    if (server.Length > 0) MangaTranslation.Endpoint(server);
+                    MangaTranslation.ValidateConfig(config.Text);
+                    _services.TranslationServer = server;
+                    _services.TranslationConfig = config.Text;
+                    _services.SaveState();
+                    dialog.Close();
+                }
+                catch (Exception ex) { status.Text = ex.Message; }
+            });
+            AddBrowseButton(actions, "取消", dialog.Close);
+            fields.Children.Add(actions);
+            dialog.Content = fields;
+            dialog.ShowDialog();
+        }
+
         private void SwitchTheme(string mode)
         {
             _services.ThemeMode = mode;
-            UiTheme.ApplyTheme(Application.Current, mode);
+            ApplyLibraryMaterial();
             IntPtr hwnd = new WindowInteropHelper(this).Handle;
             NativeMethods.ApplyDarkTitleBar(hwnd, UiTheme.IsDarkActive);
             _services.SaveState();
@@ -4806,6 +5343,7 @@ namespace KomaComic.Windows
             _readerScrollViewer = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Visibility = Visibility.Collapsed };
             _readerScrollStack = new StackPanel { HorizontalAlignment = HorizontalAlignment.Center, RenderTransformOrigin = new Point(0.5, 0), RenderTransform = _readerZoomTransform };
             _readerScrollViewer.Content = _readerScrollStack;
+            _readerScrollViewer.ScrollChanged += delegate { QueueVisibleTranslation(); };
             _readerViewport.Children.Add(_readerScrollViewer);
 
             // Brightness Dimming Overlay (non-blocking)
@@ -4850,6 +5388,15 @@ namespace KomaComic.Windows
             };
 
             overlay.Children.Add(_readerViewport);
+            _readerTranslationStatus = new TextBlock
+            {
+                HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Top,
+                Margin = new Thickness(0, 62, 18, 0), Padding = new Thickness(10, 5, 10, 5),
+                Background = new SolidColorBrush(Color.FromArgb(225, 21, 32, 52)), Foreground = Brushes.White,
+                Visibility = Visibility.Collapsed, Cursor = Cursors.Hand
+            };
+            _readerTranslationStatus.MouseLeftButtonUp += delegate { _readerTranslationEpoch++; QueueVisibleTranslation(); };
+            overlay.Children.Add(_readerTranslationStatus);
 
             // Loading Box
             _readerLoadingBox = new Border
@@ -4861,7 +5408,15 @@ namespace KomaComic.Windows
                 VerticalAlignment = VerticalAlignment.Center,
                 Visibility = Visibility.Collapsed
             };
-            _readerLoadingBox.Child = new TextBlock { Text = "正在加载高清章节页面...", Foreground = Brushes.White, FontSize = 13.5 };
+            StackPanel loading = new StackPanel();
+            _readerLoadMessage = new TextBlock { Text = "正在加载章节…", Foreground = Brushes.White, FontSize = 13.5, TextWrapping = TextWrapping.Wrap, MaxWidth = 420 };
+            _readerRetryButton = UiTheme.MakeButton("重试", true, false);
+            _readerRetryButton.HorizontalAlignment = HorizontalAlignment.Center;
+            _readerRetryButton.Margin = new Thickness(0, 8, 0, 0);
+            _readerRetryButton.Click += delegate { if (_readerRetry != null) _readerRetry(); };
+            loading.Children.Add(_readerLoadMessage);
+            loading.Children.Add(_readerRetryButton);
+            _readerLoadingBox.Child = loading;
             overlay.Children.Add(_readerLoadingBox);
 
             // Corner Page Badge
@@ -4997,9 +5552,14 @@ namespace KomaComic.Windows
             actGrid.ColumnDefinitions.Add(new ColumnDefinition());
             actGrid.ColumnDefinitions.Add(new ColumnDefinition());
             actGrid.ColumnDefinitions.Add(new ColumnDefinition());
-            Button bSet = MakeReaderCapsuleMiniBtn("⬡  设置", "阅读设置");
-            Button bFav = MakeReaderCapsuleMiniBtn("🔖  书签", "收藏此漫画");
-            Button bDir = MakeReaderCapsuleMiniBtn("📑  目录", "章节目录");
+            Button bSet = MakeReaderCapsuleMiniBtn("阅读设置", "阅读设置");
+            Button bFav = MakeReaderCapsuleMiniBtn("收藏", "添加或取消收藏");
+            Button bDir = MakeReaderCapsuleMiniBtn("目录", "章节目录");
+            actGrid.ColumnDefinitions.Add(new ColumnDefinition());
+            _readerTranslationButton = MakeReaderCapsuleMiniBtn("翻译", "切换原文与译文");
+            _readerTranslationButton.Click += delegate { ToggleReaderTranslation(); };
+            Grid.SetColumn(_readerTranslationButton, 3);
+            actGrid.Children.Add(_readerTranslationButton);
             bSet.Click += delegate (object s, RoutedEventArgs e)
             {
                 _readerDrawer.Visibility = _readerDrawer.Visibility == Visibility.Visible ? Visibility.Collapsed : Visibility.Visible;
@@ -5239,6 +5799,8 @@ namespace KomaComic.Windows
 
         private void OpenLocalComicInReader(ComicCardModel card)
         {
+            ++_readerChapterRequest;
+            _readerLoadingBox.Visibility = Visibility.Collapsed;
             PushHistory(card);
             _readerOpen = true;
             _readerIsLocal = true;
@@ -5269,7 +5831,6 @@ namespace KomaComic.Windows
 
         private void StartOnlineReader(ComicCardModel card, List<ChapterItem> chapters, int chIdx, int pageIdx)
         {
-            PushHistory(card);
             _readerOpen = true;
             _readerIsLocal = false;
             _readerComic = card;
@@ -5287,37 +5848,50 @@ namespace KomaComic.Windows
             LoadOnlineChapterAsync(chIdx, pageIdx);
         }
 
+        private void ShowReaderMessage(string text, Action retry)
+        {
+            _readerLoadMessage.Text = text;
+            _readerRetry = retry;
+            _readerRetryButton.Visibility = retry == null ? Visibility.Collapsed : Visibility.Visible;
+            _readerLoadingBox.Visibility = Visibility.Visible;
+        }
+
         private async void LoadOnlineChapterAsync(int chIdx, int targetPage)
         {
             if (_readerComic == null || chIdx < 0 || chIdx >= _readerChapters.Count) return;
+            int request = ++_readerChapterRequest;
+            ++_readerRenderRequest;
             _readerChapterIdx = chIdx;
             _readerPages = new List<PageImageModel>();
             _widePageFlags.Clear();
             _readerPageIdx = targetPage;
-            _readerLoadingBox.Visibility = Visibility.Visible;
+            ShowReaderMessage("正在加载章节…", null);
             _readerSingleImg.Source = null;
             _readerLeftImg.Source = null;
             _readerRightImg.Source = null;
+            _readerScrollStack.Children.Clear();
 
-            ChapterItem ch = _readerChapters[chIdx];
-            _readerChapterText.Text = ch.Title;
-
+            ChapterItem chapter = _readerChapters[chIdx];
+            _readerChapterText.Text = chapter.Title;
+            ComicCardModel comic = _readerComic;
             try
             {
-                SourceItem src = _services.Sources.Find(delegate (SourceItem s) { return s.Key == _readerComic.SourceKey; });
+                SourceItem src = _services.Sources.Find(item => item.Key == comic.SourceKey);
                 if (src == null) throw new InvalidOperationException("找不到所属漫画源");
-                _readerPages = await _jsRunner.LoadChapterPagesAsync(src, _readerComic.Id, ch.Id);
-                if (_readerPageIdx >= _readerPages.Count) _readerPageIdx = Math.Max(0, _readerPages.Count - 1);
+                List<PageImageModel> pages = await _jsRunner.LoadChapterPagesAsync(src, comic.Id, chapter.Id);
+                if (request != _readerChapterRequest || !_readerOpen) return;
+                if (pages.Count == 0) throw new InvalidOperationException("该章节暂无可读页面");
+                _readerPages = pages;
+                _readerPageIdx = Math.Max(0, Math.Min(targetPage, pages.Count - 1));
+                _readerLoadingBox.Visibility = Visibility.Collapsed;
+                PushHistory(comic);
                 SaveReaderProgress();
                 RenderCurrentReaderPagesAsync();
             }
             catch (Exception ex)
             {
-                ShowToast("加载章节失败: " + ex.Message);
-            }
-            finally
-            {
-                _readerLoadingBox.Visibility = Visibility.Collapsed;
+                if (request == _readerChapterRequest && _readerOpen)
+                    ShowReaderMessage("加载章节失败：" + ex.Message.Split('\n')[0], delegate { LoadOnlineChapterAsync(chIdx, targetPage); });
             }
         }
 
@@ -5391,6 +5965,8 @@ namespace KomaComic.Windows
 
         private async void RenderCurrentReaderPagesAsync()
         {
+            int request = ++_readerRenderRequest;
+            if (_readerTranslationEnabled) CancelReaderTranslation();
             ReaderPrefModel prof = GetActiveReaderProfile();
             int total = _readerPages.Count;
             _readerSeekSlider.Maximum = Math.Max(1, total);
@@ -5413,6 +5989,7 @@ namespace KomaComic.Windows
                 return;
             }
 
+            _readerLoadingBox.Visibility = Visibility.Collapsed;
             if (prof.Mode == "scroll")
             {
                 _readerSpreadGrid.Visibility = Visibility.Collapsed;
@@ -5424,7 +6001,7 @@ namespace KomaComic.Windows
                     Image im = new Image { MaxWidth = 980, Stretch = Stretch.Uniform, Margin = new Thickness(0, 0, 0, 4) };
                     RenderOptions.SetBitmapScalingMode(im, BitmapScalingMode.HighQuality);
                     _readerScrollStack.Children.Add(im);
-                    LoadFullPageIntoImageAsync(_readerPages[idx], idx, im, false);
+                    LoadFullPageIntoImageAsync(_readerPages[idx], idx, im, false, request);
                 }
                 return;
             }
@@ -5445,7 +6022,7 @@ namespace KomaComic.Windows
                 _readerLeftImg.Source = null;
                 _readerRightImg.Source = null;
                 _readerSingleImg.Visibility = Visibility.Visible;
-                await LoadFullPageIntoImageAsync(_readerPages[cur], cur, _readerSingleImg, true);
+                await LoadFullPageIntoImageAsync(_readerPages[cur], cur, _readerSingleImg, true, request);
             }
             else
             {
@@ -5454,29 +6031,148 @@ namespace KomaComic.Windows
                 Image firstTarget = prof.Mode == "rtl" ? _readerRightImg : _readerLeftImg;
                 Image secondTarget = prof.Mode == "rtl" ? _readerLeftImg : _readerRightImg;
                 await Task.WhenAll(
-                    LoadFullPageIntoImageAsync(_readerPages[cur], cur, firstTarget, true),
-                    LoadFullPageIntoImageAsync(_readerPages[cur + 1], cur + 1, secondTarget, true)
+                    LoadFullPageIntoImageAsync(_readerPages[cur], cur, firstTarget, true, request),
+                    LoadFullPageIntoImageAsync(_readerPages[cur + 1], cur + 1, secondTarget, true, request)
                 );
             }
         }
 
-        private async Task LoadFullPageIntoImageAsync(PageImageModel page, int pageIdx, Image target, bool detectWide)
+        private async Task LoadFullPageIntoImageAsync(PageImageModel page, int pageIdx, Image target, bool detectWide, int request)
         {
-            BitmapImage bmp = page.IsLocal
-                ? await _services.LoadLocalPageBitmapAsync(page.LocalComicId, page.LocalPageIndex, 0)
-                : await _services.LoadComicImageAsync(page.Url, page.Headers, 0);
-            if (bmp != null)
+            BitmapImage bitmap = null;
+            string failure = "";
+            try
             {
-                target.Source = bmp;
-                if (detectWide && bmp.PixelWidth > bmp.PixelHeight * 1.15 && !_widePageFlags.ContainsKey(pageIdx))
+                if (page.IsLocal)
+                    bitmap = await _services.LoadLocalPageBitmapAsync(page.LocalComicId, page.LocalPageIndex, 0);
+                else
                 {
-                    _widePageFlags[pageIdx] = true;
-                    ReaderPrefModel prof = GetActiveReaderProfile();
-                    if (prof.Spread == "double" && prof.Mode != "scroll")
+                    Uri pageUri;
+                    bool browserFormat = Uri.TryCreate(page.Url, UriKind.Absolute, out pageUri) &&
+                        (pageUri.AbsolutePath.EndsWith(".webp", StringComparison.OrdinalIgnoreCase) ||
+                         pageUri.AbsolutePath.EndsWith(".avif", StringComparison.OrdinalIgnoreCase));
+                    if (!page.UseSourceLoader && !browserFormat)
+                        bitmap = await _services.LoadComicImageAsync(page.Url, page.Headers, 0);
+                    if (bitmap == null && request == _readerRenderRequest && _readerOpen)
                     {
-                        RenderCurrentReaderPagesAsync();
+                        ComicCardModel comic = _readerComic;
+                        ChapterItem chapter = _readerChapters[_readerChapterIdx];
+                        SourceItem source = _services.Sources.Find(item => item.Key == comic.SourceKey);
+                        string cacheKey = JsonUtil.CreateSerializer().Serialize(new object[] { comic.Uid, chapter.Id, pageIdx, page.Url, page.Headers });
+                        bitmap = await _services.LoadSourcePageBitmapAsync(cacheKey,
+                            () => _jsRunner.LoadPageBytesAsync(source, comic.Id, chapter.Id, page));
                     }
                 }
+            }
+            catch (Exception error) { failure = "：" + error.Message.Split('\n')[0]; }
+
+            if (request != _readerRenderRequest || !_readerOpen) return;
+            if (bitmap == null)
+            {
+                if (detectWide || pageIdx == _readerPageIdx)
+                    ShowReaderMessage("第 " + (pageIdx + 1) + " 页图片加载失败" + failure, RenderCurrentReaderPagesAsync);
+                return;
+            }
+            target.Source = bitmap;
+            target.Tag = new ReaderImageState { Original = bitmap };
+            QueueVisibleTranslation();
+            if (detectWide && bitmap.PixelWidth > bitmap.PixelHeight * 1.15 && !_widePageFlags.ContainsKey(pageIdx))
+            {
+                _widePageFlags[pageIdx] = true;
+                ReaderPrefModel profile = GetActiveReaderProfile();
+                if (profile.Spread == "double" && profile.Mode != "scroll")
+                    RenderCurrentReaderPagesAsync();
+            }
+        }
+
+        private IEnumerable<Image> CurrentReaderImages()
+        {
+            if (_readerScrollViewer.Visibility == Visibility.Visible)
+            {
+                foreach (UIElement child in _readerScrollStack.Children)
+                {
+                    Image image = child as Image;
+                    if (image != null) yield return image;
+                }
+            }
+            else
+            {
+                if (_readerSingleImg.Visibility == Visibility.Visible) yield return _readerSingleImg;
+                else { yield return _readerLeftImg; yield return _readerRightImg; }
+            }
+        }
+
+        private void CancelReaderTranslation()
+        {
+            _readerTranslationCancellation.Cancel();
+            _readerTranslationCancellation.Dispose();
+            _readerTranslationCancellation = new CancellationTokenSource();
+        }
+
+        private void ToggleReaderTranslation()
+        {
+            if (string.IsNullOrWhiteSpace(_services.TranslationServer))
+            {
+                ShowToast("请先在设置中填写漫画翻译服务");
+                return;
+            }
+            _readerTranslationEnabled = !_readerTranslationEnabled;
+            CancelReaderTranslation();
+            _readerTranslationEpoch++;
+            _readerTranslationButton.Content = _readerTranslationEnabled ? "原文" : "翻译";
+            _readerTranslationStatus.Visibility = _readerTranslationEnabled ? Visibility.Visible : Visibility.Collapsed;
+            _readerTranslationStatus.Text = "等待页面…";
+            if (_readerTranslationEnabled) QueueVisibleTranslation();
+            else foreach (Image view in CurrentReaderImages())
+            {
+                ReaderImageState state = view.Tag as ReaderImageState;
+                if (state != null) view.Source = state.Original;
+            }
+        }
+
+        private void QueueVisibleTranslation()
+        {
+            if (!_readerOpen || !_readerTranslationEnabled || _translationDispatchPending) return;
+            _translationDispatchPending = true;
+            Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(delegate
+            {
+                _translationDispatchPending = false;
+                if (!_readerOpen || !_readerTranslationEnabled) return;
+                foreach (Image view in CurrentReaderImages())
+                {
+                    if (view.Source == null) continue;
+                    if (_readerScrollViewer.Visibility == Visibility.Visible)
+                    {
+                        Point corner;
+                        try { corner = view.TransformToAncestor(_readerScrollViewer).Transform(new Point(0, 0)); }
+                        catch (InvalidOperationException) { continue; }
+                        if (corner.Y >= _readerScrollViewer.ViewportHeight || corner.Y + view.ActualHeight <= 0) continue;
+                    }
+                    StartReaderTranslation(view);
+                }
+            }));
+        }
+
+        private async void StartReaderTranslation(Image view)
+        {
+            ReaderImageState state = view.Tag as ReaderImageState;
+            int epoch = _readerTranslationEpoch;
+            int request = _readerRenderRequest;
+            if (state == null || state.TranslationEpoch == epoch) return;
+            state.TranslationEpoch = epoch;
+            _readerTranslationStatus.Text = "翻译中…";
+            try
+            {
+                BitmapImage translated = await MangaTranslation.TranslateAsync(state.Original, _services.TranslationServer,
+                    _services.TranslationConfig, Path.Combine(_services.DataDir, "cache", "translations"), _readerTranslationCancellation.Token);
+                if (epoch != _readerTranslationEpoch || request != _readerRenderRequest || !_readerTranslationEnabled || view.Tag != state) return;
+                view.Source = translated;
+                _readerTranslationStatus.Text = "已显示译文";
+            }
+            catch
+            {
+                if (epoch == _readerTranslationEpoch && request == _readerRenderRequest && _readerTranslationEnabled && view.Tag == state)
+                    _readerTranslationStatus.Text = "翻译失败 · 点击重试";
             }
         }
 
@@ -5546,6 +6242,14 @@ namespace KomaComic.Windows
         private void CloseReader()
         {
             _readerOpen = false;
+            _readerTranslationEnabled = false;
+            CancelReaderTranslation();
+            _readerTranslationEpoch++;
+            _readerTranslationButton.Content = "翻译";
+            _readerTranslationStatus.Visibility = Visibility.Collapsed;
+            ++_readerChapterRequest;
+            ++_readerRenderRequest;
+            _readerLoadingBox.Visibility = Visibility.Collapsed;
             _readerDrawer.Visibility = Visibility.Collapsed;
             _readerOverlay.Visibility = Visibility.Collapsed;
             _readerSingleImg.Source = null;
@@ -5626,9 +6330,10 @@ namespace KomaComic.Windows
             return dlg;
         }
 
-        private string PromptStringDialog(string title, string label, string initialValue)
+        private string PromptStringDialog(string title, string label, string initialValue, Window owner = null)
         {
             Window dlg = CreateStyledDialog(title, 420, 200);
+            if (owner != null && owner.IsLoaded) dlg.Owner = owner;
             dlg.ResizeMode = ResizeMode.NoResize;
             StackPanel stack = new StackPanel { Margin = new Thickness(18) };
             stack.Children.Add(new TextBlock { Text = label, Margin = new Thickness(0, 0, 0, 8), FontSize = 13 });

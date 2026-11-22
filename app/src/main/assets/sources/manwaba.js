@@ -1,5 +1,6 @@
 /** @type {import('./_venera_.js')} */
 class ManWaBa extends ComicSource {
+    website = "https://manwali.cc/";
   name = "漫蛙吧";
   key = "manwaba";
   version = "1.1.3";

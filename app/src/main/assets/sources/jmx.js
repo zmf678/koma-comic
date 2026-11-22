@@ -1,4 +1,5 @@
 class JM extends ComicSource {
+    website = "https://jmcomicgo.org/";
     name = "禁漫天堂X"
     key = "jmx"
     version = "2.1.0"

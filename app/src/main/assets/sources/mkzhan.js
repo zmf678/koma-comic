@@ -1,4 +1,5 @@
 class Mkzhan extends ComicSource {
+    website = "https://www.mkzhan.com/";
   name = "漫客栈";
   key = "mkzhan";
   version = "1.1.4";

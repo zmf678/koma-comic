@@ -52,6 +52,7 @@
  */
 
 class Ffppt extends ComicSource {
+    website = "https://ffppt.com/";
     name = "飞翔漫画";
     key = "ffppt";
     version = "1.0.3";

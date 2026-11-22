@@ -8,6 +8,7 @@
     window.__veneraAsyncCallbacks = {};
     window.__veneraAsyncSeq = 0;
     window.__currentSourceKey = "";
+    const browserFetch = window.fetch?.bind(window);
 
     function abToBase64(buffer) {
         if (typeof buffer === "string") return btoa(unescape(encodeURIComponent(buffer)));
@@ -283,7 +284,7 @@
                 data: bodyData == null ? null : bodyData,
             });
             if (res && res.error) throw new Error(res.error);
-            if (res && res.bodyBase64) {
+            if (res && typeof res.bodyBase64 === "string") {
                 res.body = base64ToAb(res.bodyBase64);
             }
             return res;
@@ -313,17 +314,19 @@
         const method = opts.method || "GET";
         const headers = opts.headers || {};
         const body = opts.body !== undefined ? opts.body : null;
-        const res = await window.Network.sendRequest(method, url, headers, body);
-        const textBody = res && typeof res.body === "string" ? res.body : "";
+        const res = await window.Network.fetchBytes(method, url, headers, body);
+        const bytes = res?.body instanceof ArrayBuffer ? res.body : new ArrayBuffer(0);
+        const textBody = () => new TextDecoder().decode(bytes);
         const status = res ? Number(res.status || 0) : 0;
         return {
             ok: status >= 200 && status < 300,
             status: status,
             statusText: String(status),
+            url: res?.url || String(url),
             headers: (res && res.headers) || {},
-            text: async () => textBody,
-            json: async () => JSON.parse(textBody),
-            arrayBuffer: async () => window.Convert.encodeUtf8(textBody),
+            text: async () => textBody(),
+            json: async () => JSON.parse(textBody()),
+            arrayBuffer: async () => bytes.slice(0),
         };
     };
 
@@ -555,6 +558,145 @@
         }
     };
 
+    function webUrl(value, base) {
+        if (typeof value !== "string" || !value.trim()) return "";
+        try {
+            const url = new URL(value, base || undefined);
+            return /^https?:$/.test(url.protocol) && !url.username && !url.password ? url.href : "";
+        } catch (_) {
+            return "";
+        }
+    }
+
+    window.__sourceWebsite = function (src) {
+        for (const candidate of [src.website, src.config?.baseUrl, src.baseUrl, src.base, src.baseURL,
+            src.constructor?.baseUrl, src.constructor?.BASE_URL, src.host, src.landingPage]) {
+            const url = webUrl(candidate);
+            if (url && !/\.js(?:[?#]|$)/i.test(url)) return url;
+        }
+        return "";
+    };
+
+    window.__sourceAppWebsite = src => webUrl(src.appWebsite);
+
+    window.__sourceComicDetails = async function (src, id) {
+        if (typeof src.comic?.loadInfo !== "function") throw new Error("漫画源没有提供作品详情");
+        const details = await src.comic.loadInfo(id);
+        if (!details || typeof details !== "object") throw new Error("漫画源未返回作品详情");
+        return {
+            ...details,
+            subTitle: details.subTitle ?? details.subtitle,
+            headers: { ...window.__extractSourceImageHeaders(src), ...details.headers },
+            url: webUrl(details.url, window.__sourceWebsite(src)),
+            wholeBook: details.chapters == null && typeof src.comic.loadEp === "function"
+        };
+    };
+
+    function mergeHeaders(...maps) {
+        const result = {};
+        for (const headers of maps) {
+            for (const [key, value] of Object.entries(headers || {})) {
+                if (value != null) result[key.toLowerCase()] = String(value);
+            }
+        }
+        return result;
+    }
+
+    window.__sourceChapterPages = async function (src, id, episode) {
+        if (typeof src.comic?.loadEp !== "function") throw new Error("漫画源没有提供章节阅读");
+        const result = await src.comic.loadEp(id, episode);
+        const pages = Array.isArray(result) ? result : result?.images;
+        const base = window.__sourceWebsite(src);
+        const fallback = window.__extractSourceImageHeaders(src);
+        const hasImageHook = typeof src.comic.onImageLoad === "function";
+        return (Array.isArray(pages) ? pages : []).flatMap(page => {
+            const key = typeof page === "string" ? page : page?.url;
+            if (typeof key !== "string" || !key) return [];
+            const url = webUrl(key, base) || key;
+            return [{ url: hasImageHook ? key : url, headers: mergeHeaders(fallback, result?.headers, page?.headers),
+                useSourceLoader: hasImageHook || /^data:image\//i.test(url) }];
+        });
+    };
+
+    class CanvasImage {
+        constructor(canvas) { this.canvas = canvas; }
+        get width() { return this.canvas.width; }
+        get height() { return this.canvas.height; }
+        static empty(width, height) {
+            const canvas = document.createElement("canvas");
+            canvas.width = width;
+            canvas.height = height;
+            return new CanvasImage(canvas);
+        }
+        copyRange(x, y, width, height) {
+            const copy = CanvasImage.empty(width, height);
+            copy.fillImageRangeAt(0, 0, this, x, y, width, height);
+            return copy;
+        }
+        fillImageRangeAt(x, y, source, sourceX, sourceY, width, height) {
+            if (width <= 0 || height <= 0) return;
+            const context = this.canvas.getContext("2d");
+            context.drawImage(source.canvas, sourceX, sourceY, width, height, x, y, width, height);
+        }
+    }
+
+    window.compute = async function (script, value) {
+        const fn = typeof script === "function" ? script : eval(String(script));
+        return fn(value);
+    };
+
+    async function renderPageImage(bytes, script) {
+        const bitmap = await createImageBitmap(new Blob([bytes]));
+        const image = CanvasImage.empty(bitmap.width, bitmap.height);
+        image.canvas.getContext("2d").drawImage(bitmap, 0, 0);
+        bitmap.close();
+        const transform = script ? new Function("Image", script + "\n;return modifyImage;")(CanvasImage) : null;
+        const modified = transform ? await transform(image) : image;
+        const blob = await new Promise(resolve => modified.canvas.toBlob(resolve, "image/png"));
+        if (!blob) throw new Error("无法处理漫画图片");
+        return blob.arrayBuffer();
+    }
+
+    function needsDesktopDecode(bytes) {
+        const buffer = ArrayBuffer.isView(bytes) ? bytes.buffer : bytes;
+        const offset = ArrayBuffer.isView(bytes) ? bytes.byteOffset : 0;
+        const header = String.fromCharCode(...new Uint8Array(buffer, offset, Math.min(bytes.byteLength, 16)));
+        return header.slice(8, 12) === "WEBP" || header.slice(4, 8) === "ftyp";
+    }
+
+    window.__sourcePageBytes = async function (src, id, episode, key, headers, desktop = false) {
+        let config = typeof src.comic.onImageLoad === "function" ? await src.comic.onImageLoad(key, id, episode) : null;
+        const base = window.__sourceWebsite(src);
+        for (let attempt = 0; ; attempt++) {
+            try {
+                const value = config?.url || key;
+                let bytes;
+                if (/^data:image\//i.test(value)) {
+                    bytes = await (await browserFetch(value)).arrayBuffer();
+                } else {
+                    const url = webUrl(value, base);
+                    if (!url) throw new Error("漫画源未返回有效的图片地址");
+                    const response = await Network.fetchBytes(config?.method || "GET", url,
+                        mergeHeaders(headers, config?.headers), config?.data);
+                    if (!response || response.status < 200 || response.status >= 300 || !response.body) {
+                        throw new Error("图片请求失败 (HTTP " + (response?.status ?? "?") + ")");
+                    }
+                    bytes = response.body;
+                }
+                if (typeof config?.onResponse === "function") bytes = await config.onResponse(bytes);
+                if (!(bytes instanceof ArrayBuffer) && !ArrayBuffer.isView(bytes)) throw new Error("漫画源未返回图片数据");
+                if (config?.modifyImage || desktop && needsDesktopDecode(bytes)) {
+                    bytes = await renderPageImage(bytes, config?.modifyImage);
+                }
+                return abToBase64(ArrayBuffer.isView(bytes) ? new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength) : bytes);
+            } catch (error) {
+                if (attempt >= 2 || typeof config?.onLoadFailed !== "function") throw error;
+                config = await config.onLoadFailed();
+                if (!config) throw error;
+            }
+        }
+    };
+
     window.__normalizeComicsResult = function (r, page, isSinglePage, fallbackHeaders) {
         const out = [];
         const seen = new Set();
@@ -678,6 +820,8 @@
         const ranking = src.categoryComics?.ranking;
         return {
             canSearch: Boolean(hasLoader(src.search)),
+            website: window.__sourceWebsite(src),
+            appWebsite: window.__sourceAppWebsite(src),
             channels: exploreEntries(src).flatMap((entry, index) => hasLoader(entry)
                 ? [{ kind: "explore", index, title: String(entry.title || ("发现 " + (index + 1))) }] : []),
             groups: categoryParts(src).flatMap((part, index) => part && (

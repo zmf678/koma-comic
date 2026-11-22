@@ -40,7 +40,9 @@ data class SourceBrowseMenu(
     val canSearch: Boolean,
     val channels: List<SourceBrowseTarget>,
     val groups: List<SourceCategoryGroup>,
-    val ranking: SourceBrowseTarget?
+    val ranking: SourceBrowseTarget?,
+    val website: String = "",
+    val appWebsite: String = ""
 )
 
 data class SourceFilterChoice(val value: String?, val title: String)
@@ -89,7 +91,8 @@ data class RemoteComicDetails(
 
 data class RemotePageImage(
     val url: String,
-    val headers: Map<String, String> = emptyMap()
+    val headers: Map<String, String> = emptyMap(),
+    val useSourceLoader: Boolean = false
 )
 
 data class RepoSourceItem(

@@ -7,13 +7,19 @@ class JM extends ComicSource {
     // unique id of the source
     key = "jm"
 
-    version = "1.4.3"
+    version = "1.4.4"
 
     minAppVersion = "1.5.0"
 
-    static jmVersion = "2.0.16"
+    static jmVersion = "2.0.18"
 
-    static jmPkgName = "com.example.app"
+    static jmPkgName = "com.JMComic3.app"
+
+    website = "https://jmcomicgo.org/"
+    appWebsite = "https://jmcomicgo.org/"
+    static webReader = "https://18comic.vip"
+    activeServer = ""
+    selectedLine = ""
 
     // update url
     url = "https://raw.githubusercontent.com/VComic-org/venera-comic-source/refs/heads/main/jm.js"
@@ -21,22 +27,18 @@ class JM extends ComicSource {
     dailyCheckInInProgress = false
 
     static fallbackServers = [
-        "www.cdnsha.org",
-        "www.cdntwice.org",
-        "www.cdnaspa.cc",
-        "www.cdnntr.cc",
+        "www.cdnhjk.net",
+        "www.cdngwc.cc",
+        "www.cdngwc.net",
+        "www.cdnutc.me",
     ];
 
-    /**
-     * Active API host list. Must have a built-in default: explore can run
-     * before async init() finishes (or when domain refresh is disabled), and
-     * baseUrl would otherwise crash on undefined apiDomains.
-     */
-    static apiDomains = [
-        "www.cdnsha.org",
-        "www.cdntwice.org",
-        "www.cdnaspa.cc",
-        "www.cdnntr.cc",
+    static apiDomains = [...JM.fallbackServers];
+
+    static imageServers = [
+        "https://cdn-msp.jmapinodeudzn.net",
+        "https://cdn-msp.jmapiproxy1.cc",
+        "https://cdn-msp.jmapiproxy2.cc",
     ];
 
     static imageUrl = "https://cdn-msp.jmapinodeudzn.net"
@@ -48,15 +50,13 @@ class JM extends ComicSource {
     }
 
     get baseUrl() {
-        let domains = JM.apiDomains
-        if (!domains || domains.length === 0) {
-            domains = JM.fallbackServers
+        const line = this.loadSetting("apiDomain");
+        if (line !== this.selectedLine) {
+            this.selectedLine = line;
+            this.activeServer = "";
         }
-        let index = parseInt(this.loadSetting('apiDomain')) - 1
-        if (isNaN(index) || index < 0 || index >= domains.length) {
-            index = 0
-        }
-        return `https://${domains[index]}`
+        const preferred = JM.apiDomains[Number(line) - 1] || JM.fallbackServers[0];
+        return "https://" + (this.activeServer || preferred);
     }
 
     get imageUrl() {
@@ -64,7 +64,8 @@ class JM extends ComicSource {
     }
 
     overwriteApiDomains(domains) {
-        if (domains.length != 0) JM.apiDomains = domains
+        const valid = domains.filter(host => typeof host === "string" && /^[a-z0-9.-]+\.[a-z]{2,}$/i.test(host));
+        JM.apiDomains = [...new Set([...JM.fallbackServers, ...valid])];
     }
 
     overwriteImgUrl(url) {
@@ -78,7 +79,7 @@ class JM extends ComicSource {
     get baseHeaders() {
         return {
             "Accept": "*/*",
-            "Accept-Encoding": "gzip, deflate, br, zstd",
+            "Accept-Encoding": "gzip, deflate",
             "Accept-Language": "zh-CN,zh;q=0.9,en-US;q=0.8,en;q=0.7",
             "Connection": "keep-alive",
             "Origin": "https://localhost",
@@ -110,7 +111,7 @@ class JM extends ComicSource {
     getImgHeaders() {
         return {
             "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
-            "Accept-Encoding": "gzip, deflate, br, zstd",
+            "Accept-Encoding": "gzip, deflate",
             "Accept-Language": "zh-CN,zh;q=0.9,en-US;q=0.8,en;q=0.7",
             "Connection": "keep-alive",
             "Referer": "https://localhost/",
@@ -135,18 +136,9 @@ class JM extends ComicSource {
         return `${this.imageUrl}/media/users/${imageName}`
     }
 
-    async init() {
-        // Always seed domains so explore works even if refresh is skipped / fails.
-        if (!JM.apiDomains || JM.apiDomains.length === 0) {
-            this.overwriteApiDomains(JM.fallbackServers)
-        }
-        if (this.loadSetting('refreshDomainsOnStart')) {
-            await this.refreshApiDomains(false)
-        }
-        try {
-            await this.refreshImgUrl(false)
-        } catch (e) {
-            // Keep default image CDN if the setting endpoint is unavailable.
+    init() {
+        if (this.loadSetting("refreshDomainsOnStart")) {
+            this.refreshApiDomains(false).catch(() => {});
         }
     }
 
@@ -169,8 +161,8 @@ class JM extends ComicSource {
         }
         if (res && res.status === 200) {
             let data = this.convertData(await res.text(), domainSecret)
-            let json = JSON.parse(data)
-            if (json["Server"]) {
+            let json = data ? JSON.parse(data) : null
+            if (Array.isArray(json?.Server)) {
                 title = "更新成功"
                 message = "\n"
                 servers = json["Server"].slice(0, 4)
@@ -222,7 +214,8 @@ class JM extends ComicSource {
             if (showMessage) {
                 UI.showMessage(`Image Stream ${index}:\n${setting["img_host"]}`)
             }
-            this.overwriteImgUrl(setting["img_host"])
+            const host = new URL(setting["img_host"]);
+            if (host.protocol === "https:" && !host.username && !host.password) this.overwriteImgUrl(host.origin);
         }
     }
 
@@ -238,11 +231,11 @@ class JM extends ComicSource {
         let description = comic.description ?? ""
         let cover = this.getCoverUrl(id)
         let tags =[]
-        if(comic["category"]["title"]) {
-            tags.push(comic["category"]["title"])
+        if(comic.category?.title) {
+            tags.push(comic.category?.title)
         }
-        if(comic["category_sub"]["title"]) {
-            tags.push(comic["category_sub"]["title"])
+        if(comic.category_sub?.title) {
+            tags.push(comic.category_sub?.title)
         }
         return new Comic({
             id: id,
@@ -282,26 +275,31 @@ class JM extends ComicSource {
      * @returns {Promise<string>}
      */
     async get(url) {
-        let time = Math.floor(Date.now() / 1000)
-        let kJmSecret = "185Hcomic3PAPP7R"
-        let res = await Network.get(url, this.getApiHeaders(time))
-        if(res.status !== 200) {
-            if(res.status === 401) {
-                let json = JSON.parse(res.body)
-                let message = json.errorMsg
-                if(message === "請先登入會員" && this.isLogged) {
-                    throw 'Login expired'
+        const request = new URL(url);
+        const hosts = [...new Set([request.hostname, ...JM.apiDomains])];
+        let failure;
+        for (const host of hosts.slice(0, 3)) {
+            request.hostname = host;
+            const time = Math.floor(Date.now() / 1000);
+            try {
+                const response = await Network.get(request.href, this.getApiHeaders(time));
+                if (response.status === 401) {
+                    const message = JSON.parse(response.body).errorMsg || "请先登录禁漫天堂";
+                    throw Object.assign(new Error(message), { loginRequired: true });
                 }
-                throw message ?? 'Invalid Status Code: ' + res.status
+                if (response.status !== 200) throw new Error("HTTP " + response.status);
+                const payload = JSON.parse(response.body);
+                if (typeof payload.data !== "string") throw new Error(payload.errorMsg || "响应格式无效");
+                const result = this.convertData(payload.data, time + "185Hcomic3PAPP7R");
+                if (!result) throw new Error("服务器返回空数据");
+                this.activeServer = host;
+                return result;
+            } catch (error) {
+                if (error.loginRequired) throw error;
+                failure = error;
             }
-            throw 'Invalid Status Code: ' + res.status
         }
-        let json = JSON.parse(res.body)
-        let data = json.data
-        if(typeof data !== 'string') {
-            throw 'Invalid Data'
-        }
-        return this.convertData(data, `${time}${kJmSecret}`)
+        throw new Error("禁漫天堂线路暂不可用：" + (failure?.message || "请稍后重试"));
     }
 
     async post(url, body) {
@@ -820,7 +818,7 @@ class JM extends ComicSource {
                 chapters.set(id, '第1話')
             }
             let tags = data.tags ?? []
-            let related = data["related_list"].map((e) => new Comic({
+            let related = (data.related_list ?? []).map((e) => new Comic({
                 id: e.id.toString(),
                 title: e.name,
                 subtitle: e.author ?? "",
@@ -848,6 +846,7 @@ class JM extends ComicSource {
                 isFavorite: data.is_favorite ?? false,
                 isLiked: data.liked ?? false,
                 updateTime: updateDate,
+                url: JM.webReader + "/album/" + encodeURIComponent(id),
             })
         },
         /**
@@ -857,8 +856,10 @@ class JM extends ComicSource {
          * @returns {Promise<{images: string[]}>}
          */
         loadEp: async (comicId, epId) => {
+            epId = epId || comicId;
             let res = await this.get(`${this.baseUrl}/chapter?id=${epId}`);
             let data = JSON.parse(res)
+            if (!Array.isArray(data.images)) throw new Error("禁漫天堂未返回章节图片");
             let images = data.images.map((e) => this.getImageUrl(epId, e))
             return {
                 images: images
@@ -873,20 +874,15 @@ class JM extends ComicSource {
          */
         onImageLoad: (url, comicId, epId) => {
             const scrambleId = 220980
-            let pictureName = "";
-            for (let i = url.length - 1; i >= 0; i--) {
-                if (url[i] === '/') {
-                    pictureName = url.substring(i + 1, url.length - 5);
-                    break;
-                }
-            }
-            epId = Number(epId);
+            const imagePath = new URL(url).pathname;
+            const pictureName = imagePath.split("/").pop().replace(/\.[^.]+$/, "");
+            epId = Number(epId || comicId);
             let num = 0
             if(epId < scrambleId) {
                 num = 0
             } else if (epId < 268850) {
                 num = 10
-            } else if (epId > 421926) {
+            } else if (epId >= 421926) {
                 let str = epId.toString() + pictureName
                 let bytes = Convert.encodeUtf8(str)
                 let hash = Convert.md5(bytes)
@@ -903,13 +899,7 @@ class JM extends ComicSource {
                 let remainder = charCode % 10
                 num = remainder * 2 + 2
             }
-            if (num <= 1) {
-                return {}
-            }
-            return {
-                headers: this.getImgHeaders(),
-                // gif 图片不需要修改
-                modifyImage: url.endsWith(".gif") ? null : `
+            const modifyImage = num <= 1 || /\.gif$/i.test(imagePath) ? null : `
                     let modifyImage = (image) => {
                         const num = ${num}
                         let blockSize = Math.floor(image.height / num)
@@ -933,8 +923,15 @@ class JM extends ComicSource {
                         }
                         return res
                     }
-                `,
-            }
+                `;
+            const origins = [...new Set([new URL(url).origin, ...JM.imageServers])];
+            const config = index => ({
+                url: new URL(imagePath, origins[index]).href,
+                headers: this.getImgHeaders(),
+                modifyImage,
+                onLoadFailed: () => index + 1 < origins.length ? config(index + 1) : null
+            });
+            return config(0);
         },
         /**
          * [Optional] provide configs for a thumbnail loading

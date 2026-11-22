@@ -1,4 +1,5 @@
 class Zaimanhua extends ComicSource {
+    website = "https://www.zaimanhua.com/";
   // 基础信息
   name = "再漫画";
   key = "zaimanhua";

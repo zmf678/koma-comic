@@ -1,4 +1,4 @@
-# KomaComic (漫格漫画)
+# 页光 Koma
 
 <p>
   <img src="app/src/main/res/drawable-nodpi/ic_koma_logo.png" alt="KomaComic Icon" width="96" />
@@ -6,7 +6,7 @@
 
 **中文** | [English](README_EN.md)
 
-**KomaComic (漫格漫画)** 是一款面向 Android 平板与手机端开源本地/WebDAV 与在线漫画阅读器，取名自日语漫画“分格（Koma）”概念，专注多源漫画阅读、平板竖单横双自适应分屏阅读与纯粹无干扰体验——无广告、无过期弹窗、无任何第三方统计分析。
+**页光 Koma** 是一款面向 Windows、Android 平板与手机的开源本地/WebDAV 与在线漫画阅读器，取名自日语漫画“分格（Koma）”概念，专注多源漫画阅读、平板竖单横双自适应分屏阅读与纯粹无干扰体验——无广告、无过期弹窗、无任何第三方统计分析。
 
 > 包名：`com.arkreader.comic` · 最低支持：Android 9.0 (API 28) · 目标版本：Android 14 (API 34)
 
@@ -17,8 +17,8 @@
 ### 1. 内置 Venera 兼容动漫源 & 作品集系统
 - **内置在线动漫源 + 标准 Venera 源仓库订阅**：
   - 内置轻量无依赖 JS 运行时 (`WebView` / Windows `WebView2` + 原生 Cookie/AES/Hash 桥接)，直接兼容 Venera / Venera-Next 标准 `ComicSource` JS 脚本与 `index.json` 源仓库订阅。
-  - **开箱内置 148 个社区开源漫画源**（含拷贝漫画、再漫画、包子漫画、动漫之家、漫画柜、动漫屋、MangaDex、Picacg、漫蛙、禁漫天堂、紳士漫畫等，来自 `zmf678/venera-sources`）并支持在「源管理」中一键全启/全停、搜索与同步更新。
-  - 首页顶部即可切换各个动漫源、本地全部、收藏与最近阅读，支持在线搜索、分页浏览、详情同步与一键 **加入作品集**。
+  - **内置 65 个漫画源**，包括再漫画、快看漫画、禁漫天堂与 Komiic。Komiic 的阅读章节需要源账号，可在「设置 → 漫画源与登录」登录。
+  - 首页记住上次漫画源，栏目横排，滚动自动续页。在线收藏与本地书架分别管理；已缓存的封面和简介可离线查看。
 - **作品集与隐私加密**：
   - 自定义作品集分组，支持从「本地全部」隐藏隐私作品集。
   - 支持 **数字 PIN 密码锁** 与系统 **`BiometricPrompt` 指纹/生物识别锁**（可选切出后台 2 秒自动重锁）。
@@ -36,6 +36,15 @@
 - **悬浮圆角胶囊菜单 + 跨页匹配胶囊**：采用居中半透明暗色圆角胶囊控制栏（含进度条、上/下一章切换、阅读设置、书签与章节目录）以及右上方 **「更改跨页匹配」** 悬浮按键。
 - **竖屏单页 / 横屏自动双页 (`AUTO_LANDSCAPE`)**：竖屏自动单页、横屏自动双页并排拼接并保留当前进度；支持预检测原生跨页宽图，避免已合图二次拼接。
 - **高度可定制阅读配置**：垂直连续滚动、水平从左到右 (LTR)、水平从右到左 (RTL / 日漫)、多种点击翻页区、音量键翻页、智能白边裁剪、空白页跳过、背景色及自定义分页参数。
+
+### 4. 漫画翻译与外观
+
+在设置中选择本地背景壁纸，或启用带高光、半透明边缘和背景柔化的液态玻璃材质。
+
+1. 按 [manga-image-translator 的部署说明](https://github.com/zyddnys/manga-image-translator)启动 Web API。若使用 Ollama 或其他兼容模型，请在翻译服务端配置模型和凭据。
+2. 在「设置 → 漫画翻译」填写服务地址。客户端调用 `POST /translate/with-form/image`，默认目标为简体中文。JSON 配置可使用服务端支持的目标语言和翻译器。
+3. 阅读时轻点画面中央显示工具栏，选择「翻译」后，当前显示的漫画页才会发送至所填服务。翻页会继续翻译，选择「原文」可恢复原图。译图在本机缓存。
+
 
 ---
 
@@ -83,7 +92,7 @@ powershell -ExecutionPolicy Bypass -File windows/build-windows.ps1
 gradle assembleWindows
 ```
 输出目录：`build/windows/KomaComic-windows-x64/KomaComic.exe`  
-发布压缩包：`build/release/KomaComic-v1.3.1-windows-x64.zip`
+发布压缩包：`build/release/KomaComic-v1.4.0-windows-x64.zip`
 
 ---
 

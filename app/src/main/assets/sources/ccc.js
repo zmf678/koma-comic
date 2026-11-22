@@ -1,5 +1,6 @@
 /** @type {import('./_venera_.js')} */
 class CCC extends ComicSource {
+    website = "https://www.creative-comic.tw/";
     // Note: The fields which are marked as [Optional] should be removed if not used
 
     // name of the source

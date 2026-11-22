@@ -7,11 +7,11 @@
     <item
         android:id="@+id/menu_bookshelf"
         android:icon="@drawable/ic_bookshelf"
-        android:title="@string/nav_bookshelf" />
+        android:title="本地书架" />
     <item
-        android:id="@+id/menu_warehouse"
-        android:icon="@drawable/ic_warehouse"
-        android:title="@string/nav_warehouse" />
+        android:id="@+id/menu_online_favorites"
+        android:icon="@drawable/ic_favorite"
+        android:title="在线收藏" />
     <item
         android:id="@+id/menu_settings"
         android:icon="@drawable/ic_settings"

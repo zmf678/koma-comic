@@ -142,6 +142,7 @@ class Remenmanhua extends ComicSource {
       }
       for (let [cid, name] of items) chapters.set(cid, name);
       return new ComicDetails({
+        url: "http://m.remenmanhua.com/comic/" + encodeURIComponent(id),
         title,
         cover: Remenmanhua.abs(cover),
         description: "",

@@ -1,4 +1,5 @@
 class Dongmanmanhua extends ComicSource {
+    website = "https://www.dongmanmanhua.cn/";
     name = "咚漫"
     key = "dongman"
     version = "1.0.8"

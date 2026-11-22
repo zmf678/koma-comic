@@ -1,4 +1,5 @@
 class ComicWalker extends ComicSource {
+    website = "https://comic-walker.com/";
   name = "カドコミ";
   key = "comic_walker";
   version = "1.3.2";   // 增强 ID 提取，修复链接解析

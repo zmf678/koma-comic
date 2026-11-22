@@ -61,6 +61,13 @@ object VeneraScriptParser {
         return Triple(sourceKey, remoteId, epId)
     }
 
+    fun parseVeneraComicUri(uri: String): Pair<String, String>? {
+        if (!uri.startsWith("venera://")) return null
+        val parts = uri.removePrefix("venera://").split("/", limit = 2)
+        if (parts.size != 2 || parts.any(String::isEmpty)) return null
+        return parts[0] to parts[1]
+    }
+
     fun parseRepoIndexJson(jsonText: String, repoIndexUrl: String): List<RepoSourceItem> {
         val baseUrl = repoIndexUrl.substringBeforeLast("/", "")
         val arr = JSONArray(jsonText.trim())
@@ -270,6 +277,8 @@ object VeneraScriptParser {
         val chObj = obj.optJSONObject("chapters")
         if (chObj != null) {
             extractChaptersRecursive(chObj, defaultGroup = "", out = chapters)
+        } else if (obj.optBoolean("wholeBook")) {
+            chapters.add(RemoteChapter(id = "", title = "全本"))
         }
 
         return RemoteComicDetails(
@@ -343,7 +352,7 @@ object VeneraScriptParser {
                     val url = elem.optString("url", "")
                     if (url.isNotBlank()) {
                         val itemHeaders = globalHeaders + jsonToStringMap(elem.optJSONObject("headers"))
-                        list.add(RemotePageImage(url, itemHeaders))
+                        list.add(RemotePageImage(url, itemHeaders, elem.optBoolean("useSourceLoader")))
                     }
                 }
             }

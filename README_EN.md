@@ -1,4 +1,4 @@
-# KomaComic (漫格漫画)
+# 页光 Koma
 
 <p>
   <img src="app/src/main/res/drawable-nodpi/ic_koma_logo.png" alt="KomaComic Icon" width="96" />
@@ -6,7 +6,7 @@
 
 [中文](README.md) | **English**
 
-**KomaComic** is an open-source online-source, local, and WebDAV comic/manga reader built for Android tablets and phones. Named after the comic panel (*Koma*), it features a built-in Venera-compatible JavaScript comic source engine, adaptive portrait/landscape double-page reading on large screens, and an edge-to-edge distraction-free interface—no ads, no expiration popups, and no third-party tracking SDKs.
+**Koma** is an open-source online-source, local, and WebDAV comic/manga reader built for Windows and Android tablets and phones. Named after the comic panel (*Koma*), it features a built-in Venera-compatible JavaScript comic source engine, adaptive portrait/landscape double-page reading on large screens, and an edge-to-edge distraction-free interface—no ads, no expiration popups, and no third-party tracking SDKs.
 
 > Package ID: `com.arkreader.comic` · Minimum SDK: Android 9.0 (API 28) · Target SDK: Android 14 (API 34)
 
@@ -17,10 +17,10 @@
 ### 1. Built-in Venera-Compatible Comic Sources & Collections (`作品集`)
 - **Built-in JS Comic Source Runtime & Repository Subscription**:
   - Zero-dependency Android `WebView` / Windows `WebView2` + native HTTP/Cookie/Crypto/DOM bridge compatible with standard Venera / Venera-Next `ComicSource` JS scripts and `index.json` repositories.
-  - **Ships with 148 built-in comic sources** from `zmf678/venera-sources` (plus search, one-tap enable/disable all, repo sync, and custom `.js` import in **Source Manager**).
-  - Switch between active online comic sources, Local All, Favorites, and Recent History directly on the **Home** tab, with search, endless pagination, and one-tap **Add to Collection (`加入作品集`)**.
+  - Includes 65 sources. Komiic chapter reading requires a source account. Source management and sign-in are available in Settings.
+  - Home remembers the last source, shows channels as horizontal tabs, and loads the next page as you scroll. Online favorites retain cached covers and summaries.
 - **Collections & Privacy Lock**:
-  - Group local and online comics into custom Collections (`作品集`), optionally hiding private collections from the Local gallery.
+  - Group imported comics into local Collections (`作品集`), optionally hiding private collections from the Local gallery.
   - Protect any collection with a **Numeric PIN** or system **`BiometricPrompt` fingerprint lock** (with optional 2-second quick relock).
 
 ### 2. Multi-Source Local / WebDAV Libraries & Formats
@@ -37,6 +37,13 @@
 - **Floating Rounded Capsule Menu & Spread Pairing Pill**: Minimalist dark floating bottom capsule (progress seek bar, previous/next chapter, hexagon reader settings, bookmarks, chapters directory) topped by the **Change Spread Pairing (`更改跨页匹配`)** floating pill.
 - **Portrait Single Page / Landscape Double Spread (`AUTO_LANDSCAPE`)**: Automatically switches between single-page portrait and side-by-side double-page landscape spreads while preserving reading position on rotation.
 - **Customizable Per-Comic Reader Profiles**: Vertical continuous scroll, Horizontal LTR, Horizontal RTL, pinch/double-tap zoom, customizable tap zones, volume-key flipping, smart white-margin trimming, blank-page detection, and bookmarks.
+
+### 4. Translation and Appearance
+
+Choose a local wallpaper and optionally enable the translucent glass material in Settings.
+
+Connect a self-hosted [manga-image-translator](https://github.com/zyddnys/manga-image-translator) Web API under Settings → Manga Translation. The clients send the visible comic page to the configured server only after you enable Translate in the reader. The server handles OCR, translation, and typesetting. You can configure Ollama or another supported model on the server and use the reader toggle to restore the original page.
+
 
 ---
 
@@ -84,7 +91,7 @@ powershell -ExecutionPolicy Bypass -File windows/build-windows.ps1
 gradle assembleWindows
 ```
 Portable output: `build/windows/KomaComic-windows-x64/KomaComic.exe`  
-Release archive: `build/release/KomaComic-v1.3.1-windows-x64.zip`
+Release archive: `build/release/KomaComic-v1.4.0-windows-x64.zip`
 
 ---
 

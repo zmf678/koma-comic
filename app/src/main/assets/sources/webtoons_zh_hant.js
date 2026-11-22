@@ -1,4 +1,5 @@
 class WebtoonsZhHant extends ComicSource {
+    website = "https://www.webtoons.com/zh-hant/";
     name = "LINE WEBTOON"
     key = "webtoons_zh_hant"
     version = "1.0.1"

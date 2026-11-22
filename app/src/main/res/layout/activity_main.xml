@@ -6,6 +6,13 @@
     android:background="@color/surface_bg"
     android:fitsSystemWindows="true">
 
+    <ImageView
+        android:id="@+id/libraryWallpaper"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:importantForAccessibility="no"
+        android:scaleType="centerCrop" />
+
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="match_parent"
@@ -80,54 +87,28 @@
                     </LinearLayout>
                 </LinearLayout>
 
-                <!-- Home source & quick filter chips -->
-                <HorizontalScrollView
-                    android:id="@+id/chipScroll"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:scrollbars="none">
-
-                    <com.google.android.material.chip.ChipGroup
-                        android:id="@+id/chipGroupHome"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:paddingHorizontal="16dp"
-                        app:selectionRequired="true"
-                        app:singleLine="true"
-                        app:singleSelection="true">
-
-                        <com.google.android.material.chip.Chip
-                            android:id="@+id/chipAll"
-                            style="@style/Widget.Material3.Chip.Filter"
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:checked="true"
-                            android:text="@string/tab_all" />
-
-                        <com.google.android.material.chip.Chip
-                            android:id="@+id/chipFavorite"
-                            style="@style/Widget.Material3.Chip.Filter"
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:text="@string/tab_favorite" />
-
-                        <com.google.android.material.chip.Chip
-                            android:id="@+id/chipHistory"
-                            style="@style/Widget.Material3.Chip.Filter"
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:text="@string/tab_history" />
-                    </com.google.android.material.chip.ChipGroup>
-                </HorizontalScrollView>
-
-                <!-- Section header: title + count + overflow menu -->
                 <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:gravity="center_vertical"
                     android:orientation="horizontal"
-                    android:paddingHorizontal="18dp"
-                    android:paddingVertical="6dp">
+                    android:paddingHorizontal="16dp">
+                    <HorizontalScrollView
+                        android:id="@+id/chipScroll"
+                        android:layout_width="0dp"
+                        android:layout_weight="1"
+                        android:layout_height="wrap_content"
+                        android:scrollbars="none">
+
+                        <com.google.android.material.chip.ChipGroup
+                            android:id="@+id/chipGroupHome"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:paddingEnd="8dp"
+                            app:selectionRequired="true"
+                            app:singleLine="true"
+                            app:singleSelection="true" />
+                    </HorizontalScrollView>
 
                     <TextView
                         android:id="@+id/tvSectionTitle"
@@ -135,27 +116,17 @@
                         android:layout_height="wrap_content"
                         android:layout_weight="1"
                         android:ellipsize="end"
-                        android:maxLines="2"
-                        android:text="全部"
+                        android:maxLines="1"
+                        android:textAppearance="?attr/textAppearanceTitleLarge"
                         android:textColor="@color/text_primary"
-                        android:textSize="18sp"
-                        android:textStyle="bold" />
-
-                    <TextView
-                        android:id="@+id/tvSectionCount"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:layout_marginStart="8dp"
-                        android:text="0"
-                        android:textColor="@color/text_secondary"
-                        android:textSize="13sp" />
+                        android:visibility="gone" />
 
                     <ImageButton
                         android:id="@+id/btnMore"
-                        android:layout_width="36dp"
-                        android:layout_height="36dp"
+                        android:layout_width="48dp"
+                        android:layout_height="48dp"
                         android:background="?attr/selectableItemBackgroundBorderless"
-                        android:contentDescription="更多"
+                        android:contentDescription="更多操作"
                         android:src="@drawable/ic_more_vert"
                         app:tint="@color/text_primary" />
                 </LinearLayout>

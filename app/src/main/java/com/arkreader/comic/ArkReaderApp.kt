@@ -1,6 +1,7 @@
 package com.arkreader.comic
 
 import android.app.Application
+import android.util.Log
 import androidx.appcompat.app.AppCompatDelegate
 import com.arkreader.comic.data.ComicSourceEntity
 import com.arkreader.comic.data.DatabaseHelper
@@ -35,9 +36,13 @@ class ArkReaderApp : Application() {
             val existing = db.getComicSources().associateBy { it.sourceKey }
             val jsonText = assets.open("sources/builtin_sources.json").bufferedReader().use { it.readText() }
             val arr = JSONArray(jsonText)
+            val retained = (0 until arr.length()).mapNotNull { arr.optJSONObject(it)?.optString("key") }.toSet()
             val writable = db.writableDatabase
             writable.beginTransaction()
             try {
+                existing.values.filter { it.builtIn && it.sourceKey !in retained }.forEach {
+                    db.deleteComicSource(it.sourceKey)
+                }
                 for (i in 0 until arr.length()) {
                     val obj = arr.optJSONObject(i) ?: continue
                     val key = obj.optString("key")
@@ -46,8 +51,9 @@ class ArkReaderApp : Application() {
                     val fileName = obj.optString("fileName")
                     if (key.isEmpty() || fileName.isEmpty()) continue
                     val prev = existing[key]
-                    if (prev != null && (!prev.builtIn || (prev.version == version && prev.sortOrder == i))) continue
+                    if (prev != null && !prev.builtIn) continue
                     val script = assets.open(fileName).bufferedReader().use { it.readText() }
+                    if (prev != null && prev.script == script && prev.version == version && prev.sortOrder == i) continue
                     db.upsertComicSource(
                         ComicSourceEntity(
                             sourceKey = key,
@@ -64,6 +70,8 @@ class ArkReaderApp : Application() {
             } finally {
                 writable.endTransaction()
             }
+        }.onFailure { error ->
+            Log.e("ArkReaderApp", "Failed to update bundled comic sources", error)
         }
     }
 

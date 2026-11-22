@@ -11,6 +11,7 @@ import java.security.MessageDigest
 class DatabaseHelper(context: Context) : SQLiteOpenHelper(context, DB_NAME, null, DB_VERSION) {
 
     override fun onCreate(db: SQLiteDatabase) {
+        createOnlineMetadataTable(db)
         db.execSQL("""
             CREATE TABLE warehouses (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -170,7 +171,49 @@ class DatabaseHelper(context: Context) : SQLiteOpenHelper(context, DB_NAME, null
             """.trimIndent())
             db.execSQL("UPDATE bookshelves SET name = '默认作品集' WHERE id = 1 AND name = '默认书架'")
         }
+        if (oldVersion < 4) {
+            createOnlineMetadataTable(db)
+            db.execSQL("UPDATE comics SET is_favorite = 1 WHERE format = 'ONLINE' AND id IN (SELECT comic_id FROM bookshelf_comics)")
+        }
     }
+
+    private fun createOnlineMetadataTable(db: SQLiteDatabase) {
+        db.execSQL("""
+            CREATE TABLE IF NOT EXISTS online_metadata (
+                comic_id INTEGER PRIMARY KEY,
+                description TEXT NOT NULL DEFAULT '',
+                official_url TEXT NOT NULL DEFAULT ''
+            )
+        """.trimIndent())
+    }
+
+    fun saveOnlineMetadata(comicId: Long, description: String, url: String = "") {
+        val values = ContentValues().apply {
+            if (description.isNotBlank()) put("description", description)
+            if (url.isNotBlank()) put("official_url", url)
+        }
+        if (values.size() == 0) return
+        val database = writableDatabase
+        database.beginTransaction()
+        try {
+            if (database.update("online_metadata", values, "comic_id = ?", arrayOf(comicId.toString())) == 0) {
+                values.put("comic_id", comicId)
+                database.insertOrThrow("online_metadata", null, values)
+            }
+            database.setTransactionSuccessful()
+        } finally {
+            database.endTransaction()
+        }
+    }
+
+    fun getOnlineMetadata(comicId: Long): Pair<String, String> =
+        readableDatabase.rawQuery(
+            "SELECT description, official_url FROM online_metadata WHERE comic_id = ?",
+            arrayOf(comicId.toString())
+        ).use { cursor ->
+            if (cursor.moveToFirst()) cursor.getString(0) to cursor.getString(1) else "" to ""
+        }
+
 
     // --- Warehouses ---
 
@@ -258,11 +301,13 @@ class DatabaseHelper(context: Context) : SQLiteOpenHelper(context, DB_NAME, null
             bookshelfId > 0 -> """
                 SELECT c.* FROM comics c
                 INNER JOIN bookshelf_comics bc ON c.id = bc.comic_id
-                WHERE bc.bookshelf_id = ?
+                WHERE bc.bookshelf_id = ? AND c.format <> 'ONLINE'
             """.trimIndent()
+            tabMode == 4 -> "SELECT * FROM comics WHERE format <> 'ONLINE'"
+            tabMode == 3 -> "SELECT * FROM comics WHERE is_favorite = 1 AND format = 'ONLINE'"
             tabMode == 1 -> "SELECT * FROM comics WHERE is_favorite = 1"
             tabMode == 2 -> "SELECT * FROM comics WHERE last_read_at > 0"
-            else -> "SELECT * FROM comics"
+            else -> "SELECT * FROM comics WHERE format <> 'ONLINE' OR total_chapters > 0"
         }
         val args = if (bookshelfId > 0) arrayOf(bookshelfId.toString()) else null
         readableDatabase.rawQuery(sql, args).use { c ->
@@ -747,6 +792,23 @@ class DatabaseHelper(context: Context) : SQLiteOpenHelper(context, DB_NAME, null
         writableDatabase.delete("comic_sources", "source_key = ?", arrayOf(sourceKey))
     }
 
+    fun getOnlineComic(sourceKey: String, remoteId: String): Comic? =
+        getComicBySourceUri("venera://$sourceKey/$remoteId")
+
+    fun saveOnlinePreview(sourceKey: String, remoteId: String, title: String, coverKey: String): Comic {
+        val database = writableDatabase
+        database.beginTransaction()
+        try {
+            val comic = getOnlineComic(sourceKey, remoteId) ?: upsertOnlineComic(
+                sourceKey, remoteId, title.ifBlank { remoteId }, coverKey, emptyList()
+            ).let { checkNotNull(getComic(it)) }
+            database.setTransactionSuccessful()
+            return comic
+        } finally {
+            database.endTransaction()
+        }
+    }
+
     fun getComicBySourceUri(sourceUri: String): Comic? {
         readableDatabase.rawQuery(
             "SELECT * FROM comics WHERE source_uri = ? LIMIT 1",
@@ -764,12 +826,12 @@ class DatabaseHelper(context: Context) : SQLiteOpenHelper(context, DB_NAME, null
         sourceKey: String,
         remoteId: String,
         title: String,
-        subTitle: String,
         coverKey: String,
         chapters: List<RemoteChapter>
     ): Long {
         val now = System.currentTimeMillis()
         val comicUri = "venera://$sourceKey/$remoteId"
+        val distinctChapters = chapters.distinctBy { it.id }
         writableDatabase.beginTransaction()
         try {
             val existing = getComicBySourceUri(comicUri)
@@ -779,7 +841,7 @@ class DatabaseHelper(context: Context) : SQLiteOpenHelper(context, DB_NAME, null
                 val cv = ContentValues().apply {
                     put("title", title)
                     if (coverKey.isNotEmpty()) put("cover_cache_key", coverKey)
-                    if (chapters.isNotEmpty()) put("total_chapters", chapters.size)
+                    if (distinctChapters.isNotEmpty()) put("total_chapters", distinctChapters.size)
                     put("updated_at", now)
                 }
                 writableDatabase.update("comics", cv, "id = ?", arrayOf(comicId.toString()))
@@ -790,7 +852,7 @@ class DatabaseHelper(context: Context) : SQLiteOpenHelper(context, DB_NAME, null
                     put("source_uri", comicUri)
                     put("format", ComicFormat.ONLINE.name)
                     put("cover_cache_key", coverKey)
-                    put("total_chapters", chapters.size)
+                    put("total_chapters", distinctChapters.size)
                     put("last_read_chapter_id", 0L)
                     put("last_read_page", 0)
                     put("last_read_at", 0L)
@@ -801,31 +863,42 @@ class DatabaseHelper(context: Context) : SQLiteOpenHelper(context, DB_NAME, null
                 comicId = writableDatabase.insert("comics", null, cv)
             }
 
-            if (chapters.isNotEmpty()) {
-                val oldMap = getChapters(comicId).associateBy { it.sourceUri }
-                writableDatabase.delete("chapters", "comic_id = ?", arrayOf(comicId.toString()))
-                var restoredLastChapterId = 0L
-                chapters.forEachIndexed { idx, ch ->
-                    val chUri = "venera://$sourceKey/$remoteId/${ch.id}"
-                    val prev = oldMap[chUri]
-                    val chCv = ContentValues().apply {
+            if (distinctChapters.isNotEmpty()) {
+                val oldChapters = getChapters(comicId)
+                val oldMap = oldChapters.associateBy { it.sourceUri }
+                val retained = mutableSetOf<Long>()
+                distinctChapters.forEachIndexed { idx, ch ->
+                    val chUri = "$comicUri/${ch.id}"
+                    val exactMatch = oldMap[chUri]?.takeUnless { it.id in retained }
+                    val legacyMatch = if (ch.id.startsWith("https://") || ch.id.startsWith("http://")) {
+                        oldChapters.getOrNull(idx)?.takeIf {
+                            it.id !in retained && it.sourceUri == "$comicUri/$idx" && it.title == ch.title
+                        }
+                    } else null
+                    val previous = exactMatch ?: legacyMatch
+                    val values = ContentValues().apply {
                         put("comic_id", comicId)
                         put("title", ch.title)
                         put("source_uri", chUri)
                         put("format", ComicFormat.ONLINE.name)
-                        put("entry_prefix", "$sourceKey|$remoteId|${ch.id}")
-                        put("page_count", prev?.pageCount ?: 0)
                         put("sort_order", idx)
-                        put("last_read_page", prev?.lastReadPage ?: 0)
                     }
-                    val newId = writableDatabase.insert("chapters", null, chCv)
-                    if (existing != null && prev != null && existing.lastReadChapterId == prev.id) {
-                        restoredLastChapterId = newId
+                    if (previous == null) {
+                        retained.add(writableDatabase.insertOrThrow("chapters", null, values))
+                    } else {
+                        writableDatabase.update("chapters", values, "id = ?", arrayOf(previous.id.toString()))
+                        retained.add(previous.id)
                     }
                 }
-                if (restoredLastChapterId > 0) {
-                    val fix = ContentValues().apply { put("last_read_chapter_id", restoredLastChapterId) }
-                    writableDatabase.update("comics", fix, "id = ?", arrayOf(comicId.toString()))
+                oldChapters.filterNot { it.id in retained }.forEach { chapter ->
+                    writableDatabase.delete("chapters", "id = ?", arrayOf(chapter.id.toString()))
+                }
+                if (existing != null && existing.lastReadChapterId > 0 && existing.lastReadChapterId !in retained) {
+                    val reset = ContentValues().apply {
+                        put("last_read_chapter_id", 0L)
+                        put("last_read_page", 0)
+                    }
+                    writableDatabase.update("comics", reset, "id = ?", arrayOf(comicId.toString()))
                 }
             }
             writableDatabase.setTransactionSuccessful()
@@ -938,7 +1011,7 @@ class DatabaseHelper(context: Context) : SQLiteOpenHelper(context, DB_NAME, null
 
     companion object {
         private const val DB_NAME = "ark_reader.db"
-        private const val DB_VERSION = 3
+        private const val DB_VERSION = 4
 
         fun hashPin(pin: String): String {
             val digest = MessageDigest.getInstance("SHA-256").digest(pin.toByteArray(Charsets.UTF_8))

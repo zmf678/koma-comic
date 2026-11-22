@@ -9,6 +9,7 @@
  */
 
 class Lizimh extends ComicSource {
+    website = "https://mh.lizimh.net/";
     constructor() { super(); this.installRepair(); }
     name = "栗子漫画";
     key = "lizimh";

@@ -6,6 +6,7 @@
  * 不执行远程脚本，不猜图，不修改账号权限。
  */
 class Mangabz extends ComicSource {
+    website = "https://www.mangabz.com/";
     name = "Mangabz";
     key = "mangabz";
     version = "1.0.0";

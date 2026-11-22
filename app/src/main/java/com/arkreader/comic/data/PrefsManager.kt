@@ -6,6 +6,26 @@ import android.content.SharedPreferences
 class PrefsManager(context: Context) {
     private val sp: SharedPreferences = context.getSharedPreferences("ark_prefs", Context.MODE_PRIVATE)
 
+    var lastSource: String
+        get() = sp.getString("last_source", "").orEmpty()
+        set(value) = sp.edit().putString("last_source", value).apply()
+
+    var glassMaterial: Boolean
+        get() = sp.getBoolean("glass_material", false)
+        set(value) = sp.edit().putBoolean("glass_material", value).apply()
+
+    var wallpaperEnabled: Boolean
+        get() = sp.getBoolean("wallpaper_enabled", false)
+        set(value) = sp.edit().putBoolean("wallpaper_enabled", value).apply()
+
+    var translationServer: String
+        get() = sp.getString("translation_server", "").orEmpty()
+        set(value) = sp.edit().putString("translation_server", value).apply()
+
+    var translationConfig: String
+        get() = sp.getString("translation_config", "").orEmpty().ifBlank { """{"translator":{"target_lang":"CHS"}}""" }
+        set(value) = sp.edit().putString("translation_config", value).apply()
+
     var themeMode: Int
         get() = sp.getInt("theme_mode", 0) // 0 system, 1 light, 2 dark
         set(value) = sp.edit().putInt("theme_mode", value).apply()

@@ -1,4 +1,5 @@
 class ShonenJumpPlus extends ComicSource {
+    website = "https://shonenjumpplus.com/";
   name = "少年ジャンプ＋";
   key = "shonen_jump_plus";
   version = "1.3.1"; // 修复空封面和空章节崩溃

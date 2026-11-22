@@ -78,20 +78,25 @@ class CoverCache(context: Context) {
         }
     }
 
-    fun getOrDownloadOnlinePageFile(url: String, headers: Map<String, String> = emptyMap()): File? {
-        if (url.isBlank()) return null
-        val key = makeKey("page:$url")
+    fun getOrDownloadOnlinePageFile(
+        key: String,
+        url: String,
+        headers: Map<String, String>,
+        loadBytes: (() -> ByteArray?)? = null
+    ): File? {
         val file = File(pageCacheDir, "$key.img")
-        if (file.exists() && file.length() > 64) return file
+        if (file.exists() && file.length() > 0) return file
         val lock = inFlightKeys.getOrPut("p:$key") { Any() }
         synchronized(lock) {
-            if (file.exists() && file.length() > 64) return file
-            val bytes = fetchHttpBytes(url, headers) ?: return null
+            if (file.exists() && file.length() > 0) return file
+            val bytes = if (loadBytes != null) loadBytes() else fetchHttpBytes(url, headers)
+            if (bytes == null || bytes.isEmpty()) return null
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+            if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
             val tmp = File(pageCacheDir, "$key.tmp")
             FileOutputStream(tmp).use { it.write(bytes) }
-            if (file.exists()) file.delete()
-            tmp.renameTo(file)
-            return file
+            return if (tmp.renameTo(file)) file else null
         }
     }
 
@@ -114,7 +119,9 @@ class CoverCache(context: Context) {
                 if (!hasReferer && url.host.isNotBlank()) {
                     setRequestProperty("Referer", "${url.protocol}://${url.host}/")
                 }
-                headers.forEach { (k, v) -> setRequestProperty(k, v) }
+                headers.forEach { (k, v) ->
+                    if (!k.equals("Accept-Encoding", ignoreCase = true)) setRequestProperty(k, v)
+                }
             }
             val code = conn.responseCode
             if (code in 200..299) {

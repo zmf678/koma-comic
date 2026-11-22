@@ -5,6 +5,7 @@
  */
 
 class HotManga extends ComicSource {
+    website = "https://m.2024manga.com/";
 
     name = "热辣漫画"
 

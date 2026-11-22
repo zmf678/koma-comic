@@ -1,4 +1,5 @@
 class Xmanhua extends ComicSource {
+    website = "https://www.xmanhua.com/";
   name = "X漫画";
   key = "xmanhua";
   version = "1.8.1";

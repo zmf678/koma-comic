@@ -161,6 +161,7 @@ class Isamanhua extends ComicSource {
         chapters.set(cid, name);
       }
       return new ComicDetails({
+        url: "https://m.kanman.com/" + encodeURIComponent(id) + "/",
         title,
         cover: Isamanhua.abs(cover),
         description: "",

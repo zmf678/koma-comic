@@ -3,6 +3,7 @@ package com.arkreader.comic.ui
 import android.content.Intent
 import android.os.Bundle
 import android.view.LayoutInflater
+import android.view.View
 import android.view.ViewGroup
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
@@ -18,7 +19,9 @@ import com.arkreader.comic.databinding.ActivityComicDetailBinding
 import com.arkreader.comic.databinding.ItemChapterBinding
 import com.arkreader.comic.engine.VeneraScriptParser
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -34,6 +37,9 @@ class ComicDetailActivity : AppCompatActivity() {
     private var remotePreviewCover: String = ""
     private var remotePreviewSub: String = ""
     private var onlineLoaded = false
+    private var onlineLoading = false
+    private var onlineError = ""
+    private var officialUrl = ""
     private var comic: Comic? = null
     private var chapters: List<Chapter> = emptyList()
     private var reversedOrder = false
@@ -55,14 +61,15 @@ class ComicDetailActivity : AppCompatActivity() {
         remotePreviewCover = intent.getStringExtra(EXTRA_REMOTE_COVER).orEmpty()
         remotePreviewSub = intent.getStringExtra(EXTRA_REMOTE_SUB).orEmpty()
 
+        binding.ivCover.showCoverLoading(true)
         binding.toolbar.setNavigationOnClickListener { finish() }
         binding.rvChapters.layoutManager = LinearLayoutManager(this)
         binding.rvChapters.adapter = chapterAdapter
 
         binding.btnRead.setOnClickListener {
-            val c = comic
-            if (c == null) {
-                Toast.makeText(this, "详情仍在加载中…", Toast.LENGTH_SHORT).show()
+            val c = comic ?: return@setOnClickListener
+            if (chapters.isEmpty() && c.format == ComicFormat.ONLINE && !onlineLoading && !onlineLoaded) {
+                VeneraScriptParser.parseVeneraComicUri(c.sourceUri)?.let { (key, id) -> fetchAndSyncRemoteDetails(key, id) }
                 return@setOnClickListener
             }
             val target = chapters.find { it.id == c.lastReadChapterId } ?: chapters.firstOrNull()
@@ -82,9 +89,13 @@ class ComicDetailActivity : AppCompatActivity() {
             }
             val next = !c.isFavorite
             app.db.setFavorite(c.id, next)
-            loadDetail()
+            comic = c.copy(isFavorite = next)
+            binding.btnFavorite.text = if (next) "已收藏" else "收藏"
+            binding.btnFavorite.isSelected = next
+            Toast.makeText(this, if (next) "已加入收藏" else "已取消收藏", Toast.LENGTH_SHORT).show()
         }
 
+        binding.btnOfficialWork.setOnClickListener { openComicWebsite(officialUrl) }
         binding.btnBookshelf.setOnClickListener { showBookshelfDialog() }
         binding.btnReaderConfig.setOnClickListener { showReaderConfigDialog() }
         binding.btnReverseOrder.setOnClickListener {
@@ -100,47 +111,19 @@ class ComicDetailActivity : AppCompatActivity() {
 
     private fun loadDetail() {
         if (comicId <= 0L && remoteSourceKey.isNotEmpty() && remoteComicId.isNotEmpty()) {
-            val existing = app.db.getComicBySourceUri("venera://$remoteSourceKey/$remoteComicId")
-            if (existing != null) {
-                comicId = existing.id
-            }
+            val coverKey = if (remotePreviewCover.isBlank()) "" else app.coverCache.makeKey("url:$remotePreviewCover")
+            comicId = app.db.saveOnlinePreview(remoteSourceKey, remoteComicId, remotePreviewTitle, coverKey).id
+            val description = intent.getStringExtra(EXTRA_REMOTE_DESCRIPTION).orEmpty()
+            if (app.db.getOnlineMetadata(comicId).first.isBlank()) app.db.saveOnlineMetadata(comicId, description)
         }
 
-        if (comicId > 0L) {
-            val loaded = app.db.getComic(comicId)
-            if (loaded != null) {
-                comic = loaded
-                chapters = app.db.getChapters(comicId)
-                bindLocalComicUi(loaded)
-                if (loaded.format == ComicFormat.ONLINE && !onlineLoaded) {
-                    val parsed = VeneraScriptParser.parseVeneraUri(loaded.sourceUri)
-                    if (parsed != null) {
-                        onlineLoaded = true
-                        fetchAndSyncRemoteDetails(parsed.first, parsed.second)
-                    }
-                }
-                return
-            }
-        }
-
-        if (remoteSourceKey.isNotEmpty() && remoteComicId.isNotEmpty()) {
-            binding.toolbar.title = remotePreviewTitle.ifEmpty { "在线漫画" }
-            binding.tvTitle.text = remotePreviewTitle.ifEmpty { remoteComicId }
-            binding.tvMeta.text = "在线源: ${app.db.getComicSource(remoteSourceKey)?.name ?: remoteSourceKey}" +
-                if (remotePreviewSub.isNotEmpty()) " · $remotePreviewSub" else ""
-            binding.tvLastRead.text = "正在加载详情与章节..."
-            binding.btnRead.text = "加载中"
-            if (remotePreviewCover.isNotBlank()) {
-                lifecycleScope.launch {
-                    val (_, bmp) = withContext(Dispatchers.IO) {
-                        app.coverCache.getOrDownloadHttpCover(remotePreviewCover)
-                    }
-                    if (bmp != null) binding.ivCover.setImageBitmap(bmp)
-                }
-            }
-            if (!onlineLoaded) {
-                onlineLoaded = true
-                fetchAndSyncRemoteDetails(remoteSourceKey, remoteComicId)
+        val loaded = app.db.getComic(comicId)
+        if (loaded != null) {
+            comic = loaded
+            chapters = app.db.getChapters(comicId)
+            bindLocalComicUi(loaded)
+            if (loaded.format == ComicFormat.ONLINE && !onlineLoaded && !onlineLoading && onlineError.isEmpty()) {
+                VeneraScriptParser.parseVeneraComicUri(loaded.sourceUri)?.let { (key, id) -> fetchAndSyncRemoteDetails(key, id) }
             }
             return
         }
@@ -153,7 +136,7 @@ class ComicDetailActivity : AppCompatActivity() {
         binding.toolbar.title = loaded.title
         binding.tvTitle.text = loaded.title
         val sourceLabel = if (loaded.format == ComicFormat.ONLINE) {
-            val srcKey = VeneraScriptParser.parseVeneraUri(loaded.sourceUri)?.first.orEmpty()
+            val srcKey = VeneraScriptParser.parseVeneraComicUri(loaded.sourceUri)?.first.orEmpty()
             val srcName = app.db.getComicSource(srcKey)?.name ?: srcKey
             "在线源: $srcName"
         } else {
@@ -169,7 +152,33 @@ class ComicDetailActivity : AppCompatActivity() {
             "尚未开始阅读"
         }
         binding.btnRead.text = if (lastChap != null) "继续阅读" else "开始阅读"
+        binding.btnRead.isEnabled = true
         binding.btnFavorite.text = if (loaded.isFavorite) "已收藏" else "收藏"
+        binding.btnFavorite.isSelected = loaded.isFavorite
+        binding.btnBookshelf.visibility = if (loaded.format == ComicFormat.ONLINE) View.GONE else View.VISIBLE
+        val shelfCount = app.db.getBookshelfIdsForComic(loaded.id).size
+        binding.btnBookshelf.text = if (shelfCount > 0) "书架 ($shelfCount)" else "加入本地书架"
+        if (loaded.format == ComicFormat.ONLINE) {
+            val (description, url) = app.db.getOnlineMetadata(loaded.id)
+            binding.tvDescription.visibility = if (description.isBlank()) View.GONE else View.VISIBLE
+            binding.tvDescription.text = description
+            binding.tvDescription.setOnClickListener {
+                MaterialAlertDialogBuilder(this).setTitle("简介").setMessage(description)
+                    .setPositiveButton("关闭", null).show()
+            }
+            officialUrl = url
+            binding.btnOfficialWork.visibility = if (url.isBlank()) View.GONE else View.VISIBLE
+        }
+        if (loaded.format == ComicFormat.ONLINE && chapters.isEmpty()) {
+            binding.btnRead.isEnabled = !onlineLoading
+            binding.btnRead.text = when {
+                onlineLoading -> "加载中"
+                onlineError.isNotEmpty() -> "重试"
+                else -> "开始阅读"
+            }
+            if (onlineLoading) binding.tvLastRead.text = "正在加载详情与章节…"
+            if (onlineError.isNotEmpty()) binding.tvLastRead.text = "加载失败：$onlineError"
+        }
 
         val cfg = app.db.getReaderConfig(loaded.readerConfigId)
         binding.btnReaderConfig.text = "阅读配置: ${cfg.name}"
@@ -178,51 +187,41 @@ class ComicDetailActivity : AppCompatActivity() {
             lifecycleScope.launch {
                 val bmp = withContext(Dispatchers.IO) { app.coverCache.getCover(loaded.coverCacheKey) }
                 if (bmp != null) {
-                    binding.ivCover.setImageBitmap(bmp)
+                    binding.ivCover.finishCover(bmp)
                 } else {
-                    binding.ivCover.setImageResource(R.drawable.ic_koma_logo)
+                    if (!onlineLoading) binding.ivCover.showCoverLoading(false)
                 }
             }
-        }
+        } else binding.ivCover.showCoverLoading(false)
         renderChapters()
     }
 
     private fun fetchAndSyncRemoteDetails(sourceKey: String, remoteId: String) {
+        onlineLoading = true
+        onlineError = ""
+        comic?.let(::bindLocalComicUi)
         lifecycleScope.launch {
-            runCatching {
+            val details = try {
+                val loaded = app.veneraRuntime.loadComicDetails(sourceKey, remoteId)
+                val coverUrl = loaded.cover.ifEmpty { remotePreviewCover }
+                val coverKey = if (coverUrl.isBlank()) "" else app.coverCache.makeKey("url:$coverUrl")
                 withContext(Dispatchers.IO) {
-                    val details = app.veneraRuntime.loadComicDetails(sourceKey, remoteId)
-                    val coverUrl = details.cover.ifEmpty { remotePreviewCover }
-                    val (coverKey, _) = if (coverUrl.isNotBlank()) {
-                        app.coverCache.getOrDownloadHttpCover(coverUrl, details.headers)
-                    } else "" to null
-                    val id = app.db.upsertOnlineComic(
-                        sourceKey = sourceKey,
-                        remoteId = remoteId,
-                        title = details.title.ifEmpty { remotePreviewTitle.ifEmpty { remoteId } },
-                        subTitle = details.subTitle.ifEmpty { remotePreviewSub },
-                        coverKey = coverKey,
-                        chapters = details.chapters
-                    )
-                    details to id
+                    val id = app.db.upsertOnlineComic(sourceKey, remoteId, loaded.title, coverKey, loaded.chapters)
+                    app.db.saveOnlineMetadata(id, loaded.description, loaded.url)
                 }
-            }.onSuccess { (details, syncedId) ->
-                comicId = syncedId
-                val updated = app.db.getComic(comicId)
-                if (updated != null) {
-                    comic = updated
-                    chapters = app.db.getChapters(comicId)
-                    bindLocalComicUi(updated)
-                    if (details.description.isNotBlank()) {
-                        binding.tvMeta.text = "${binding.tvMeta.text}\n${details.description.take(160)}"
-                    }
+                if (coverUrl.isNotBlank()) launch {
+                    val (_, bitmap) = withContext(Dispatchers.IO) { app.coverCache.getOrDownloadHttpCover(coverUrl, loaded.headers) }
+                    binding.ivCover.finishCover(bitmap)
                 }
-            }.onFailure { err ->
-                if (comic == null) {
-                    binding.tvLastRead.text = "加载失败: ${err.message}"
-                    binding.btnRead.text = "重试"
-                }
+                loaded
+            } catch (error: Exception) {
+                if (error is CancellationException && error !is TimeoutCancellationException) throw error
+                onlineError = error.message.orEmpty().lineSequence().first().ifBlank { "无法获取详情" }
+                null
             }
+            onlineLoading = false
+            onlineLoaded = details != null
+            loadDetail()
         }
     }
 
@@ -233,30 +232,7 @@ class ComicDetailActivity : AppCompatActivity() {
     }
 
     private fun showBookshelfDialog() {
-        if (comicId <= 0L) {
-            Toast.makeText(this, "请等待详情加载完成后再加入作品集", Toast.LENGTH_SHORT).show()
-            return
-        }
-        val shelves = app.db.getBookshelves()
-        if (shelves.isEmpty()) {
-            Toast.makeText(this, "请先新建作品集", Toast.LENGTH_SHORT).show()
-            return
-        }
-        val selected = app.db.getBookshelfIdsForComic(comicId).toMutableSet()
-        val names = shelves.map { it.name }.toTypedArray()
-        val checked = BooleanArray(shelves.size) { selected.contains(shelves[it].id) }
-        MaterialAlertDialogBuilder(this)
-            .setTitle("加入作品集")
-            .setMultiChoiceItems(names, checked) { _, idx, isChecked ->
-                val id = shelves[idx].id
-                if (isChecked) selected.add(id) else selected.remove(id)
-            }
-            .setPositiveButton("保存") { _, _ ->
-                app.db.setComicBookshelves(comicId, selected)
-                Toast.makeText(this, "已更新作品集", Toast.LENGTH_SHORT).show()
-            }
-            .setNegativeButton("取消", null)
-            .show()
+        if (comicId > 0L) showComicBookshelves(comicId, ::loadDetail)
     }
 
     private fun showReaderConfigDialog() {
@@ -293,6 +269,7 @@ class ComicDetailActivity : AppCompatActivity() {
         const val EXTRA_REMOTE_ID = "extra_remote_id"
         const val EXTRA_REMOTE_TITLE = "extra_remote_title"
         const val EXTRA_REMOTE_COVER = "extra_remote_cover"
+        const val EXTRA_REMOTE_DESCRIPTION = "extra_remote_description"
         const val EXTRA_REMOTE_SUB = "extra_remote_sub"
     }
 }

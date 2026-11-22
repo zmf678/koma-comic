@@ -1,4 +1,5 @@
 class Mh4399 extends ComicSource {
+    website = "https://www.4399manhua.com/";
     name = "4399漫画网"
     key = "mh4399"
     version = "1.0.5"   // 修复搜索：POST 显式指定 x-www-form-urlencoded

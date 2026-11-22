@@ -243,7 +243,9 @@ class VeneraRuntime(
             groups = menu.optJSONArray("groups").objects().map {
                 SourceCategoryGroup(it.getInt("index"), it.getString("title"))
             },
-            ranking = menu.optJSONObject("ranking")?.let(::parseBrowseTarget)
+            ranking = menu.optJSONObject("ranking")?.let(::parseBrowseTarget),
+            website = menu.optString("website"),
+            appWebsite = menu.optString("appWebsite")
         )
     }
 
@@ -316,58 +318,20 @@ class VeneraRuntime(
         if (this == null) emptyList() else (0 until length()).map { if (isNull(it)) null else optString(it) }
 
     suspend fun loadComicDetails(sourceKey: String, remoteId: String): RemoteComicDetails {
-        val qId = JSONObject.quote(remoteId)
-        val js = """
-            if (!src.comic || typeof src.comic.loadInfo !== 'function') {
-                throw new Error('Source does not implement comic.loadInfo');
-            }
-            const res = await src.comic.loadInfo($qId);
-            if (res && !res.headers) {
-                const fh = window.__extractSourceImageHeaders(src);
-                if (Object.keys(fh).length > 0) res.headers = fh;
-            }
-            return res;
-        """.trimIndent()
-        val raw = invokeAsyncJs(sourceKey, js)
+        val raw = invokeAsyncJs(sourceKey, "return window.__sourceComicDetails(src, ${JSONObject.quote(remoteId)});")
         return VeneraScriptParser.parseComicDetailsResult(sourceKey, remoteId, raw)
     }
 
-    suspend fun loadChapterImages(sourceKey: String, remoteId: String, epId: String): List<RemotePageImage> {
-        val qComic = JSONObject.quote(remoteId)
-        val qEp = JSONObject.quote(epId)
-        val js = """
-            if (!src.comic || typeof src.comic.loadEp !== 'function') {
-                throw new Error('Source does not implement comic.loadEp');
-            }
-            const r = await src.comic.loadEp($qComic, $qEp);
-            const urls = (r && r.images) || [];
-            const fallbackHeaders = window.__extractSourceImageHeaders(src);
-            if (typeof src.comic.onImageLoad === 'function') {
-                const enriched = [];
-                for (const u of urls) {
-                    try {
-                        const cfg = await src.comic.onImageLoad(u, $qComic, $qEp);
-                        if (cfg && (cfg.url || cfg.headers)) {
-                            enriched.push({
-                                url: cfg.url || u,
-                                headers: Object.assign({}, fallbackHeaders, cfg.headers || {})
-                            });
-                        } else {
-                            enriched.push(Object.keys(fallbackHeaders).length ? { url: u, headers: fallbackHeaders } : u);
-                        }
-                    } catch (_) {
-                        enriched.push(Object.keys(fallbackHeaders).length ? { url: u, headers: fallbackHeaders } : u);
-                    }
-                }
-                return { images: enriched };
-            }
-            if (r && !r.headers && Object.keys(fallbackHeaders).length > 0) {
-                r.headers = fallbackHeaders;
-            }
-            return r;
-        """.trimIndent()
-        val raw = invokeAsyncJs(sourceKey, js)
-        return VeneraScriptParser.parseEpImagesResult(raw)
+    suspend fun loadChapterImages(sourceKey: String, remoteId: String, epId: String?): List<RemotePageImage> {
+        val raw = invokeAsyncJs(sourceKey, "return window.__sourceChapterPages(src, ${JSONObject.quote(remoteId)}, ${epId?.let(JSONObject::quote) ?: "null"});")
+        return VeneraScriptParser.parseEpImagesResult(JSONObject().put("images", JSONArray(raw)).toString())
+    }
+
+    suspend fun loadPageBytes(sourceKey: String, remoteId: String, epId: String?, page: RemotePageImage): ByteArray {
+        val arguments = listOf(JSONObject.quote(remoteId), epId?.let(JSONObject::quote) ?: "null",
+            JSONObject.quote(page.url), JSONObject(page.headers).toString()).joinToString(", ")
+        val raw = invokeAsyncJs(sourceKey, "return window.__sourcePageBytes(src, $arguments);", timeoutMs = 80_000)
+        return Base64.decode(JSONArray("[$raw]").getString(0), Base64.DEFAULT)
     }
 
     suspend fun getSettingsSchema(sourceKey: String): List<SourceSettingField> {
@@ -792,7 +756,9 @@ class VeneraRuntime(
                 val keys = headersObj.keys()
                 while (keys.hasNext()) {
                     val k = keys.next()
-                    setRequestProperty(k, headersObj.optString(k, ""))
+                    if (!k.equals("Accept-Encoding", ignoreCase = true)) {
+                        setRequestProperty(k, headersObj.optString(k, ""))
+                    }
                 }
             }
             if (bodyBytes != null && (httpMethod == "POST" || httpMethod == "PUT" || httpMethod == "PATCH")) {
@@ -846,6 +812,7 @@ class VeneraRuntime(
 
         val res = JSONObject().apply {
             put("status", status)
+            put("url", conn.url.toString())
             put("headers", respHeaders)
             if (asBytes) {
                 put("bodyBase64", Base64.encodeToString(rawBytes, Base64.NO_WRAP))
@@ -853,6 +820,7 @@ class VeneraRuntime(
                 put("body", String(rawBytes, Charsets.UTF_8))
             }
         }
+        conn.disconnect()
         return res.toString()
     }
 

@@ -1,5 +1,5 @@
 ﻿param(
-    [string]$Version = "1.3.1",
+    [string]$Version = "1.4.0",
     [switch]$SkipArchive
 )
 
@@ -98,7 +98,7 @@ if ($LASTEXITCODE -ne 0 -or -not (Test-Path $ExePath)) {
     throw "编译 KomaComic.exe 失败"
 }
 
-Write-Host "==> [5/5] 复制依赖与 148 个内置动漫源脚本..."
+Write-Host "==> [5/5] 复制依赖与内置漫画源脚本..."
 Copy-Item -Path $CoreDll.FullName -Destination $OutAppDir -Force
 Copy-Item -Path $WinFormsDll.FullName -Destination $OutAppDir -Force
 Copy-Item -Path $LoaderDll.FullName -Destination $OutAppDir -Force

@@ -1,4 +1,5 @@
 class Hipmh extends ComicSource {
+    website = "https://m.hipmh.com/";
     name = "嬉皮漫畫"
     key = "hipmh"
     version = "1.0.6"

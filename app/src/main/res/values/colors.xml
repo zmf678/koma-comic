@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="ic_launcher_bg">#2947EE</color>
+    <color name="ic_launcher_bg">#182942</color>
     <color name="surface_bg">#F4F5F8</color>
     <color name="surface_card">#E8EAEE</color>
     <color name="surface_pill">#E9ECF2</color>

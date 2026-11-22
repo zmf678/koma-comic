@@ -24,6 +24,20 @@
         android:layout_gravity="center"
         android:visibility="gone" />
 
+    <TextView
+        android:id="@+id/tvTranslationState"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|end"
+        android:layout_marginTop="60dp"
+        android:layout_marginEnd="18dp"
+        android:accessibilityLiveRegion="polite"
+        android:background="@drawable/bg_reader_pill"
+        android:paddingHorizontal="14dp"
+        android:paddingVertical="8dp"
+        android:textColor="#FFFFFF"
+        android:visibility="gone" />
+
     <!-- Subtle page number badge visible only when toolbar is hidden -->
     <TextView
         android:id="@+id/tvPageIndicator"
@@ -205,6 +219,17 @@
                     android:contentDescription="书签与作品集"
                     android:src="@drawable/ic_bookmark"
                     app:tint="#FFFFFF" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnTranslate"
+                    style="@style/Widget.Material3.Button.TextButton"
+                    android:layout_width="0dp"
+                    android:layout_height="match_parent"
+                    android:layout_weight="1"
+                    android:minWidth="0dp"
+                    android:paddingHorizontal="2dp"
+                    android:text="翻译"
+                    android:textColor="#FFFFFF" />
 
                 <ImageButton
                     android:id="@+id/btnChapterList"

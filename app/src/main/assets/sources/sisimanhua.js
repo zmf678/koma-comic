@@ -149,6 +149,7 @@ class Sisimanhua extends ComicSource {
       items.reverse();
       for (let [cid, name] of items) chapters.set(cid, name);
       return new ComicDetails({
+        url: "https://m.sisimanhua.com/manhua/" + encodeURIComponent(id) + "/",
         title,
         cover: Sisimanhua.abs(cover),
         description: "",

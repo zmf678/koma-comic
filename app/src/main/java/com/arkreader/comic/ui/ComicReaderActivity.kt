@@ -44,11 +44,15 @@ import com.arkreader.comic.data.ScrollMode
 import com.arkreader.comic.databinding.ActivityComicReaderBinding
 import com.arkreader.comic.engine.ComicPageSource
 import com.arkreader.comic.engine.ImageProcessor
+import com.arkreader.comic.engine.MangaTranslation
 import com.arkreader.comic.engine.PageSlot
 import com.arkreader.comic.engine.PageSourceFactory
 import com.arkreader.comic.engine.SpreadSlotBuilder
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -64,10 +68,16 @@ class ComicReaderActivity : AppCompatActivity() {
     private var currentChapter: Chapter? = null
     private lateinit var readerConfig: ReaderConfig
 
+    private var chapterLoad: Job? = null
+    private var pageErrorShown = false
     private var pageSource: ComicPageSource? = null
     private var widePageFlags: BooleanArray = BooleanArray(0)
     private var slots: List<PageSlot> = emptyList()
     private var currentSlotIndex: Int = 0
+    private var translationEnabled = false
+    private var translationJob: Job? = null
+    private var translationRequest = 0
+    private var translatingView: View? = null
     private var toolbarVisible = false
 
     private val bitmapCache = object : LruCache<Int, Bitmap>(12) {}
@@ -197,8 +207,33 @@ class ComicReaderActivity : AppCompatActivity() {
     }
 
     private fun setupOverlayControls() {
+        if (app.prefs.glassMaterial) {
+            binding.bottomCapsuleCard.background = android.graphics.drawable.GradientDrawable(
+                android.graphics.drawable.GradientDrawable.Orientation.TL_BR,
+                intArrayOf(0xE6496188.toInt(), 0xDB15243D.toInt())
+            ).apply {
+                cornerRadius = 20 * resources.displayMetrics.density
+                setStroke(1, 0x76B4D8FF)
+            }
+        }
         binding.btnBack.setOnClickListener { finish() }
         binding.btnReaderMore.setOnClickListener { openReaderSettingsPanel() }
+        binding.btnTranslate.setOnClickListener {
+            if (app.prefs.translationServer.isBlank()) {
+                Toast.makeText(this, "请先在设置中填写漫画翻译服务", Toast.LENGTH_LONG).show()
+                return@setOnClickListener
+            }
+            translationEnabled = !translationEnabled
+            translationJob?.cancel()
+            translatingView = null
+            translationRequest++
+            binding.btnTranslate.text = if (translationEnabled) "原文" else "翻译"
+            binding.tvTranslationState.visibility = if (translationEnabled) View.VISIBLE else View.GONE
+            if (translationEnabled) binding.tvTranslationState.text = "等待页面…"
+            val recycler = activePageRecycler()
+            if (translationEnabled) translateCurrentPage()
+            else recycler?.adapter?.notifyDataSetChanged()
+        }
         binding.btnBookmark.setOnClickListener { showBookmarkDialog() }
         binding.btnReaderSettings.setOnClickListener { openReaderSettingsPanel() }
         binding.btnChapterList.setOnClickListener { showChapterPickerDialog() }
@@ -317,14 +352,19 @@ class ComicReaderActivity : AppCompatActivity() {
     private fun openChapterSource(chapter: Chapter, initialRawPage: Int) {
         val wh = currentComic?.let { app.db.getWarehouse(it.warehouseId) }
         binding.progressBar.visibility = View.VISIBLE
+        chapterLoad?.cancel()
+        translationJob?.cancel()
+        translatingView = null
+        translationRequest++
+        pageErrorShown = false
         pageSource?.close()
         pageSource = null
         widePageFlags = BooleanArray(0)
         bitmapCache.evictAll()
 
-        lifecycleScope.launch {
-            val result = withContext(Dispatchers.IO) {
-                try {
+        chapterLoad = lifecycleScope.launch {
+            val result = try {
+                withContext(Dispatchers.IO) {
                     val src = PageSourceFactory.open(
                         this@ComicReaderActivity,
                         chapter,
@@ -332,6 +372,10 @@ class ComicReaderActivity : AppCompatActivity() {
                         app.coverCache,
                         readerConfig.pdfScale
                     )
+                    if (src.pageCount <= 0) {
+                        src.close()
+                        error("该章节暂无可读页面")
+                    }
                     val flags = BooleanArray(src.pageCount)
                     if (chapter.format != ComicFormat.ONLINE && src.pageCount <= 400) {
                         for (i in 0 until src.pageCount) {
@@ -342,15 +386,20 @@ class ComicReaderActivity : AppCompatActivity() {
                         }
                     }
                     src to flags
-                } catch (_: Exception) {
-                    null
                 }
-            }
-            binding.progressBar.visibility = View.GONE
-            if (result == null || result.first.pageCount <= 0) {
-                Toast.makeText(this@ComicReaderActivity, "无法打开章节内容或章节为空", Toast.LENGTH_SHORT).show()
+            } catch (err: Exception) {
+                if (err is CancellationException && err !is TimeoutCancellationException) throw err
+                binding.progressBar.visibility = View.GONE
+                val message = err.message.orEmpty().lineSequence().first()
+                MaterialAlertDialogBuilder(this@ComicReaderActivity)
+                    .setTitle("无法打开章节")
+                    .setMessage(message.ifBlank { "请检查漫画源或网络连接。" })
+                    .setPositiveButton("重试") { _, _ -> openChapterSource(chapter, initialRawPage) }
+                    .setNegativeButton("返回") { _, _ -> finish() }
+                    .show()
                 return@launch
             }
+            binding.progressBar.visibility = View.GONE
             pageSource = result.first
             widePageFlags = result.second
             app.db.updateChapterPageCount(chapter.id, result.first.pageCount)
@@ -437,12 +486,51 @@ class ComicReaderActivity : AppCompatActivity() {
 
     private fun onSlotSelected(slotIndex: Int) {
         if (slots.isEmpty()) return
-        currentSlotIndex = slotIndex.coerceIn(0, slots.size - 1)
+        val nextSlot = slotIndex.coerceIn(0, slots.size - 1)
+        if (nextSlot != currentSlotIndex) {
+            translationJob?.cancel()
+            translatingView = null
+            translationRequest++
+        }
+        currentSlotIndex = nextSlot
+        if (translationEnabled) binding.root.post { translateCurrentPage() }
         val displayText = formatProgressText(currentSlotIndex)
         binding.tvPageIndicator.text = "${currentChapter?.title.orEmpty()} · $displayText"
         binding.tvSeekLabel.text = formatSeekShort(currentSlotIndex)
         binding.seekPage.progress = currentSlotIndex
         preloadAdjacent(currentSlotIndex)
+    }
+
+    private fun activePageRecycler(): RecyclerView? =
+        if (binding.rvVertical.visibility == View.VISIBLE) binding.rvVertical
+        else binding.vpHorizontal.getChildAt(0) as? RecyclerView
+
+    private fun translateCurrentPage() {
+        val view = activePageRecycler()?.findViewHolderForAdapterPosition(currentSlotIndex)?.itemView as? ZoomableImageView ?: return
+        val original = bitmapCache.get(currentSlotIndex) ?: return
+        translateVisiblePage(view, original, currentSlotIndex)
+    }
+
+    private fun translateVisiblePage(view: ZoomableImageView, original: Bitmap, position: Int) {
+        if (!translationEnabled || position != currentSlotIndex || translatingView === view) return
+        translatingView = view
+        val request = ++translationRequest
+        translationJob?.cancel()
+        binding.tvTranslationState.text = "翻译中…"
+        translationJob = lifecycleScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                runCatching { MangaTranslation.translate(this@ComicReaderActivity, original, app.prefs.translationServer, app.prefs.translationConfig) }
+            }
+            if (request != translationRequest || view.tag != position || !translationEnabled) return@launch
+            result.onSuccess {
+                view.setImageBitmap(it)
+                binding.tvTranslationState.text = "已显示译文"
+            }.onFailure {
+                translatingView = null
+                binding.tvTranslationState.text = "翻译失败 · 点击重试"
+                binding.tvTranslationState.setOnClickListener { translateCurrentPage() }
+            }
+        }
     }
 
     private fun getCurrentRawPage(): Int {
@@ -481,20 +569,20 @@ class ComicReaderActivity : AppCompatActivity() {
 
         val result: Bitmap? = when (slot) {
             is PageSlot.Single -> {
-                val raw = src.loadPageBitmap(slot.rawIndex, reqW, reqH) ?: return null
+                val raw = loadPage(src, slot.rawIndex, reqW, reqH) ?: return null
                 postProcess(raw)
             }
             is PageSlot.SplitHalf -> {
-                val raw = src.loadPageBitmap(slot.rawIndex, reqW * 2, reqH) ?: return null
+                val raw = loadPage(src, slot.rawIndex, reqW * 2, reqH) ?: return null
                 val half = ImageProcessor.splitWideBitmap(raw, slot.leftHalf)
                 if (half !== raw) raw.recycle()
                 postProcess(half)
             }
             is PageSlot.Merged -> {
                 val halfReqW = (reqW / 2).coerceAtLeast(720)
-                val leftRaw = src.loadPageBitmap(slot.leftRaw, halfReqW, reqH) ?: return null
+                val leftRaw = loadPage(src, slot.leftRaw, halfReqW, reqH) ?: return null
                 val leftClean = postProcess(leftRaw) ?: leftRaw
-                val rightRaw = slot.rightRaw?.let { src.loadPageBitmap(it, halfReqW, reqH) }
+                val rightRaw = slot.rightRaw?.let { loadPage(src, it, halfReqW, reqH) }
                 if (rightRaw == null) {
                     leftClean
                 } else {
@@ -507,11 +595,14 @@ class ComicReaderActivity : AppCompatActivity() {
                 }
             }
         }
-        if (result != null) {
+        if (result != null && src === pageSource && slots.getOrNull(slotIndex) == slot) {
             bitmapCache.put(slotIndex, result)
         }
         return result
     }
+
+    private fun loadPage(source: ComicPageSource, index: Int, width: Int, height: Int): Bitmap? =
+        runCatching { source.loadPageBitmap(index, width, height) }.getOrNull()
 
     private fun postProcess(bmp: Bitmap): Bitmap? {
         if (readerConfig.skipBlankPages && ImageProcessor.isBlankPage(bmp)) {
@@ -976,11 +1067,20 @@ class ComicReaderActivity : AppCompatActivity() {
                 view.adjustViewBounds = true
                 view.scaleType = ImageView.ScaleType.FIT_CENTER
             }
+            val source = pageSource
             lifecycleScope.launch {
-                val bmp = renderSlotBitmap(position)
-                if (view.tag == position && bmp != null) {
+                val bmp = withContext(Dispatchers.IO) { renderSlotBitmap(position) }
+                if (view.tag != position || source !== pageSource) return@launch
+                if (bmp != null) {
                     view.setImageBitmap(bmp)
+                    translateVisiblePage(view, bmp, position)
                     if (!isVertical) view.resetZoom()
+                } else {
+                    view.onSingleTapAt = { _, _ -> notifyItemChanged(position) }
+                    if (!pageErrorShown && position == currentSlotIndex) {
+                        pageErrorShown = true
+                        Toast.makeText(this@ComicReaderActivity, "图片加载失败，点击本页重试", Toast.LENGTH_SHORT).show()
+                    }
                 }
             }
         }
