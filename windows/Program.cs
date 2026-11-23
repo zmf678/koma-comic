@@ -2911,6 +2911,7 @@ namespace KomaComic.Windows
         private readonly Dictionary<string, TaskCompletionSource<string>> _pendingCalls = new Dictionary<string, TaskCompletionSource<string>>(StringComparer.Ordinal);
         private readonly Dictionary<string, Task> _sourceLoads = new Dictionary<string, Task>(StringComparer.Ordinal);
         private readonly object _lock = new object();
+        private string _tempProfileDir;
 
         public VeneraJsRunner(AppServices services, Dispatcher uiDispatcher)
         {
@@ -2939,8 +2940,26 @@ namespace KomaComic.Windows
             {
                 string profileDir = Path.Combine(_services.DataDir, "webview2_worker");
                 Directory.CreateDirectory(profileDir);
-                CoreWebView2Environment env = await CoreWebView2Environment.CreateAsync(null, profileDir, null);
-                await _webView.EnsureCoreWebView2Async(env);
+                bool primaryFailed = false;
+                try
+                {
+                    CoreWebView2Environment env = await CoreWebView2Environment.CreateAsync(null, profileDir, null);
+                    await _webView.EnsureCoreWebView2Async(env);
+                }
+                catch (Exception)
+                {
+                    primaryFailed = true;
+                }
+                if (primaryFailed)
+                {
+                    // Fallback to an isolated per-process profile when webview2_worker is locked (e.g. HRESULT 0x800700AA)
+                    string fallback = Path.Combine(Path.GetTempPath(),
+                        "KomaComic_wv2_" + Process.GetCurrentProcess().Id + "_" + Guid.NewGuid().ToString("N").Substring(0, 6));
+                    Directory.CreateDirectory(fallback);
+                    _tempProfileDir = fallback;
+                    CoreWebView2Environment fallbackEnv = await CoreWebView2Environment.CreateAsync(null, fallback, null);
+                    await _webView.EnsureCoreWebView2Async(fallbackEnv);
+                }
                 _webView.CoreWebView2.WebMessageReceived += OnWebMessageReceived;
                 _webView.CoreWebView2.NavigationCompleted += delegate (object s, CoreWebView2NavigationCompletedEventArgs e)
                 {
@@ -3366,6 +3385,11 @@ namespace KomaComic.Windows
                 if (_webView != null) _webView.Dispose();
             }
             catch { }
+            if (!string.IsNullOrEmpty(_tempProfileDir))
+            {
+                try { if (Directory.Exists(_tempProfileDir)) Directory.Delete(_tempProfileDir, true); }
+                catch { }
+            }
         }
     }
 
