@@ -62,16 +62,17 @@ internal fun applyLibraryMaterial(root: View, wallpaper: ImageView, surface: Vie
     }
     val dark = root.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK == Configuration.UI_MODE_NIGHT_YES
     if (Build.VERSION.SDK_INT >= 31) {
-        wallpaper.setRenderEffect(if (prefs.glassMaterial && hasWallpaper) RenderEffect.createBlurEffect(12f, 12f, Shader.TileMode.CLAMP) else null)
+        wallpaper.setRenderEffect(if (prefs.glassMaterial && hasWallpaper) RenderEffect.createBlurEffect(20f, 20f, Shader.TileMode.CLAMP) else null)
     }
-    val ink = if (dark) 0xFF141D2B.toInt() else 0xFFF1F6FC.toInt()
+    val ink = if (dark) 0xFF0E1525.toInt() else 0xFFF4F7FD.toInt()
     surface.background = if (prefs.glassMaterial) {
         GradientDrawable(GradientDrawable.Orientation.TL_BR, intArrayOf(
-            ColorUtils.setAlphaComponent(ink, if (hasWallpaper) 211 else 255),
-            ColorUtils.setAlphaComponent(if (dark) 0xFF253655.toInt() else 0xFFE5F1FE.toInt(), if (hasWallpaper) 196 else 255)
+            ColorUtils.setAlphaComponent(if (dark) 0xFF141D32.toInt() else 0xFFF2F6FE.toInt(), if (hasWallpaper) 204 else 255),
+            ColorUtils.setAlphaComponent(if (dark) 0xFF0E1629.toInt() else 0xFFEBF2FC.toInt(), if (hasWallpaper) 194 else 255),
+            ColorUtils.setAlphaComponent(if (dark) 0xFF171E35.toInt() else 0xFFF4F0FC.toInt(), if (hasWallpaper) 204 else 255)
         )).apply {
-            cornerRadius = 18 * root.resources.displayMetrics.density
-            setStroke(1, if (dark) 0x42AED6FF else 0xD0FFFFFF.toInt())
+            cornerRadius = 22 * root.resources.displayMetrics.density
+            setStroke((root.resources.displayMetrics.density).toInt().coerceAtLeast(1), if (dark) 0x52FFFFFF else 0xE6FFFFFF.toInt())
         }
     } else if (hasWallpaper) GradientDrawable().apply { setColor(ColorUtils.setAlphaComponent(ink, 218)) }
     else null
@@ -123,11 +124,11 @@ internal fun Chip.applyGlassChip() {
     val dark = resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK == Configuration.UI_MODE_NIGHT_YES
     chipBackgroundColor = ColorStateList(
         arrayOf(intArrayOf(android.R.attr.state_checked), intArrayOf()),
-        if (dark) intArrayOf(0xDB375781.toInt(), 0xB2253550.toInt())
-        else intArrayOf(0xEAC1DDFA.toInt(), 0xC6FFFFFF.toInt())
+        if (dark) intArrayOf(0x9638A3FF.toInt(), 0xB81E2B44.toInt())
+        else intArrayOf(0xE0D4E9FF.toInt(), 0xDCFFFFFF.toInt())
     )
     chipStrokeWidth = resources.displayMetrics.density
-    chipStrokeColor = ColorStateList.valueOf(if (dark) 0x526FB5FF else 0xB2FFFFFF.toInt())
+    chipStrokeColor = ColorStateList.valueOf(if (dark) 0x5EFFFFFF else 0xE6FFFFFF.toInt())
 }
 
 internal fun applyFloatingDock(capsule: View, settings: View?) {
@@ -137,23 +138,23 @@ internal fun applyFloatingDock(capsule: View, settings: View?) {
     fun surface(selected: Boolean = false) = GradientDrawable(
         GradientDrawable.Orientation.TL_BR,
         when {
-            selected && dark -> intArrayOf(0xE173ABEF.toInt(), 0xE83E679D.toInt())
-            selected -> intArrayOf(0xFAE2F4FF.toInt(), 0xDD98C7EE.toInt())
-            dark -> intArrayOf(0xDE445979.toInt(), if (advanced) 0xA51A2943.toInt() else 0xCC24314A.toInt())
-            else -> intArrayOf(0xF8FFFFFF.toInt(), if (advanced) 0xA4CDDFF5.toInt() else 0xC6E2EAF6.toInt())
+            selected && dark -> intArrayOf(0xA642A2FF.toInt(), 0x7A2466C6.toInt())
+            selected -> intArrayOf(0xEDE0F1FF.toInt(), 0xD8C2E0FF.toInt())
+            dark -> intArrayOf(if (advanced) 0xCC222E46.toInt() else 0xE2222E44.toInt(), if (advanced) 0xB0121A2A.toInt() else 0xD4172033.toInt())
+            else -> intArrayOf(if (advanced) 0xE0FFFFFF.toInt() else 0xF4FFFFFF.toInt(), if (advanced) 0xC4F0F6FF.toInt() else 0xE8EEF4FC.toInt())
         }
     ).apply {
         cornerRadius = 34 * density
-        setStroke(density.toInt().coerceAtLeast(1), if (dark) 0x68B8D7FF else 0xF0FFFFFF.toInt())
+        setStroke(density.toInt().coerceAtLeast(1), if (dark) 0x70FFFFFF else 0xF5FFFFFF.toInt())
     }
     capsule.background = surface()
-    capsule.elevation = 8 * density
+    capsule.elevation = 6 * density
     if (settings != null) {
         val plate = StateListDrawable().apply {
             addState(intArrayOf(android.R.attr.state_selected), surface(selected = true))
             addState(intArrayOf(), surface())
         }
-        settings.background = RippleDrawable(ColorStateList.valueOf(if (dark) 0x4286BDFF else 0x404284C0), plate, null)
-        settings.elevation = 7 * density
+        settings.background = RippleDrawable(ColorStateList.valueOf(if (dark) 0x3886BDFF else 0x303888E0), plate, null)
+        settings.elevation = 6 * density
     }
 }

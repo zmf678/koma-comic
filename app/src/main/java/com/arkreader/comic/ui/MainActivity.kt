@@ -367,14 +367,7 @@ class MainActivity : AppCompatActivity() {
             ?: enabledSources.firstOrNull()
         if (last != null) {
             val activeTag = "src:${last.sourceKey}"
-            addFilterChip(activeTag, last.name).setOnClickListener { selectHomeFilter(activeTag) }
-            val picker = Chip(this).apply {
-                text = "切换源"
-                applyGlassChip()
-                ensureAccessibleTouchTarget(48.dp)
-                setOnClickListener { showQuickSourcePicker(enabledSources) }
-            }
-            group.addView(picker)
+            addFilterChip(activeTag, "${last.name} ▾").setOnClickListener { showQuickSourcePicker(enabledSources) }
         }
         if (activeHomeFilterTag == TAG_LOCAL_HISTORY) addFilterChip(TAG_LOCAL_HISTORY, "最近阅读")
         val hasContext = group.childCount != 0
@@ -472,6 +465,7 @@ class MainActivity : AppCompatActivity() {
             text = "全部本地"
             isCheckable = true
             isChecked = activeShelf == null
+            applyGlassChip()
             tag = 0L
         }
         group.addView(all)
@@ -482,21 +476,28 @@ class MainActivity : AppCompatActivity() {
                 text = shelf.name + lockMark
                 isCheckable = true
                 isCheckedIconVisible = false
+                applyGlassChip()
                 tag = shelf.id
                 isChecked = shelf.id == activeShelf?.id
             }
             group.addView(chip)
         }
 
-        val manageChip = Chip(this, null, com.google.android.material.R.attr.chipStyle).apply {
-            id = View.generateViewId()
-            text = "+ 管理作品集"
-            isCheckable = false
-            setOnClickListener {
-                startActivity(Intent(this@MainActivity, BookshelfManageActivity::class.java))
-            }
+        fun addBookshelfActionChip(label: String, onClick: () -> Unit) {
+            group.addView(Chip(this, null, com.google.android.material.R.attr.chipStyle).apply {
+                id = View.generateViewId()
+                text = label
+                isCheckable = false
+                applyGlassChip()
+                setOnClickListener { onClick() }
+            })
         }
-        group.addView(manageChip)
+        addBookshelfActionChip("+ 添加本地文件夹") { warehousePanel.pickLocalFolder() }
+        addBookshelfActionChip("+ 导入压缩包") { warehousePanel.importLocalArchives() }
+        addBookshelfActionChip("↻ 重新扫描") { scanAllWarehouses() }
+        addBookshelfActionChip("+ 管理作品集") {
+            startActivity(Intent(this@MainActivity, BookshelfManageActivity::class.java))
+        }
 
         group.setOnCheckedStateChangeListener { grp, checkedIds ->
             val checkedId = checkedIds.firstOrNull() ?: return@setOnCheckedStateChangeListener
@@ -747,23 +748,37 @@ class MainActivity : AppCompatActivity() {
         }
         val controls = binding.browseControls
         val channels = if (menu == null) emptyList() else menu.channels + listOfNotNull(menu.ranking)
+        val activeSourceName = app.db.getComicSource(activeHomeFilterTag.removePrefix("src:"))?.name.orEmpty()
+        val singleDuplicate = channels.size == 1 && channels[0].title.equals(activeSourceName, ignoreCase = true)
         controls.channelTabs.removeAllViews()
-        channels.forEach { channel ->
-            controls.channelTabs.addView(Chip(this).apply {
-                text = channel.title
-                isCheckable = true
-                isChecked = channel == target
-                applyGlassChip()
-                isCheckedIconVisible = false
-                ensureAccessibleTouchTarget(48.dp)
-                setOnClickListener { selectBrowseTarget(channel) }
-            })
+        if (singleDuplicate) {
+            if (target?.kind == "category" || target?.kind == "search") {
+                controls.channelTabs.addView(Chip(this).apply {
+                    text = "首页推荐"
+                    isCheckable = false
+                    applyGlassChip()
+                    ensureAccessibleTouchTarget(48.dp)
+                    setOnClickListener { selectBrowseTarget(channels[0]) }
+                })
+            }
+        } else {
+            channels.forEach { channel ->
+                controls.channelTabs.addView(Chip(this).apply {
+                    text = channel.title
+                    isCheckable = true
+                    isChecked = channel == target
+                    applyGlassChip()
+                    isCheckedIconVisible = false
+                    ensureAccessibleTouchTarget(48.dp)
+                    setOnClickListener { selectBrowseTarget(channel) }
+                })
+            }
         }
         controls.btnCategories.visibility = if (!menu?.groups.isNullOrEmpty()) View.VISIBLE else View.GONE
-        controls.btnCategories.text = if (target?.kind == "category") target.title else "分类"
+        controls.btnCategories.text = if (target?.kind == "category") "分类 · ${target.title}" else "分类 ▾"
         controls.btnCategories.contentDescription = "选择分类"
         controls.btnSourceFilters.visibility = if (canFilter) View.VISIBLE else View.GONE
-        controls.root.visibility = if (channels.isNotEmpty() || canFilter || !menu?.groups.isNullOrEmpty()) View.VISIBLE else View.GONE
+        controls.root.visibility = if (controls.channelTabs.childCount > 0 || canFilter || !menu?.groups.isNullOrEmpty()) View.VISIBLE else View.GONE
     }
 
     private fun clearBrowseQuery() {
@@ -798,20 +813,29 @@ class MainActivity : AppCompatActivity() {
         val dialog = MaterialAlertDialogBuilder(this)
             .setTitle(group.title)
             .setMessage("正在加载分类…")
-            .setNegativeButton("关闭", null)
+            .setNegativeButton("关闭") { _, _ -> categoryJob?.cancel() }
             .setPositiveButton("重试") { _, _ -> openBrowseCategoryGroup(group) }
+            .setOnCancelListener { categoryJob?.cancel() }
             .show()
         dialog.getButton(android.content.DialogInterface.BUTTON_POSITIVE).visibility = View.GONE
         categoryJob = lifecycleScope.launch {
             val targets = try {
                 app.veneraRuntime.getBrowseCategories(sourceKey, group.index)
             } catch (error: Exception) {
-                if (error is CancellationException && error !is TimeoutCancellationException) throw error
-                dialog.setMessage("加载分类失败\n${browseError(error)}")
-                dialog.getButton(android.content.DialogInterface.BUTTON_POSITIVE).visibility = View.VISIBLE
+                if (error is CancellationException && error !is TimeoutCancellationException) {
+                    if (dialog.isShowing) dialog.dismiss()
+                    throw error
+                }
+                if (dialog.isShowing) {
+                    dialog.setMessage("加载分类失败\n${browseError(error)}")
+                    dialog.getButton(android.content.DialogInterface.BUTTON_POSITIVE).visibility = View.VISIBLE
+                }
                 return@launch
             }
-            if (!dialog.isShowing || !coroutineContext.isActive) return@launch
+            if (!dialog.isShowing || !coroutineContext.isActive) {
+                if (dialog.isShowing) dialog.dismiss()
+                return@launch
+            }
             dialog.dismiss()
             val builder = MaterialAlertDialogBuilder(this@MainActivity).setTitle(group.title).setNegativeButton("关闭", null)
             if (targets.isEmpty()) builder.setMessage("这个分组暂无可用分类")

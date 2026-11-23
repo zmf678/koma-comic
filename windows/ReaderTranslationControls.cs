@@ -47,7 +47,8 @@ namespace KomaComic.Windows
                 Content = "译", Width = 48, Height = 48, Margin = new Thickness(0, 0, 16, 0),
                 HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Center,
                 Foreground = Brushes.White, FontSize = 19, FontWeight = FontWeights.SemiBold,
-                Cursor = System.Windows.Input.Cursors.Hand, ToolTip = "翻译菜单", Visibility = Visibility.Collapsed
+                Cursor = System.Windows.Input.Cursors.Hand, FocusVisualStyle = null,
+                ToolTip = "翻译菜单", Visibility = Visibility.Collapsed
             };
             AutomationProperties.SetName(ball, "翻译菜单");
             var surface = new FrameworkElementFactory(typeof(Border));

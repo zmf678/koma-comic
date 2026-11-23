@@ -488,6 +488,10 @@
         constructor(opts) { Object.assign(this, opts || {}); }
     };
 
+    window.PageJumpTarget = class PageJumpTarget {
+        constructor(opts) { Object.assign(this, opts || {}); }
+    };
+
     window.ComicSource = class ComicSource {
         constructor() {
             this.key = window.__currentSourceKey || "";
@@ -848,9 +852,11 @@
             }
         }
         const attrs = value?.attributes || {};
-        if (value?.page === "category" && typeof src.categoryComics?.load === "function" && attrs.category != null) {
+        if (value?.page === "category" && hasLoader(src.categoryComics) && attrs.category != null) {
             const category = String(attrs.category);
-            return { kind: "category", title: label || category, category, param: String(attrs.param ?? "") };
+            const out = { kind: "category", title: label || category, category, param: attrs.param == null ? "" : String(attrs.param) };
+            if (Array.isArray(attrs.options)) out.options = attrs.options;
+            return out;
         }
         if (value?.page === "search" && hasLoader(src.search) && (attrs.text ?? attrs.keyword) != null) {
             const keyword = String(attrs.text ?? attrs.keyword);
@@ -880,12 +886,19 @@
     window.__sourceBrowseCategories = async function (src, index) {
         const part = categoryParts(src)[index];
         if (!part) return [];
-        const entries = part.type === "dynamic" ? await part.loader() : part.categories;
+        const entries = part.type === "dynamic" ? await part.loader.call(src) : part.categories;
         if (!Array.isArray(entries)) return [];
         return entries.flatMap((entry, i) => {
-            const label = entry && typeof entry === "object" ? entry.label : entry;
+            const label = entry && typeof entry === "object" ? (entry.label ?? entry.title ?? entry.name) : entry;
             if (label == null || !String(label).trim()) return [];
-            const destination = typeof entry === "object" ? entry.target : (
+            const destination = entry && typeof entry === "object" ? (
+                entry.target || {
+                    page: part.itemType === "search" ? "search" : "category",
+                    attributes: part.itemType === "search"
+                        ? { text: String(label) }
+                        : { category: String(entry.category ?? label), param: entry.param ?? part.categoryParams?.[i] ?? part.groupParam ?? "" }
+                }
+            ) : (
                 part.itemType === "search"
                     ? { page: "search", attributes: { text: label } }
                     : { page: "category", attributes: {
@@ -912,35 +925,48 @@
         if (target.kind === "search") options = src.search?.optionList;
         if (target.kind === "category") {
             const category = src.categoryComics;
-            options = typeof category?.optionLoader === "function"
-                ? await category.optionLoader(target.category, target.param)
-                : category?.optionList;
+            if (typeof category?.optionLoader === "function") {
+                try {
+                    options = await category.optionLoader.call(src, target.category, target.param);
+                } catch (_) {
+                    options = category?.optionList;
+                }
+            } else {
+                options = category?.optionList;
+            }
         }
         if (target.kind === "ranking") options = [{ label: "榜单", options: src.categoryComics?.ranking?.options }];
         if (!Array.isArray(options)) return { values: [], fields: [] };
         const values = [];
         const fields = [];
-        options.forEach((option, index) => {
-            const choices = Array.isArray(option?.options) ? option.options.map(browseChoice) : [];
-            const multiple = option?.type === "multi-select";
-            if (option?.type === "dropdown" && choices.length && !choices.some((choice) => choice.value === "")) {
-                choices.unshift({ value: null, title: "不限" });
+        const matchesRule = (list) => list.includes(target.category) ||
+            (target.param != null && target.param !== "" && list.includes(target.param));
+        options.forEach((option) => {
+            if (!option) return;
+            const notShow = option.notShowWhen ?? option.notshowWhen;
+            const visible = (!Array.isArray(option.showWhen) || matchesRule(option.showWhen)) &&
+                (!Array.isArray(notShow) || !matchesRule(notShow));
+            if (!visible) return;
+            const choices = Array.isArray(option.options) ? option.options.map(browseChoice) : [];
+            const multiple = option.type === "multi-select";
+            if (option.type === "dropdown" && choices.length && !choices.some((choice) => choice.value === "")) {
+                choices.unshift({ value: "", title: "不限" });
             }
-            const initial = option?.default;
+            const initial = option.default;
             const fallback = initial != null
                 ? (Array.isArray(initial) ? JSON.stringify(initial) : String(initial))
                 : (multiple ? "[]" : choices.length ? choices[0].value : "");
-            const visible = option && (!Array.isArray(option.showWhen) || option.showWhen.includes(target.category)) &&
-                (!Array.isArray(option.notShowWhen) || !option.notShowWhen.includes(target.category));
-            values.push(index in (target.options || []) ? target.options[index] : fallback);
-            if (visible && choices.length) {
-                fields.push({ index, title: String(option.label || option.title || ("选项 " + (index + 1))), multiple, choices });
+            const slot = values.length;
+            values.push(slot in (target.options || []) ? target.options[slot] : fallback);
+            if (choices.length) {
+                fields.push({ index: slot, title: String(option.label || option.title || ("选项 " + (slot + 1))), multiple, choices });
             }
         });
         return { values, fields };
     };
 
     window.__sourceBrowseFeed = async function (src, target, page, cursor, options) {
+        const safeOptions = Array.isArray(options) ? options : [];
         let entry;
         let args = [];
         let type;
@@ -950,13 +976,13 @@
             type = entry?.type;
         } else if (target.kind === "search") {
             entry = src.search;
-            args = [target.keyword, options];
+            args = [target.keyword, safeOptions];
         } else if (target.kind === "category") {
             entry = src.categoryComics;
-            args = [target.category, target.param, options];
+            args = [target.category, target.param, safeOptions];
         } else if (target.kind === "ranking") {
             entry = src.categoryComics?.ranking;
-            args = [options[0] ?? ""];
+            args = [safeOptions[0] ?? ""];
             loadNext = entry?.loadWithNext;
         }
         const singlePage = type === "singlePageWithMultiPart" || type === "multiPartPage";

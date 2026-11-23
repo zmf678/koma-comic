@@ -53,6 +53,54 @@ class MainWarehousePanel(
         if (uri != null) addLocalWarehouseFromUri(uri)
     }
 
+    private val importArchiveLauncher = activity.registerForActivityResult(
+        ActivityResultContracts.OpenMultipleDocuments()
+    ) { uris ->
+        if (uris.isNotEmpty()) importArchivesFromUris(uris)
+    }
+
+    fun pickLocalFolder() {
+        pickFolderLauncher.launch(null)
+    }
+
+    fun importLocalArchives() {
+        importArchiveLauncher.launch(arrayOf("application/zip", "application/epub+zip", "application/pdf", "application/x-cbz", "*/*"))
+    }
+
+    private fun importArchivesFromUris(uris: List<Uri>) {
+        activity.lifecycleScope.launch {
+            val importDir = java.io.File(activity.filesDir, "imported_archives").apply { mkdirs() }
+            var copied = 0
+            withContext(Dispatchers.IO) {
+                for (uri in uris) {
+                    val doc = DocumentFile.fromSingleUri(activity, uri)
+                    val rawName = doc?.name?.ifBlank { null } ?: "comic_${System.currentTimeMillis()}.cbz"
+                    val safeName = rawName.replace(Regex("[\\\\/:*?\"<>|]"), "_")
+                    val target = java.io.File(importDir, safeName)
+                    runCatching {
+                        activity.contentResolver.openInputStream(uri)?.use { input ->
+                            target.outputStream().use { output -> input.copyTo(output) }
+                        }
+                        copied++
+                    }
+                }
+            }
+            if (copied == 0) {
+                Toast.makeText(activity, "未导入任何压缩包", Toast.LENGTH_SHORT).show()
+                return@launch
+            }
+            val dirUri = Uri.fromFile(importDir).toString()
+            val existing = app.db.getWarehouses().find { it.uriOrUrl == dirUri }
+            val wh = existing ?: run {
+                val created = Warehouse(name = "本地导入压缩包", uriOrUrl = dirUri, type = WarehouseType.LOCAL_SAF)
+                val id = app.db.upsertWarehouse(created)
+                app.db.getWarehouse(id) ?: created.copy(id = id)
+            }
+            refresh()
+            scanSingleWarehouse(wh)
+        }
+    }
+
     init {
         binding.rvMainWarehouses.layoutManager = LinearLayoutManager(activity)
         binding.rvMainWarehouses.adapter = adapter

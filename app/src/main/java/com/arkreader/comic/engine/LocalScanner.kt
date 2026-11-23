@@ -36,8 +36,11 @@ class LocalScanner(
         onProgress: ((String) -> Unit)?
     ): List<DatabaseHelper.ScannedComic> {
         val rootUri = Uri.parse(warehouse.uriOrUrl)
-        val rootDoc = DocumentFile.fromTreeUri(context, rootUri)
-            ?: throw IllegalStateException("无法访问目录，请重新授权仓库目录")
+        val rootDoc = if (rootUri.scheme == "file" && rootUri.path != null) {
+            DocumentFile.fromFile(java.io.File(rootUri.path!!))
+        } else {
+            DocumentFile.fromTreeUri(context, rootUri)
+        } ?: throw IllegalStateException("无法访问目录，请重新授权仓库目录")
 
         if (warehouse.hideInGallery) {
             ensureNoMedia(rootDoc)

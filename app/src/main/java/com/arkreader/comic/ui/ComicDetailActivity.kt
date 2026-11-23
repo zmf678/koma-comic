@@ -90,8 +90,7 @@ class ComicDetailActivity : AppCompatActivity() {
             val next = !c.isFavorite
             app.db.setFavorite(c.id, next)
             comic = c.copy(isFavorite = next)
-            binding.btnFavorite.text = if (next) "已收藏" else "收藏"
-            binding.btnFavorite.isSelected = next
+            styleFavoriteButton(next)
             Toast.makeText(this, if (next) "已加入收藏" else "已取消收藏", Toast.LENGTH_SHORT).show()
         }
 
@@ -153,8 +152,7 @@ class ComicDetailActivity : AppCompatActivity() {
         }
         binding.btnRead.text = if (lastChap != null) "继续阅读" else "开始阅读"
         binding.btnRead.isEnabled = true
-        binding.btnFavorite.text = if (loaded.isFavorite) "已收藏" else "收藏"
-        binding.btnFavorite.isSelected = loaded.isFavorite
+        styleFavoriteButton(loaded.isFavorite)
         binding.btnBookshelf.visibility = if (loaded.format == ComicFormat.ONLINE) View.GONE else View.VISIBLE
         val shelfCount = app.db.getBookshelfIdsForComic(loaded.id).size
         binding.btnBookshelf.text = if (shelfCount > 0) "书架 ($shelfCount)" else "加入本地书架"
@@ -228,6 +226,22 @@ class ComicDetailActivity : AppCompatActivity() {
             onlineLoading = false
             onlineLoaded = details != null
             loadDetail()
+        }
+    }
+
+    private fun styleFavoriteButton(favorited: Boolean) {
+        val btn = binding.btnFavorite
+        btn.isSelected = favorited
+        if (favorited) {
+            btn.text = "★ 已收藏"
+            btn.backgroundTintList = android.content.res.ColorStateList.valueOf(0x36F59E0B)
+            btn.strokeColor = android.content.res.ColorStateList.valueOf(0xFFF59E0B.toInt())
+            btn.setTextColor(0xFFD97706.toInt())
+        } else {
+            btn.text = "☆ 收藏"
+            btn.backgroundTintList = android.content.res.ColorStateList.valueOf(android.graphics.Color.TRANSPARENT)
+            btn.strokeColor = android.content.res.ColorStateList.valueOf(getColor(R.color.text_secondary))
+            btn.setTextColor(getColor(R.color.text_primary))
         }
     }
 

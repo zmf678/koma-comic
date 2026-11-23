@@ -174,9 +174,9 @@ class VeneraRuntime(
                         inst.__settingsSchema = inst.settings || {};
                     }
                     window.__veneraSources[$qKey] = inst;
-                    if (typeof inst.init === 'function') {
-                        Promise.resolve(inst.init()).catch(function(){});
-                    }
+                    inst.__initPromise = typeof inst.init === 'function'
+                        ? Promise.resolve(inst.init()).catch(function(){})
+                        : Promise.resolve();
                     return JSON.stringify({ ok: true });
                 } catch (e) {
                     return JSON.stringify({ ok: false, error: String(e && e.stack ? e.stack : e) });
@@ -220,6 +220,9 @@ class VeneraRuntime(
             window.__veneraInvoke(${JSONObject.quote(callId)}, async function() {
                 const src = window.__veneraSources[${JSONObject.quote(sourceKey)}];
                 if (!src) throw new Error('Source not initialized: ' + ${JSONObject.quote(sourceKey)});
+                if (src.__initPromise) {
+                    await Promise.race([src.__initPromise, new Promise(function(r) { setTimeout(r, 3000); })]);
+                }
                 $jsBody
             });
         """.trimIndent()

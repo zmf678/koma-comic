@@ -22,6 +22,7 @@ using System.Windows.Data;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
+using System.Windows.Media.Animation;
 using System.Windows.Media.Effects;
 using System.Windows.Media.Imaging;
 using System.Windows.Shapes;
@@ -90,7 +91,7 @@ namespace KomaComic.Windows
 
     internal static class Program
     {
-        internal const string AppVersion = "1.4.3";
+        internal const string AppVersion = "1.5.0";
 
         [STAThread]
         private static int Main(string[] args)
@@ -123,9 +124,9 @@ namespace KomaComic.Windows
 
             Application app = new Application();
             app.ShutdownMode = ShutdownMode.OnMainWindowClose;
-            UiTheme.ApplyTheme(app, "dark");
 
             AppServices services = new AppServices(baseDir, assetsDir, dataDir);
+            UiTheme.ApplyTheme(app, services.ThemeMode, services.GlassMaterial);
             services.StartBackend();
 
             KomaMainWindow mainWin = new KomaMainWindow(services);
@@ -292,6 +293,7 @@ namespace KomaComic.Windows
         };
 
         public static bool IsDarkActive { get; private set; }
+        public static bool IsGlassActive { get; private set; }
 
         public static void ApplyTheme(Application app, string mode, bool glass = false)
         {
@@ -314,34 +316,225 @@ namespace KomaComic.Windows
             }
 
             IsDarkActive = dark;
+            IsGlassActive = glass;
             Dictionary<string, Color> palette = dark ? DarkColors : LightColors;
             foreach (KeyValuePair<string, Color> kv in palette)
             {
                 Brush brush = new SolidColorBrush(kv.Value);
-                if (glass && (kv.Key == "Surface" || kv.Key == "BgRail" || kv.Key == "BgElevated" || kv.Key == "InputBg" || kv.Key == "AccentSoft"))
-                {
-                    Color light = dark ? Color.FromArgb(238, 46, 63, 93) : Color.FromArgb(246, 255, 255, 255);
-                    Color shade = dark ? Color.FromArgb(210, 23, 36, 60) : Color.FromArgb(221, 203, 222, 246);
-                    if (kv.Key == "AccentSoft")
-                    {
-                        light = dark ? Color.FromArgb(211, 39, 95, 148) : Color.FromArgb(232, 194, 228, 255);
-                        shade = dark ? Color.FromArgb(194, 30, 52, 92) : Color.FromArgb(196, 165, 205, 250);
-                    }
-                    brush = new LinearGradientBrush(light, shade, 100);
-                }
                 brush.Freeze();
                 app.Resources["Brush." + kv.Key] = brush;
             }
-            Color rim = dark ? Color.FromArgb(122, 163, 204, 248) : Color.FromArgb(246, 255, 255, 255);
-            Color shine = dark ? Color.FromArgb(219, 60, 79, 111) : Color.FromArgb(247, 255, 255, 255);
-            Color falloff = dark ? Color.FromArgb(glass ? (byte)158 : (byte)205, 20, 32, 54)
-                : Color.FromArgb(glass ? (byte)170 : (byte)216, 208, 224, 245);
-            app.Resources["Brush.NavGlass"] = new LinearGradientBrush(shine, falloff, 110);
-            app.Resources["Brush.NavGlassRim"] = new SolidColorBrush(rim);
-            app.Resources["Brush.NavGlassSelected"] = new LinearGradientBrush(
-                dark ? Color.FromArgb(214, 78, 124, 178) : Color.FromArgb(242, 219, 241, 255),
-                dark ? Color.FromArgb(184, 38, 65, 109) : Color.FromArgb(221, 161, 203, 242), 115);
 
+            if (glass)
+            {
+                // Luminous ambient canvas so translucent glass layers refract light naturally
+                LinearGradientBrush bgBrush = new LinearGradientBrush { StartPoint = new Point(0, 0), EndPoint = new Point(1, 1) };
+                if (dark)
+                {
+                    bgBrush.GradientStops.Add(new GradientStop(Color.FromRgb(10, 15, 28), 0.0));
+                    bgBrush.GradientStops.Add(new GradientStop(Color.FromRgb(15, 23, 42), 0.48));
+                    bgBrush.GradientStops.Add(new GradientStop(Color.FromRgb(19, 27, 48), 1.0));
+                }
+                else
+                {
+                    bgBrush.GradientStops.Add(new GradientStop(Color.FromRgb(240, 245, 253), 0.0));
+                    bgBrush.GradientStops.Add(new GradientStop(Color.FromRgb(234, 241, 252), 0.52));
+                    bgBrush.GradientStops.Add(new GradientStop(Color.FromRgb(243, 239, 251), 1.0));
+                }
+                bgBrush.Freeze();
+                app.Resources["Brush.Bg"] = bgBrush;
+
+                // Clean frosted glass surfaces (crystal white in light mode, deep smoke in dark mode)
+                LinearGradientBrush elevated = new LinearGradientBrush { StartPoint = new Point(0, 0), EndPoint = new Point(1, 1) };
+                if (dark)
+                {
+                    elevated.GradientStops.Add(new GradientStop(Color.FromArgb(196, 30, 41, 62), 0.0));
+                    elevated.GradientStops.Add(new GradientStop(Color.FromArgb(172, 19, 27, 43), 1.0));
+                }
+                else
+                {
+                    elevated.GradientStops.Add(new GradientStop(Color.FromArgb(228, 255, 255, 255), 0.0));
+                    elevated.GradientStops.Add(new GradientStop(Color.FromArgb(198, 246, 250, 255), 1.0));
+                }
+                elevated.Freeze();
+                app.Resources["Brush.BgElevated"] = elevated;
+                app.Resources["Brush.InputBg"] = elevated;
+
+                LinearGradientBrush surface = new LinearGradientBrush { StartPoint = new Point(0, 0), EndPoint = new Point(0.8, 1) };
+                if (dark)
+                {
+                    surface.GradientStops.Add(new GradientStop(Color.FromArgb(176, 36, 49, 74), 0.0));
+                    surface.GradientStops.Add(new GradientStop(Color.FromArgb(152, 23, 33, 52), 1.0));
+                }
+                else
+                {
+                    surface.GradientStops.Add(new GradientStop(Color.FromArgb(224, 255, 255, 255), 0.0));
+                    surface.GradientStops.Add(new GradientStop(Color.FromArgb(196, 242, 247, 255), 1.0));
+                }
+                surface.Freeze();
+                app.Resources["Brush.Surface"] = surface;
+
+                SolidColorBrush surfHover = new SolidColorBrush(dark ? Color.FromArgb(215, 48, 66, 98) : Color.FromArgb(245, 255, 255, 255));
+                surfHover.Freeze();
+                app.Resources["Brush.SurfaceHover"] = surfHover;
+
+                // Diagonal specular rim border for authentic Liquid Glass refraction
+                LinearGradientBrush glassBorder = new LinearGradientBrush { StartPoint = new Point(0, 0), EndPoint = new Point(1, 1) };
+                if (dark)
+                {
+                    glassBorder.GradientStops.Add(new GradientStop(Color.FromArgb(98, 255, 255, 255), 0.0));
+                    glassBorder.GradientStops.Add(new GradientStop(Color.FromArgb(28, 255, 255, 255), 0.45));
+                    glassBorder.GradientStops.Add(new GradientStop(Color.FromArgb(62, 130, 186, 255), 1.0));
+                }
+                else
+                {
+                    glassBorder.GradientStops.Add(new GradientStop(Color.FromArgb(242, 255, 255, 255), 0.0));
+                    glassBorder.GradientStops.Add(new GradientStop(Color.FromArgb(120, 210, 224, 244), 0.55));
+                    glassBorder.GradientStops.Add(new GradientStop(Color.FromArgb(175, 184, 210, 245), 1.0));
+                }
+                glassBorder.Freeze();
+                app.Resources["Brush.Border"] = glassBorder;
+
+                LinearGradientBrush accentSoft = new LinearGradientBrush { StartPoint = new Point(0, 0), EndPoint = new Point(1, 1) };
+                if (dark)
+                {
+                    accentSoft.GradientStops.Add(new GradientStop(Color.FromArgb(118, 56, 163, 255), 0.0));
+                    accentSoft.GradientStops.Add(new GradientStop(Color.FromArgb(72, 32, 102, 196), 1.0));
+                }
+                else
+                {
+                    accentSoft.GradientStops.Add(new GradientStop(Color.FromArgb(215, 226, 242, 255), 0.0));
+                    accentSoft.GradientStops.Add(new GradientStop(Color.FromArgb(182, 204, 229, 255), 1.0));
+                }
+                accentSoft.Freeze();
+                app.Resources["Brush.AccentSoft"] = accentSoft;
+
+                LinearGradientBrush accentGrad = new LinearGradientBrush { StartPoint = new Point(0, 0), EndPoint = new Point(0.8, 1) };
+                accentGrad.GradientStops.Add(new GradientStop(dark ? Color.FromRgb(72, 174, 255) : Color.FromRgb(46, 146, 255), 0.0));
+                accentGrad.GradientStops.Add(new GradientStop(dark ? Color.FromRgb(36, 130, 238) : Color.FromRgb(22, 114, 228), 1.0));
+                accentGrad.Freeze();
+                app.Resources["Brush.Accent"] = accentGrad;
+            }
+
+            // Floating Dock & Glass Capsule resources
+            LinearGradientBrush navGlass = new LinearGradientBrush { StartPoint = new Point(0, 0), EndPoint = new Point(1, 1) };
+            if (dark)
+            {
+                navGlass.GradientStops.Add(new GradientStop(Color.FromArgb(glass ? (byte)204 : (byte)228, 34, 46, 70), 0.0));
+                navGlass.GradientStops.Add(new GradientStop(Color.FromArgb(glass ? (byte)176 : (byte)216, 18, 26, 42), 1.0));
+            }
+            else
+            {
+                navGlass.GradientStops.Add(new GradientStop(Color.FromArgb(glass ? (byte)224 : (byte)244, 255, 255, 255), 0.0));
+                navGlass.GradientStops.Add(new GradientStop(Color.FromArgb(glass ? (byte)188 : (byte)236, 240, 246, 255), 1.0));
+            }
+            navGlass.Freeze();
+            app.Resources["Brush.NavGlass"] = navGlass;
+
+            LinearGradientBrush navRim = new LinearGradientBrush { StartPoint = new Point(0, 0), EndPoint = new Point(1, 1) };
+            if (dark)
+            {
+                navRim.GradientStops.Add(new GradientStop(Color.FromArgb(128, 255, 255, 255), 0.0));
+                navRim.GradientStops.Add(new GradientStop(Color.FromArgb(34, 255, 255, 255), 0.45));
+                navRim.GradientStops.Add(new GradientStop(Color.FromArgb(78, 128, 190, 255), 1.0));
+            }
+            else
+            {
+                navRim.GradientStops.Add(new GradientStop(Color.FromArgb(250, 255, 255, 255), 0.0));
+                navRim.GradientStops.Add(new GradientStop(Color.FromArgb(140, 214, 228, 248), 0.55));
+                navRim.GradientStops.Add(new GradientStop(Color.FromArgb(190, 178, 208, 246), 1.0));
+            }
+            navRim.Freeze();
+            app.Resources["Brush.NavGlassRim"] = navRim;
+
+            LinearGradientBrush navSel = new LinearGradientBrush { StartPoint = new Point(0, 0), EndPoint = new Point(1, 1) };
+            if (dark)
+            {
+                navSel.GradientStops.Add(new GradientStop(Color.FromArgb(148, 66, 158, 255), 0.0));
+                navSel.GradientStops.Add(new GradientStop(Color.FromArgb(98, 36, 102, 198), 1.0));
+            }
+            else
+            {
+                navSel.GradientStops.Add(new GradientStop(Color.FromArgb(236, 224, 241, 255), 0.0));
+                navSel.GradientStops.Add(new GradientStop(Color.FromArgb(210, 194, 224, 255), 1.0));
+            }
+            navSel.Freeze();
+            app.Resources["Brush.NavGlassSelected"] = navSel;
+
+            LinearGradientBrush sheen = new LinearGradientBrush { StartPoint = new Point(0.5, 0), EndPoint = new Point(0.5, 1) };
+            sheen.GradientStops.Add(new GradientStop(dark ? Color.FromArgb(44, 255, 255, 255) : Color.FromArgb(150, 255, 255, 255), 0.0));
+            sheen.GradientStops.Add(new GradientStop(Color.FromArgb(0, 255, 255, 255), 0.52));
+            sheen.Freeze();
+            app.Resources["Brush.GlassSheen"] = sheen;
+
+            SolidColorBrush cardSurface = new SolidColorBrush(glass
+                ? (dark ? Color.FromArgb(184, 22, 30, 46) : Color.FromArgb(218, 255, 255, 255))
+                : (dark ? Color.FromRgb(23, 29, 39) : Color.FromRgb(255, 255, 255)));
+            cardSurface.Freeze();
+            app.Resources["Brush.CardSurface"] = cardSurface;
+
+            SolidColorBrush favActiveBg = new SolidColorBrush(dark ? Color.FromArgb(72, 255, 190, 61) : Color.FromArgb(46, 245, 158, 11));
+            favActiveBg.Freeze();
+            app.Resources["Brush.FavActiveBg"] = favActiveBg;
+            SolidColorBrush favActiveBorder = new SolidColorBrush(dark ? Color.FromRgb(255, 196, 77) : Color.FromRgb(234, 145, 12));
+            favActiveBorder.Freeze();
+            app.Resources["Brush.FavActiveBorder"] = favActiveBorder;
+            SolidColorBrush favActiveFg = new SolidColorBrush(dark ? Color.FromRgb(255, 210, 102) : Color.FromRgb(194, 106, 0));
+            favActiveFg.Freeze();
+            app.Resources["Brush.FavActiveFg"] = favActiveFg;
+        }
+
+        public static DropShadowEffect CreateGlassShadow(bool dark, bool subtle = false)
+        {
+            return new DropShadowEffect
+            {
+                Color = dark ? Color.FromRgb(4, 8, 16) : Color.FromRgb(64, 92, 138),
+                BlurRadius = subtle ? 16 : 26,
+                ShadowDepth = subtle ? 3 : 6,
+                Direction = 270,
+                Opacity = dark ? (subtle ? 0.32 : 0.44) : (subtle ? 0.09 : 0.14)
+            };
+        }
+
+        public static ControlTemplate CreateGlassSliderTemplate()
+        {
+            const string xaml =
+                "<ControlTemplate xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation' " +
+                "xmlns:x='http://schemas.microsoft.com/winfx/2006/xaml' TargetType='{x:Type Slider}'>" +
+                "<Grid VerticalAlignment='Center' MinHeight='22'>" +
+                "<Border Height='5' CornerRadius='2.5' Background='#3EFFFFFF' VerticalAlignment='Center'/>" +
+                "<Track x:Name='PART_Track'>" +
+                "<Track.DecreaseRepeatButton>" +
+                "<RepeatButton Command='Slider.DecreaseLarge' FocusVisualStyle='{x:Null}'>" +
+                "<RepeatButton.Template><ControlTemplate TargetType='RepeatButton'>" +
+                "<Border Height='5' CornerRadius='2.5'>" +
+                "<Border.Background><LinearGradientBrush StartPoint='0,0.5' EndPoint='1,0.5'>" +
+                "<GradientStop Color='#FF38A3FF' Offset='0'/><GradientStop Color='#FF7DD3FC' Offset='1'/>" +
+                "</LinearGradientBrush></Border.Background></Border>" +
+                "</ControlTemplate></RepeatButton.Template></RepeatButton>" +
+                "</Track.DecreaseRepeatButton>" +
+                "<Track.IncreaseRepeatButton>" +
+                "<RepeatButton Command='Slider.IncreaseLarge' FocusVisualStyle='{x:Null}'>" +
+                "<RepeatButton.Template><ControlTemplate TargetType='RepeatButton'>" +
+                "<Border Height='16' Background='Transparent'/>" +
+                "</ControlTemplate></RepeatButton.Template></RepeatButton>" +
+                "</Track.IncreaseRepeatButton>" +
+                "<Track.Thumb>" +
+                "<Thumb Cursor='Hand' FocusVisualStyle='{x:Null}'>" +
+                "<Thumb.Template><ControlTemplate TargetType='Thumb'>" +
+                "<Border x:Name='knob' Width='16' Height='16' CornerRadius='8' Background='White' BorderBrush='#B493C5FD' BorderThickness='1.5'>" +
+                "<Border.Effect><DropShadowEffect Color='Black' BlurRadius='8' ShadowDepth='1' Opacity='0.45'/></Border.Effect>" +
+                "</Border>" +
+                "<ControlTemplate.Triggers>" +
+                "<Trigger Property='IsMouseOver' Value='True'>" +
+                "<Setter TargetName='knob' Property='Width' Value='19'/>" +
+                "<Setter TargetName='knob' Property='Height' Value='19'/>" +
+                "<Setter TargetName='knob' Property='CornerRadius' Value='9.5'/>" +
+                "</Trigger></ControlTemplate.Triggers>" +
+                "</ControlTemplate></Thumb.Template></Thumb>" +
+                "</Track.Thumb>" +
+                "</Track></Grid></ControlTemplate>";
+            return (ControlTemplate)System.Windows.Markup.XamlReader.Parse(xaml);
         }
 
         public static ControlTemplate CreateRoundedButtonTemplate(double radius, string hoverBrushKey)
@@ -354,6 +547,7 @@ namespace KomaComic.Windows
             border.SetValue(Border.BorderBrushProperty, new TemplateBindingExtension(Control.BorderBrushProperty));
             border.SetValue(Border.BorderThicknessProperty, new TemplateBindingExtension(Control.BorderThicknessProperty));
             border.SetValue(Border.PaddingProperty, new TemplateBindingExtension(Control.PaddingProperty));
+            border.SetValue(UIElement.SnapsToDevicePixelsProperty, true);
 
             FrameworkElementFactory cp = new FrameworkElementFactory(typeof(ContentPresenter));
             cp.SetValue(ContentPresenter.HorizontalAlignmentProperty, new TemplateBindingExtension(Control.HorizontalContentAlignmentProperty));
@@ -368,8 +562,17 @@ namespace KomaComic.Windows
             {
                 hover.Setters.Add(new Setter(Border.BackgroundProperty, new DynamicResourceExtension(hoverBrushKey), "bd"));
             }
-            hover.Setters.Add(new Setter(UIElement.OpacityProperty, 0.92, "bd"));
+            else
+            {
+                hover.Setters.Add(new Setter(UIElement.OpacityProperty, 0.90, "bd"));
+            }
             tpl.Triggers.Add(hover);
+
+            Trigger pressed = new Trigger();
+            pressed.Property = ButtonBase.IsPressedProperty;
+            pressed.Value = true;
+            pressed.Setters.Add(new Setter(UIElement.OpacityProperty, 0.80, "bd"));
+            tpl.Triggers.Add(pressed);
 
             Trigger disabled = new Trigger();
             disabled.Property = UIElement.IsEnabledProperty;
@@ -415,6 +618,7 @@ namespace KomaComic.Windows
         public static Style BuildPillButtonStyle(bool primary, bool danger)
         {
             Style st = new Style(typeof(Button));
+            st.Setters.Add(new Setter(FrameworkElement.FocusVisualStyleProperty, null));
             st.Setters.Add(new Setter(Control.FontSizeProperty, 13.0));
             st.Setters.Add(new Setter(Control.FontWeightProperty, FontWeights.SemiBold));
             st.Setters.Add(new Setter(Control.PaddingProperty, new Thickness(14, 7, 14, 7)));
@@ -426,7 +630,7 @@ namespace KomaComic.Windows
             if (primary)
             {
                 st.Setters.Add(new Setter(Control.BackgroundProperty, new DynamicResourceExtension("Brush.Accent")));
-                st.Setters.Add(new Setter(Control.BorderBrushProperty, new DynamicResourceExtension("Brush.Accent")));
+                st.Setters.Add(new Setter(Control.BorderBrushProperty, new SolidColorBrush(Color.FromArgb(95, 255, 255, 255))));
                 st.Setters.Add(new Setter(Control.ForegroundProperty, Brushes.White));
                 st.Setters.Add(new Setter(Control.TemplateProperty, CreateRoundedButtonTemplate(16, null)));
             }
@@ -451,6 +655,7 @@ namespace KomaComic.Windows
         {
             Button b = new Button();
             b.Content = text;
+            b.FocusVisualStyle = null;
             b.Style = BuildPillButtonStyle(primary, danger);
             return b;
         }
@@ -460,6 +665,7 @@ namespace KomaComic.Windows
             CheckBox cb = new CheckBox();
             cb.IsChecked = initialChecked;
             cb.Cursor = Cursors.Hand;
+            cb.FocusVisualStyle = null;
             cb.Template = CreateToggleSwitchTemplate();
             return cb;
         }
@@ -553,8 +759,22 @@ namespace KomaComic.Windows
         public bool ShowCommentPage { get; set; }
         public bool ShowPageNumber { get; set; }
         public bool ApplyGlobal { get; set; }
+        public bool WheelPageTurn { get; set; }
+        public string PageTurnAnim { get; set; }
+        public int PrefetchPages { get; set; }
+        public bool SplitAllPages { get; set; }
+        public bool SpreadGap { get; set; }
         public int LastChapterIdx { get; set; }
         public int LastPage { get; set; }
+
+        public ReaderPrefModel()
+        {
+            WheelPageTurn = true;
+            PageTurnAnim = "slide";
+            PrefetchPages = 4;
+            SplitAllPages = false;
+            SpreadGap = true;
+        }
 
         public ReaderPrefModel Clone()
         {
@@ -568,6 +788,11 @@ namespace KomaComic.Windows
             m.ShowCommentPage = ShowCommentPage;
             m.ShowPageNumber = ShowPageNumber;
             m.ApplyGlobal = ApplyGlobal;
+            m.WheelPageTurn = WheelPageTurn;
+            m.PageTurnAnim = PageTurnAnim ?? "slide";
+            m.PrefetchPages = PrefetchPages;
+            m.SplitAllPages = SplitAllPages;
+            m.SpreadGap = SpreadGap;
             m.LastChapterIdx = LastChapterIdx;
             m.LastPage = LastPage;
             return m;
@@ -2028,6 +2253,11 @@ namespace KomaComic.Windows
                 ShowCommentPage = JsonUtil.GetBool(d, "showCommentPage", false),
                 ShowPageNumber = JsonUtil.GetBool(d, "showPageNumber", true),
                 ApplyGlobal = JsonUtil.GetBool(d, "applyGlobal", false),
+                WheelPageTurn = JsonUtil.GetBool(d, "wheelPageTurn", true),
+                PageTurnAnim = JsonUtil.GetStr(d, "pageTurnAnim", "slide"),
+                PrefetchPages = Math.Max(0, Math.Min(8, JsonUtil.GetInt(d, "prefetchPages", 4))),
+                SplitAllPages = JsonUtil.GetBool(d, "splitAllPages", false),
+                SpreadGap = JsonUtil.GetBool(d, "spreadGap", true),
                 LastChapterIdx = JsonUtil.GetInt(d, "lastChapterIdx", 0),
                 LastPage = JsonUtil.GetInt(d, "lastPage", 0)
             };
@@ -2040,7 +2270,10 @@ namespace KomaComic.Windows
                 { "mode", p.Mode }, { "spread", p.Spread }, { "brightness", p.Brightness },
                 { "quality", p.Quality }, { "trimMargins", p.TrimMargins }, { "doubleTapZoom", p.DoubleTapZoom },
                 { "showCommentPage", p.ShowCommentPage }, { "showPageNumber", p.ShowPageNumber },
-                { "applyGlobal", p.ApplyGlobal }, { "lastChapterIdx", p.LastChapterIdx }, { "lastPage", p.LastPage }
+                { "applyGlobal", p.ApplyGlobal }, { "wheelPageTurn", p.WheelPageTurn },
+                { "pageTurnAnim", p.PageTurnAnim ?? "slide" }, { "prefetchPages", p.PrefetchPages },
+                { "splitAllPages", p.SplitAllPages }, { "spreadGap", p.SpreadGap },
+                { "lastChapterIdx", p.LastChapterIdx }, { "lastPage", p.LastPage }
             };
         }
 
@@ -3231,14 +3464,32 @@ namespace KomaComic.Windows
         private ScrollViewer _readerScrollViewer;
         private StackPanel _readerScrollStack;
         private Grid _readerSpreadGrid;
+        private Grid _readerGhostGrid;
+        private ColumnDefinition _readerSpreadGapCol;
         private Image _readerSingleImg;
         private Image _readerLeftImg;
         private Image _readerRightImg;
+        private Image _readerGhostSingleImg;
+        private Image _readerGhostLeftImg;
+        private Image _readerGhostRightImg;
+        private Rectangle _readerAnimShadow;
         private Rectangle _readerBrightnessScrim;
         private ScaleTransform _readerZoomTransform;
+        private TransformGroup _readerSpreadTransformGroup;
+        private TranslateTransform _readerSpreadSlideTransform;
+        private ScaleTransform _readerSpreadAnimScale;
+        private TransformGroup _readerGhostTransformGroup;
+        private TranslateTransform _readerGhostSlideTransform;
+        private ScaleTransform _readerGhostAnimScale;
         private Border _readerTopBar;
+        private TranslateTransform _readerTopTranslate;
+        private TranslateTransform _readerBottomTranslate;
+        private TranslateTransform _readerDrawerTranslate;
+        private int _chromeAnimGen;
+        private int _drawerAnimGen;
         private TextBlock _readerTranslationStatus;
         private Button _readerTranslationButton;
+        private Button _readerFavButton;
         private bool _readerTranslationEnabled;
         private int _readerTranslationEpoch;
         private bool _translationDispatchPending;
@@ -3252,6 +3503,8 @@ namespace KomaComic.Windows
         private TextBlock _readerTitleText;
         private TextBlock _readerChapterText;
         private Button _btnSpreadPairShift;
+        private Button _btnTopSpreadMerge;
+        private Button _btnTopSpreadSplit;
         private Border _readerBottomCapsule;
         private Slider _readerSeekSlider;
         private TextBlock _readerSeekText;
@@ -3268,8 +3521,10 @@ namespace KomaComic.Windows
         private TextBlock _drawerBrightnessText;
         private Button _btnModeLtr, _btnModeRtl, _btnModeScroll;
         private Button _btnQUltra, _btnQHigh, _btnQSmooth;
-        private Button _btnSpreadSingle, _btnSpreadDouble;
-        private CheckBox _chkApplyGlobal, _chkTrimMargins, _chkDoubleZoom, _chkShowComment, _chkShowPageNum;
+        private Button _btnSpreadSingle, _btnSpreadDouble, _btnSpreadSplit;
+        private readonly Dictionary<string, Button> _animButtons = new Dictionary<string, Button>(StringComparer.Ordinal);
+        private readonly Dictionary<int, Button> _prefetchButtons = new Dictionary<int, Button>();
+        private CheckBox _chkApplyGlobal, _chkTrimMargins, _chkDoubleZoom, _chkShowComment, _chkShowPageNum, _chkWheelTurn, _chkSplitAll, _chkSpreadGap;
 
         // Reader Runtime State
         private bool _readerOpen;
@@ -3280,9 +3535,19 @@ namespace KomaComic.Windows
         private List<PageImageModel> _readerPages = new List<PageImageModel>();
         private int _readerPageIdx;
         private int _spreadShift = 0;
+        private int _splitHalf = 0;
+        private bool _currentPageIsSplit = false;
+        private int _pendingAnimDir = 0;
+        private long _lastWheelTurnTick = 0;
         private double _zoomScale = 1.0;
         private bool _chromeVisible = false;
         private readonly Dictionary<int, bool> _widePageFlags = new Dictionary<int, bool>();
+        private readonly Dictionary<string, BitmapImage> _readerPageCache = new Dictionary<string, BitmapImage>(StringComparer.Ordinal);
+        private readonly LinkedList<string> _readerPageCacheOrder = new LinkedList<string>();
+        private readonly Dictionary<string, Task<BitmapImage>> _readerPageInFlight = new Dictionary<string, Task<BitmapImage>>(StringComparer.Ordinal);
+        private readonly object _readerCacheLock = new object();
+        private readonly SemaphoreSlim _prefetchSemaphore = new SemaphoreSlim(2, 2);
+        private const int MaxReaderMemoryCachePages = 24;
         private bool _isFullscreen;
         private WindowState _prevWinState = WindowState.Normal;
         private WindowStyle _prevWinStyle = WindowStyle.SingleBorderWindow;
@@ -3411,19 +3676,22 @@ namespace KomaComic.Windows
             _profileDockButton = new Button
             {
                 Width = 48, Height = 48, VerticalAlignment = VerticalAlignment.Top, HorizontalAlignment = HorizontalAlignment.Center,
-                BorderThickness = new Thickness(0), Padding = new Thickness(0), ToolTip = "个人",
+                BorderThickness = new Thickness(1), Padding = new Thickness(0), ToolTip = "个人", Cursor = Cursors.Hand,
+                FocusVisualStyle = null,
                 Template = UiTheme.CreateRoundedButtonTemplate(24, "Brush.NavGlassSelected")
             };
             _profileDockButton.SetResourceReference(Control.BackgroundProperty, "Brush.NavGlass");
+            _profileDockButton.SetResourceReference(Control.BorderBrushProperty, "Brush.NavGlassRim");
+            _profileDockButton.Effect = UiTheme.CreateGlassShadow(UiTheme.IsDarkActive, true);
             System.Windows.Automation.AutomationProperties.SetName(_profileDockButton, "打开个人页");
-            _profileDockButton.Content = BuildAvatar(48);
+            _profileDockButton.Content = BuildAvatar(44);
             _profileDockButton.Click += delegate { SwitchMainTab(5); };
             rail.Children.Add(_profileDockButton);
 
             StackPanel dock = new StackPanel { VerticalAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.Center };
             StackPanel destinations = new StackPanel();
             Border capsule = MakeDockPlate(destinations, 34);
-            capsule.Padding = new Thickness(5, 6, 5, 6);
+            capsule.Padding = new Thickness(6, 7, 6, 7);
             dock.Children.Add(capsule);
 
             string[] icons = new string[] { "\uE80F", "\uE8A5", "\uEB51", "\uE713" };
@@ -3446,6 +3714,7 @@ namespace KomaComic.Windows
                 {
                     Width = settings ? 54 : 62, Height = settings ? 54 : 57,
                     Content = stack, Background = Brushes.Transparent, BorderThickness = new Thickness(0), Cursor = Cursors.Hand,
+                    FocusVisualStyle = null,
                     HorizontalContentAlignment = HorizontalAlignment.Center, VerticalContentAlignment = VerticalAlignment.Center,
                     Template = UiTheme.CreateRoundedButtonTemplate(settings ? 28 : 24, "Brush.NavGlassSelected"),
                     ToolTip = labels[index]
@@ -3468,13 +3737,26 @@ namespace KomaComic.Windows
 
         private static Border MakeDockPlate(UIElement content, double radius)
         {
-            Border plate = new Border { Child = content, CornerRadius = new CornerRadius(radius), BorderThickness = new Thickness(1) };
+            Grid layers = new Grid();
+            Border sheen = new Border
+            {
+                CornerRadius = new CornerRadius(radius),
+                IsHitTestVisible = false
+            };
+            sheen.SetResourceReference(Border.BackgroundProperty, "Brush.GlassSheen");
+            layers.Children.Add(sheen);
+            layers.Children.Add(content);
+
+            Border plate = new Border
+            {
+                Child = layers,
+                CornerRadius = new CornerRadius(radius),
+                BorderThickness = new Thickness(1),
+                ClipToBounds = false
+            };
             plate.SetResourceReference(Border.BackgroundProperty, "Brush.NavGlass");
             plate.SetResourceReference(Border.BorderBrushProperty, "Brush.NavGlassRim");
-            plate.Effect = new System.Windows.Media.Effects.DropShadowEffect
-            {
-                Color = Color.FromRgb(25, 44, 72), BlurRadius = 14, ShadowDepth = 3, Direction = 270, Opacity = 0.24
-            };
+            plate.Effect = UiTheme.CreateGlassShadow(UiTheme.IsDarkActive, false);
             return plate;
         }
 
@@ -3521,8 +3803,7 @@ namespace KomaComic.Windows
         {
             Grid g = new Grid();
             g.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); // Search toolbar
-            g.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); // Chips
-            g.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); // Subtabs
+            g.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); // Unified Source + Channel + Category Glass Bar
             g.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) }); // Feed
 
             // Row 0: Search Toolbar
@@ -3538,10 +3819,11 @@ namespace KomaComic.Windows
             };
             searchBorder.SetResourceReference(Border.BackgroundProperty, "Brush.BgElevated");
             searchBorder.SetResourceReference(Border.BorderBrushProperty, "Brush.Border");
+            searchBorder.Effect = UiTheme.CreateGlassShadow(UiTheme.IsDarkActive, true);
 
             DockPanel searchDock = new DockPanel();
             _btnSearch = UiTheme.MakeButton("搜索", true, false);
-            _btnSearch.Padding = new Thickness(14, 5, 14, 5);
+            _btnSearch.Padding = new Thickness(16, 5, 16, 5);
             DockPanel.SetDock(_btnSearch, Dock.Right);
             searchDock.Children.Add(_btnSearch);
 
@@ -3592,53 +3874,61 @@ namespace KomaComic.Windows
             toolbar.Children.Add(rightBtns);
             g.Children.Add(toolbar);
 
-            // Row 1: Source Chips Horizontal ScrollViewer
-            ScrollViewer chipScroll = new ScrollViewer
-            {
-                HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
-                VerticalScrollBarVisibility = ScrollBarVisibility.Disabled,
-                Margin = new Thickness(20, 0, 20, 8)
-            };
-            Grid.SetRow(chipScroll, 1);
-            _chipsPanel = new StackPanel { Orientation = Orientation.Horizontal };
-            chipScroll.Content = _chipsPanel;
-            g.Children.Add(chipScroll);
-
+            // Row 1: Unified Single-Row Liquid Glass Source + Channel + Category Bar
             _browseBar = new Border
             {
-                BorderThickness = new Thickness(0, 0, 0, 1),
-                Padding = new Thickness(20, 5, 20, 8),
-                Visibility = Visibility.Collapsed
+                CornerRadius = new CornerRadius(20),
+                BorderThickness = new Thickness(1),
+                Padding = new Thickness(10, 6, 10, 6),
+                Margin = new Thickness(20, 0, 20, 10)
             };
+            _browseBar.SetResourceReference(Border.BackgroundProperty, "Brush.BgElevated");
             _browseBar.SetResourceReference(Border.BorderBrushProperty, "Brush.Border");
-            Grid.SetRow(_browseBar, 2);
-            StackPanel browseStack = new StackPanel();
-            _sourceHeading = new TextBlock
-            {
-                FontSize = 18, FontWeight = FontWeights.SemiBold, TextTrimming = TextTrimming.CharacterEllipsis,
-                Margin = new Thickness(0, 0, 0, 6)
-            };
-            _sourceHeading.SetResourceReference(TextBlock.ForegroundProperty, "Brush.Text");
-            browseStack.Children.Add(_sourceHeading);
-            DockPanel browseActions = new DockPanel();
-            StackPanel tools = new StackPanel { Orientation = Orientation.Horizontal };
+            _browseBar.Effect = UiTheme.CreateGlassShadow(UiTheme.IsDarkActive, true);
+            Grid.SetRow(_browseBar, 1);
+
+            Grid browseLayers = new Grid();
+            Border barSheen = new Border { CornerRadius = new CornerRadius(20), IsHitTestVisible = false };
+            barSheen.SetResourceReference(Border.BackgroundProperty, "Brush.GlassSheen");
+            browseLayers.Children.Add(barSheen);
+
+            DockPanel unifiedRow = new DockPanel { LastChildFill = true };
+
+            // Left: Source switcher pill & mode title
+            _chipsPanel = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+            DockPanel.SetDock(_chipsPanel, Dock.Left);
+            unifiedRow.Children.Add(_chipsPanel);
+
+            // Right: Category, Filter, More actions
+            StackPanel tools = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 0, 0) };
             DockPanel.SetDock(tools, Dock.Right);
-            _categoriesButton = AddBrowseButton(tools, "分类", OpenBrowseCategoryGroups);
+            _categoriesButton = AddBrowseButton(tools, "分类 ▾", OpenBrowseCategoryGroups);
+            _categoriesButton.Margin = new Thickness(0, 0, 6, 0);
             _sourceFiltersButton = AddBrowseButton(tools, "筛选", OpenBrowseFilters);
-            browseActions.Children.Add(tools);
-            _channelTabs = new StackPanel { Orientation = Orientation.Horizontal };
-            browseActions.Children.Add(new ScrollViewer
+            _sourceFiltersButton.Margin = new Thickness(0, 0, 6, 0);
+            _sourceActionsButton = AddBrowseButton(tools, "更多 ⋯", OpenBrowseActions);
+            _sourceActionsButton.Margin = new Thickness(0);
+            unifiedRow.Children.Add(tools);
+
+            // Center: Scrollable channel tabs + active category indicator
+            _sourceHeading = new TextBlock { Visibility = Visibility.Collapsed };
+            _channelTabs = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+            ScrollViewer channelScroll = new ScrollViewer
             {
-                Content = _channelTabs, HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
-                VerticalScrollBarVisibility = ScrollBarVisibility.Disabled
-            });
-            browseStack.Children.Add(browseActions);
-            _browseBar.Child = browseStack;
+                Content = _channelTabs,
+                HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
+                VerticalScrollBarVisibility = ScrollBarVisibility.Disabled,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            unifiedRow.Children.Add(channelScroll);
+
+            browseLayers.Children.Add(unifiedRow);
+            _browseBar.Child = browseLayers;
             g.Children.Add(_browseBar);
 
-            // Row 3: Comic Feed ScrollViewer
-            _homeFeedScroll = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Padding = new Thickness(20, 10, 20, 24) };
-            Grid.SetRow(_homeFeedScroll, 3);
+            // Row 2: Comic Feed ScrollViewer
+            _homeFeedScroll = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Padding = new Thickness(20, 6, 20, 24) };
+            Grid.SetRow(_homeFeedScroll, 2);
             StackPanel feedStack = new StackPanel();
 
             _statusBanner = new TextBlock
@@ -3686,17 +3976,50 @@ namespace KomaComic.Windows
             _chipsPanel.Children.Clear();
             if (_services.ActiveHomeMode == "fav")
             {
-                _chipsPanel.Children.Add(new TextBlock { Text = "在线收藏", FontSize = 18, FontWeight = FontWeights.SemiBold, Margin = new Thickness(4, 6, 0, 4) });
+                TextBlock favTitle = new TextBlock
+                {
+                    Text = "★ 在线收藏",
+                    FontSize = 15,
+                    FontWeight = FontWeights.Bold,
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Margin = new Thickness(6, 2, 10, 2)
+                };
+                favTitle.SetResourceReference(TextBlock.ForegroundProperty, "Brush.Text");
+                _chipsPanel.Children.Add(favTitle);
+                if (_categoriesButton != null) _categoriesButton.Visibility = Visibility.Collapsed;
+                if (_sourceFiltersButton != null) _sourceFiltersButton.Visibility = Visibility.Collapsed;
+                if (_sourceActionsButton != null) _sourceActionsButton.Visibility = Visibility.Visible;
                 return;
             }
             SourceItem active = _services.Sources.Find(source => source.Key == LastEnabledSource());
             if (active != null)
             {
-                AddChipButton(active.Name, _services.ActiveHomeMode == active.Key, false, delegate { SwitchHomeMode(active.Key); });
-                AddChipButton("切换源", false, true, OpenQuickSourcePicker);
+                AddChipButton(active.Name + " ▾", _services.ActiveHomeMode == active.Key, false, OpenQuickSourcePicker);
             }
-            if (_services.ActiveHomeMode == "history") AddChipButton("最近阅读", true, false, delegate { SwitchHomeMode("history"); });
-            _sourceActionsButton = AddBrowseButton(_chipsPanel, "更多", OpenBrowseActions);
+            else
+            {
+                AddChipButton("选择漫画源 ▾", false, true, OpenQuickSourcePicker);
+            }
+            if (_services.ActiveHomeMode == "history")
+            {
+                AddChipButton("最近阅读", true, false, delegate { SwitchHomeMode("history"); });
+                if (active != null)
+                {
+                    AddChipButton("返回 " + active.Name, false, true, delegate { SwitchHomeMode(active.Key); });
+                }
+            }
+            if (!IsLocalHomeMode(_services.ActiveHomeMode))
+            {
+                Border divider = new Border
+                {
+                    Width = 1,
+                    Height = 18,
+                    Margin = new Thickness(2, 0, 10, 0),
+                    VerticalAlignment = VerticalAlignment.Center
+                };
+                divider.SetResourceReference(Border.BackgroundProperty, "Brush.Border");
+                _chipsPanel.Children.Add(divider);
+            }
         }
 
         private string LastEnabledSource()
@@ -3723,12 +4046,13 @@ namespace KomaComic.Windows
             Button b = new Button
             {
                 Content = label,
-                Margin = new Thickness(0, 0, 8, 4),
+                Margin = new Thickness(0, 0, 8, 0),
                 Padding = new Thickness(13, 6, 13, 6),
                 FontSize = 12.5,
                 FontWeight = active ? FontWeights.Bold : FontWeights.SemiBold,
                 BorderThickness = new Thickness(1),
                 Cursor = Cursors.Hand,
+                FocusVisualStyle = null,
                 Template = UiTheme.CreateRoundedButtonTemplate(16, active ? null : "Brush.SurfaceHover")
             };
             if (active)
@@ -3891,23 +4215,74 @@ namespace KomaComic.Windows
             _searchBox.ToolTip = menu == null ? "正在读取漫画源" : menu.CanSearch ? "搜索当前漫画源" : "当前源不支持搜索";
             System.Windows.Automation.AutomationProperties.SetName(_searchBox, (string)_searchBox.ToolTip);
             _channelTabs.Children.Clear();
+            SourceItem activeSrc = _services.Sources.Find(s => s.Key == _services.ActiveHomeMode);
+            string activeSrcName = activeSrc != null ? activeSrc.Name : "";
+
             if (menu != null)
             {
                 List<SourceBrowseTarget> channels = new List<SourceBrowseTarget>(menu.Channels);
                 if (menu.Ranking != null) channels.Add(menu.Ranking);
-                foreach (SourceBrowseTarget channel in channels)
-                    AddChipTo(_channelTabs, channel.Title, SameBrowseTarget(target, channel), delegate { SelectBrowseTarget(channel); });
+
+                // Smart deduplication: if there is only 1 channel and its title matches the source name,
+                // don't repeat it redundantly next to the source selector pill (only show a compact "全部" return chip when in category/search).
+                bool singleDuplicate = channels.Count == 1 &&
+                    string.Equals(channels[0].Title, activeSrcName, StringComparison.OrdinalIgnoreCase);
+
+                if (singleDuplicate)
+                {
+                    if (target != null && (target.Kind == "category" || target.Kind == "search"))
+                    {
+                        SourceBrowseTarget homeCh = channels[0];
+                        AddChipTo(_channelTabs, "首页推荐", false, delegate { SelectBrowseTarget(homeCh); });
+                    }
+                }
+                else
+                {
+                    foreach (SourceBrowseTarget channel in channels)
+                        AddChipTo(_channelTabs, channel.Title, SameBrowseTarget(target, channel), delegate { SelectBrowseTarget(channel); });
+                }
+
+                if (target != null && target.Kind == "category")
+                {
+                    SourceBrowseTarget defaultTarget = channels.Count > 0 ? channels[0] : null;
+                    string catLabel = "分类：" + target.Title + (defaultTarget != null ? "  ✕" : "");
+                    Button catChip = UiTheme.MakeButton(catLabel, true, false);
+                    catChip.Margin = new Thickness(0, 0, 6, 0);
+                    catChip.Padding = new Thickness(12, 5, 12, 5);
+                    catChip.FontSize = 12.5;
+                    catChip.ToolTip = defaultTarget != null ? "点击退出当前分类" : target.Title;
+                    catChip.Click += delegate
+                    {
+                        if (defaultTarget != null) SelectBrowseTarget(defaultTarget);
+                        else OpenBrowseCategoryGroups();
+                    };
+                    _channelTabs.Children.Add(catChip);
+                }
+                else if (target != null && target.Kind == "search" && !string.IsNullOrEmpty(target.Keyword))
+                {
+                    Button searchChip = UiTheme.MakeButton("搜索：" + target.Keyword + "  ✕", true, false);
+                    searchChip.Margin = new Thickness(0, 0, 6, 0);
+                    searchChip.Padding = new Thickness(12, 5, 12, 5);
+                    searchChip.FontSize = 12.5;
+                    searchChip.Click += delegate { _searchBox.Clear(); SubmitHomeSearch(); };
+                    _channelTabs.Children.Add(searchChip);
+                }
             }
+
+            _categoriesButton.IsEnabled = true;
+            _categoriesButton.Content = (target != null && target.Kind == "category") ? "切换分类 ▾" : "分类 ▾";
             _categoriesButton.Visibility = menu != null && menu.Groups.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
             _sourceFiltersButton.Visibility = filters ? Visibility.Visible : Visibility.Collapsed;
-            _sourceHeading.Visibility = target != null && target.Kind == "category" ? Visibility.Visible : Visibility.Collapsed;
+            _sourceHeading.Visibility = Visibility.Collapsed;
             _searchHint.Text = menu == null || menu.CanSearch ? "搜索当前漫画源" : "当前源不支持搜索";
         }
 
         private void AddChipTo(Panel panel, string label, bool selected, Action action)
         {
             Button button = UiTheme.MakeButton(label, selected, false);
-            button.Margin = new Thickness(0, 0, 8, 4);
+            button.Margin = new Thickness(0, 0, 6, 0);
+            button.Padding = new Thickness(12, 5, 12, 5);
+            button.FontSize = 12.5;
             button.Click += delegate { action(); };
             panel.Children.Add(button);
         }
@@ -3963,7 +4338,10 @@ namespace KomaComic.Windows
 
             if (IsLocalHomeMode(mode))
             {
-                _browseBar.Visibility = Visibility.Collapsed;
+                _browseBar.Visibility = Visibility.Visible;
+                _channelTabs.Children.Clear();
+                _categoriesButton.Visibility = Visibility.Collapsed;
+                _sourceFiltersButton.Visibility = Visibility.Collapsed;
                 _searchBox.IsEnabled = _btnSearch.IsEnabled = true;
                 _searchBox.ToolTip = "搜索当前书库";
                 _searchHint.Text = mode == "fav" ? "搜索在线收藏" : "搜索当前书库";
@@ -4004,9 +4382,9 @@ namespace KomaComic.Windows
             SourceItem src = _services.Sources.Find(source => source.Key == mode && source.Enabled);
             if (src == null)
             {
-                _browseBar.Visibility = Visibility.Collapsed;
+                _browseBar.Visibility = Visibility.Visible;
                 RenderBrowseControls(null, null, false);
-                ShowEmptyFeed("请通过「切换源」选择一个可用来源");
+                ShowEmptyFeed("请点击左上角切换一个可用漫画源");
                 _feedBusy = false;
                 return;
             }
@@ -4118,9 +4496,18 @@ namespace KomaComic.Windows
 
         private static bool SameBrowseTarget(SourceBrowseTarget first, SourceBrowseTarget second)
         {
-            return ReferenceEquals(first, second) || (first != null && second != null &&
-                first.Kind == "search" && second.Kind == "search" && first.Keyword == second.Keyword &&
-                first.Options == null && second.Options == null);
+            if (ReferenceEquals(first, second)) return true;
+            if (first == null || second == null) return false;
+            if (!string.Equals(first.Kind, second.Kind, StringComparison.Ordinal)) return false;
+            if (first.Kind == "explore") return first.Index == second.Index;
+            if (first.Kind == "ranking") return true;
+            if (first.Kind == "category")
+                return string.Equals(first.Category, second.Category, StringComparison.Ordinal) &&
+                    string.Equals(first.Param ?? "", second.Param ?? "", StringComparison.Ordinal);
+            if (first.Kind == "search")
+                return string.Equals(first.Keyword, second.Keyword, StringComparison.Ordinal) &&
+                    first.Options == null && second.Options == null;
+            return false;
         }
 
         private static string BrowseError(Exception error)
@@ -4135,45 +4522,177 @@ namespace KomaComic.Windows
             _emptyFeedText.Visibility = Visibility.Visible;
         }
 
-
-
-        private async void OpenBrowseCategoryGroups()
+        private void OpenBrowseCategoryGroups()
         {
             if (_browseMenu == null || _browseMenu.Groups.Count == 0) return;
             SourceItem src = _services.Sources.Find(source => source.Key == _browseSourceKey);
             if (src == null) return;
             List<SourceCategoryGroup> groups = _browseMenu.Groups;
-            int selected = groups.Count == 1 ? 0 : PickBrowseChoice("分类", groups.ConvertAll(group => group.Title), -1);
-            if (selected < 0) return;
-            int request = ++_categoryRequestId;
-            SourceCategoryGroup chosen = groups[selected];
-            _categoriesButton.IsEnabled = false;
-            _categoriesButton.Content = "加载分类…";
-            try
+
+            Window dlg = CreateStyledDialog(src.Name + " · 分类浏览", 680, 540);
+            DockPanel root = new DockPanel { Margin = new Thickness(18) };
+
+            // Top: group tabs (when multiple groups exist) + instant search filter
+            StackPanel topArea = new StackPanel { Margin = new Thickness(0, 0, 0, 12) };
+            DockPanel.SetDock(topArea, Dock.Top);
+
+            WrapPanel groupTabs = new WrapPanel { Margin = new Thickness(0, 0, 0, 10) };
+            if (groups.Count > 1) topArea.Children.Add(groupTabs);
+
+            TextBox filterBox = MakeStyledTextBox();
+            filterBox.Padding = new Thickness(12, 7, 12, 7);
+            Grid filterGrid = new Grid();
+            filterGrid.Children.Add(filterBox);
+            TextBlock filterHint = new TextBlock
             {
-                List<SourceBrowseTarget> targets = await _jsRunner.GetBrowseCategoriesAsync(src, chosen.Index);
-                if (request != _categoryRequestId || _services.ActiveHomeMode != src.Key || !_viewHome.IsVisible) return;
-                if (targets.Count == 0)
+                Text = "输入关键词快速筛选分类…",
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(12, 0, 0, 0),
+                IsHitTestVisible = false
+            };
+            filterHint.SetResourceReference(TextBlock.ForegroundProperty, "Brush.TextMuted");
+            filterGrid.Children.Add(filterHint);
+            filterBox.TextChanged += delegate { filterHint.Visibility = filterBox.Text.Length == 0 ? Visibility.Visible : Visibility.Collapsed; };
+            topArea.Children.Add(filterGrid);
+            root.Children.Add(topArea);
+
+            // Bottom: close button
+            StackPanel footer = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 12, 0, 0) };
+            DockPanel.SetDock(footer, Dock.Bottom);
+            Button btnClose = UiTheme.MakeButton("关闭", false, false);
+            btnClose.IsCancel = true;
+            btnClose.Click += delegate { dlg.Close(); };
+            footer.Children.Add(btnClose);
+            root.Children.Add(footer);
+
+            // Body: category tag grid + inline status/retry
+            Grid body = new Grid();
+            ScrollViewer sv = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
+            WrapPanel tagWrap = new WrapPanel();
+            sv.Content = tagWrap;
+            body.Children.Add(sv);
+
+            StackPanel statePanel = new StackPanel { VerticalAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.Center, Visibility = Visibility.Collapsed };
+            TextBlock stateText = new TextBlock { FontSize = 13.5, TextWrapping = TextWrapping.Wrap, HorizontalAlignment = HorizontalAlignment.Center, Margin = new Thickness(0, 0, 0, 10) };
+            stateText.SetResourceReference(TextBlock.ForegroundProperty, "Brush.TextMuted");
+            Button retryBtn = UiTheme.MakeButton("重试加载", true, false);
+            retryBtn.HorizontalAlignment = HorizontalAlignment.Center;
+            retryBtn.Visibility = Visibility.Collapsed;
+            statePanel.Children.Add(stateText);
+            statePanel.Children.Add(retryBtn);
+            body.Children.Add(statePanel);
+            root.Children.Add(body);
+
+            dlg.Content = root;
+
+            int activeGroupIdx = 0;
+            int localReq = 0;
+            bool dialogClosed = false;
+            List<SourceBrowseTarget> loadedTargets = new List<SourceBrowseTarget>();
+            Dictionary<int, List<SourceBrowseTarget>> groupCache = new Dictionary<int, List<SourceBrowseTarget>>();
+            List<Button> groupBtns = new List<Button>();
+
+            Action renderTags = delegate
+            {
+                tagWrap.Children.Clear();
+                string kw = (filterBox.Text ?? "").Trim().ToLowerInvariant();
+                List<SourceBrowseTarget> matched = string.IsNullOrEmpty(kw)
+                    ? loadedTargets
+                    : loadedTargets.FindAll(t => (t.Title ?? "").ToLowerInvariant().Contains(kw));
+                if (matched.Count == 0)
                 {
-                    ShowToast("这个分组暂无可用分类");
+                    stateText.Text = loadedTargets.Count == 0 ? "这个分组暂无可用分类" : "没有匹配的分类";
+                    retryBtn.Visibility = Visibility.Collapsed;
+                    statePanel.Visibility = Visibility.Visible;
                     return;
                 }
-                selected = PickBrowseChoice(chosen.Title, targets.ConvertAll(target => target.Title), -1);
-                if (selected >= 0) SelectBrowseTarget(targets[selected]);
-            }
-            catch (Exception ex)
-            {
-                if (request == _categoryRequestId && _services.ActiveHomeMode == src.Key)
-                    ShowToast("加载分类失败，点击「分类」重试。 " + BrowseError(ex));
-            }
-            finally
-            {
-                if (request == _categoryRequestId)
+                statePanel.Visibility = Visibility.Collapsed;
+                int limit = Math.Min(matched.Count, 300);
+                for (int i = 0; i < limit; i++)
                 {
-                    _categoriesButton.Content = "分类";
-                    _categoriesButton.IsEnabled = true;
+                    SourceBrowseTarget target = matched[i];
+                    bool isCur = SameBrowseTarget(_browseTarget, target);
+                    Button tagBtn = UiTheme.MakeButton(target.Title, isCur, false);
+                    tagBtn.Margin = new Thickness(0, 0, 8, 8);
+                    tagBtn.Padding = new Thickness(13, 6, 13, 6);
+                    tagBtn.FontSize = 12.5;
+                    tagBtn.Click += delegate
+                    {
+                        dlg.Close();
+                        SelectBrowseTarget(target);
+                    };
+                    tagWrap.Children.Add(tagBtn);
                 }
+                if (matched.Count > limit)
+                {
+                    TextBlock moreHint = new TextBlock
+                    {
+                        Text = string.Format("仅显示前 {0} 项（共 {1} 项），请输入关键词筛选", limit, matched.Count),
+                        FontSize = 12,
+                        Margin = new Thickness(4, 6, 4, 6)
+                    };
+                    moreHint.SetResourceReference(TextBlock.ForegroundProperty, "Brush.TextMuted");
+                    tagWrap.Children.Add(moreHint);
+                }
+            };
+
+            Action<int> loadGroup = null;
+            loadGroup = async delegate (int gIdx)
+            {
+                activeGroupIdx = gIdx;
+                for (int i = 0; i < groupBtns.Count; i++)
+                    groupBtns[i].Style = UiTheme.BuildPillButtonStyle(i == gIdx, false);
+
+                List<SourceBrowseTarget> cached;
+                if (groupCache.TryGetValue(gIdx, out cached))
+                {
+                    loadedTargets = cached;
+                    renderTags();
+                    return;
+                }
+
+                int req = ++localReq;
+                loadedTargets = new List<SourceBrowseTarget>();
+                tagWrap.Children.Clear();
+                stateText.Text = "正在加载「" + groups[gIdx].Title + "」分类…";
+                retryBtn.Visibility = Visibility.Collapsed;
+                statePanel.Visibility = Visibility.Visible;
+
+                try
+                {
+                    List<SourceBrowseTarget> targets = await _jsRunner.GetBrowseCategoriesAsync(src, groups[gIdx].Index);
+                    if (dialogClosed || req != localReq) return;
+                    groupCache[gIdx] = targets ?? new List<SourceBrowseTarget>();
+                    loadedTargets = groupCache[gIdx];
+                    renderTags();
+                }
+                catch (Exception ex)
+                {
+                    if (dialogClosed || req != localReq) return;
+                    stateText.Text = "加载分类失败：" + BrowseError(ex);
+                    retryBtn.Visibility = Visibility.Visible;
+                    statePanel.Visibility = Visibility.Visible;
+                }
+            };
+
+            retryBtn.Click += delegate { loadGroup(activeGroupIdx); };
+            filterBox.TextChanged += delegate { if (loadedTargets.Count > 0) renderTags(); };
+            dlg.Closed += delegate { dialogClosed = true; localReq++; };
+
+            for (int i = 0; i < groups.Count; i++)
+            {
+                int idx = i;
+                Button gb = UiTheme.MakeButton(groups[i].Title, i == 0, false);
+                gb.Margin = new Thickness(0, 0, 8, 6);
+                gb.Padding = new Thickness(12, 5, 12, 5);
+                gb.FontSize = 12.5;
+                gb.Click += delegate { loadGroup(idx); };
+                groupBtns.Add(gb);
+                groupTabs.Children.Add(gb);
             }
+
+            dlg.Loaded += delegate { loadGroup(0); };
+            dlg.ShowDialog();
         }
 
         private void OpenBrowseFilters()
@@ -4312,16 +4831,23 @@ namespace KomaComic.Windows
             Border outer = new Border
             {
                 Width = cardW,
-                Margin = new Thickness(0, 0, 14, 14),
-                CornerRadius = new CornerRadius(12),
+                Margin = new Thickness(0, 0, 14, 16),
+                CornerRadius = new CornerRadius(14),
                 BorderThickness = new Thickness(1),
                 ClipToBounds = true,
                 Cursor = Cursors.Hand
             };
-            outer.SetResourceReference(Border.BackgroundProperty, "Brush.BgElevated");
+            outer.SetResourceReference(Border.BackgroundProperty, "Brush.CardSurface");
             outer.SetResourceReference(Border.BorderBrushProperty, "Brush.Border");
-            outer.MouseEnter += delegate (object s, MouseEventArgs e) { outer.SetResourceReference(Border.BorderBrushProperty, "Brush.Accent"); };
-            outer.MouseLeave += delegate (object s, MouseEventArgs e) { outer.SetResourceReference(Border.BorderBrushProperty, "Brush.Border"); };
+            outer.Effect = UiTheme.CreateGlassShadow(UiTheme.IsDarkActive, true);
+            outer.MouseEnter += delegate (object s, MouseEventArgs e)
+            {
+                outer.SetResourceReference(Border.BorderBrushProperty, "Brush.AccentBorder");
+            };
+            outer.MouseLeave += delegate (object s, MouseEventArgs e)
+            {
+                outer.SetResourceReference(Border.BorderBrushProperty, "Brush.Border");
+            };
 
             StackPanel stack = new StackPanel();
             Grid imgBox = new Grid { Height = coverH, ClipToBounds = true };
@@ -4334,12 +4860,29 @@ namespace KomaComic.Windows
             imgBox.Children.Add(coverStatus);
             imgBox.Children.Add(coverImg);
 
+            Border favBadge = new Border
+            {
+                CornerRadius = new CornerRadius(8),
+                Background = new SolidColorBrush(Color.FromArgb(215, 245, 158, 11)),
+                BorderBrush = new SolidColorBrush(Color.FromArgb(140, 255, 255, 255)),
+                BorderThickness = new Thickness(1),
+                Padding = new Thickness(6, 2, 6, 2),
+                HorizontalAlignment = HorizontalAlignment.Left,
+                VerticalAlignment = VerticalAlignment.Top,
+                Margin = new Thickness(7, 7, 0, 0),
+                Visibility = (IsFavorite(card) && _services.ActiveHomeMode != "fav") ? Visibility.Visible : Visibility.Collapsed
+            };
+            favBadge.Child = new TextBlock { Text = "★", Foreground = Brushes.White, FontSize = 10.5, FontWeight = FontWeights.Bold };
+            imgBox.Children.Add(favBadge);
+
             if (!string.IsNullOrEmpty(card.Badge) && card.SourceKey != _services.ActiveHomeMode)
             {
                 Border badge = new Border
                 {
-                    CornerRadius = new CornerRadius(7),
-                    Background = new SolidColorBrush(Color.FromArgb(198, 12, 16, 24)),
+                    CornerRadius = new CornerRadius(8),
+                    Background = new SolidColorBrush(Color.FromArgb(190, 12, 18, 28)),
+                    BorderBrush = new SolidColorBrush(Color.FromArgb(75, 255, 255, 255)),
+                    BorderThickness = new Thickness(1),
                     Padding = new Thickness(7, 2, 7, 2),
                     HorizontalAlignment = HorizontalAlignment.Right,
                     VerticalAlignment = VerticalAlignment.Top,
@@ -4350,7 +4893,7 @@ namespace KomaComic.Windows
             }
             stack.Children.Add(imgBox);
 
-            StackPanel meta = new StackPanel { Margin = new Thickness(9, 8, 9, 10) };
+            StackPanel meta = new StackPanel { Margin = new Thickness(10, 9, 10, 10) };
             TextBlock titleTb = new TextBlock
             {
                 Text = card.Title,
@@ -4378,7 +4921,11 @@ namespace KomaComic.Windows
             MenuItem favoriteAction = new MenuItem();
             MenuItem shelfAction = new MenuItem { Header = "管理书架" };
             actions.Opened += delegate { favoriteAction.Header = IsFavorite(card) ? "取消收藏" : "加入收藏"; };
-            favoriteAction.Click += delegate { ToggleFavorite(card); };
+            favoriteAction.Click += delegate
+            {
+                ToggleFavorite(card);
+                favBadge.Visibility = (IsFavorite(card) && _services.ActiveHomeMode != "fav") ? Visibility.Visible : Visibility.Collapsed;
+            };
             shelfAction.Click += delegate { OpenAddToCollectionDialog(card, this); };
             actions.Items.Add(favoriteAction);
             if (card.IsLocal) actions.Items.Add(shelfAction);
@@ -5103,19 +5650,38 @@ namespace KomaComic.Windows
 
         private bool IsFavorite(ComicCardModel card)
         {
-            return _services.Favorites.Exists(item => item.Uid == card.Uid);
+            return card != null && _services.Favorites.Exists(item => item.Uid == card.Uid);
+        }
+
+        private static void StyleFavoriteActionButton(Button btn, bool favorited)
+        {
+            if (btn == null) return;
+            btn.Content = favorited ? "★ 已收藏" : "☆ 加入收藏";
+            if (favorited)
+            {
+                btn.SetResourceReference(Control.BackgroundProperty, "Brush.FavActiveBg");
+                btn.SetResourceReference(Control.BorderBrushProperty, "Brush.FavActiveBorder");
+                btn.SetResourceReference(Control.ForegroundProperty, "Brush.FavActiveFg");
+            }
+            else
+            {
+                btn.SetResourceReference(Control.BackgroundProperty, "Brush.Surface");
+                btn.SetResourceReference(Control.BorderBrushProperty, "Brush.Border");
+                btn.SetResourceReference(Control.ForegroundProperty, "Brush.Text");
+            }
         }
 
         private Panel BuildComicLibraryActions(ComicCardModel card, Window owner)
         {
             WrapPanel actions = new WrapPanel { Margin = new Thickness(8, 0, 0, 0) };
-            Button favorite = UiTheme.MakeButton(IsFavorite(card) ? "已收藏 ★" : "加入收藏 ☆", false, false);
+            Button favorite = UiTheme.MakeButton("", false, false);
+            StyleFavoriteActionButton(favorite, IsFavorite(card));
             Button shelf = UiTheme.MakeButton("管理书架", false, false);
             shelf.Margin = new Thickness(8, 0, 8, 0);
             favorite.Click += delegate
             {
                 ToggleFavorite(card);
-                favorite.Content = IsFavorite(card) ? "已收藏 ★" : "加入收藏 ☆";
+                StyleFavoriteActionButton(favorite, IsFavorite(card));
             };
             shelf.Click += delegate { OpenAddToCollectionDialog(card, owner); };
             actions.Children.Add(favorite);
@@ -5125,10 +5691,12 @@ namespace KomaComic.Windows
 
         private void ToggleFavorite(ComicCardModel card)
         {
+            if (card == null) return;
             int idx = _services.Favorites.FindIndex(delegate (ComicCardModel f) { return f.Uid == card.Uid; });
             if (idx >= 0) { _services.Favorites.RemoveAt(idx); ShowToast("已取消收藏"); }
             else { _services.Favorites.Insert(0, card); ShowToast("已加入收藏"); }
             _services.SaveState();
+            SyncReaderFavoriteButton();
             if (_services.ActiveHomeMode == "fav") LoadActiveFeedAsync(1);
         }
 
@@ -5140,6 +5708,48 @@ namespace KomaComic.Windows
             _services.SaveState();
         }
 
+        private void AddLocalFolderAction()
+        {
+            using (System.Windows.Forms.FolderBrowserDialog fbd = new System.Windows.Forms.FolderBrowserDialog())
+            {
+                fbd.Description = "选择包含漫画图片目录或 ZIP/CBZ/EPUB 的文件夹";
+                if (fbd.ShowDialog() == System.Windows.Forms.DialogResult.OK)
+                {
+                    _services.AddWarehousePath(fbd.SelectedPath);
+                    RenderWarehouseView();
+                    RenderCollectionsView();
+                    if (_services.ActiveHomeMode == "local") LoadActiveFeedAsync(1);
+                    ShowToast("已添加并扫描：" + _services.GetLocalComicCards().Count + " 本本地漫画");
+                }
+            }
+        }
+
+        private void ImportLocalArchiveAction()
+        {
+            using (System.Windows.Forms.OpenFileDialog ofd = new System.Windows.Forms.OpenFileDialog())
+            {
+                ofd.Filter = "漫画压缩包 (*.zip;*.cbz;*.epub)|*.zip;*.cbz;*.epub|所有文件 (*.*)|*.*";
+                ofd.Multiselect = true;
+                if (ofd.ShowDialog() == System.Windows.Forms.DialogResult.OK)
+                {
+                    foreach (string f in ofd.FileNames) _services.AddWarehousePath(f);
+                    RenderWarehouseView();
+                    RenderCollectionsView();
+                    if (_services.ActiveHomeMode == "local") LoadActiveFeedAsync(1);
+                    ShowToast("导入完成：" + _services.GetLocalComicCards().Count + " 本本地漫画");
+                }
+            }
+        }
+
+        private void RescanLocalLibraryAction()
+        {
+            _services.RescanLocalLibrary();
+            RenderWarehouseView();
+            RenderCollectionsView();
+            if (_services.ActiveHomeMode == "local") LoadActiveFeedAsync(1);
+            ShowToast("重新扫描完成：" + _services.GetLocalComicCards().Count + " 本本地漫画");
+        }
+
         /* ================= COLLECTIONS VIEW ================= */
         private Grid BuildCollectionsView()
         {
@@ -5149,11 +5759,23 @@ namespace KomaComic.Windows
             g.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
 
             DockPanel header = new DockPanel { Margin = new Thickness(0, 0, 0, 12) };
-            StackPanel btns = new StackPanel { Orientation = Orientation.Horizontal };
+            WrapPanel btns = new WrapPanel { VerticalAlignment = VerticalAlignment.Center };
             DockPanel.SetDock(btns, Dock.Right);
-            Button btnNew = UiTheme.MakeButton("+ 新建作品集", true, false);
+
+            Button btnAddFolder = UiTheme.MakeButton("+ 添加本地文件夹", true, false);
+            Button btnImportArc = UiTheme.MakeButton("+ 导入压缩包", false, false);
+            Button btnRescan = UiTheme.MakeButton("↻ 重新扫描", false, false);
+            Button btnNew = UiTheme.MakeButton("+ 新建作品集", false, false);
             Button btnManage = UiTheme.MakeButton("管理当前作品集", false, false);
-            btnNew.Margin = new Thickness(0, 0, 8, 0);
+            btnAddFolder.Margin = new Thickness(0, 0, 8, 6);
+            btnImportArc.Margin = new Thickness(0, 0, 8, 6);
+            btnRescan.Margin = new Thickness(0, 0, 8, 6);
+            btnNew.Margin = new Thickness(0, 0, 8, 6);
+            btnManage.Margin = new Thickness(0, 0, 0, 6);
+
+            btnAddFolder.Click += delegate { AddLocalFolderAction(); };
+            btnImportArc.Click += delegate { ImportLocalArchiveAction(); };
+            btnRescan.Click += delegate { RescanLocalLibraryAction(); };
             btnNew.Click += delegate (object s, RoutedEventArgs e)
             {
                 string name = PromptStringDialog("新建作品集", "请输入新作品集名称：", "");
@@ -5167,13 +5789,16 @@ namespace KomaComic.Windows
                 }
             };
             btnManage.Click += delegate (object s, RoutedEventArgs e) { OpenManageCollectionDialog(); };
+            btns.Children.Add(btnAddFolder);
+            btns.Children.Add(btnImportArc);
+            btns.Children.Add(btnRescan);
             btns.Children.Add(btnNew);
             btns.Children.Add(btnManage);
             header.Children.Add(btns);
 
             StackPanel titles = new StackPanel();
             titles.Children.Add(new TextBlock { Text = "本地书架", FontSize = 22, FontWeight = FontWeights.Bold });
-            TextBlock sub = new TextBlock { Text = "分组整理导入的漫画，可为书架设置 PIN", FontSize = 13, Margin = new Thickness(0, 4, 0, 0) };
+            TextBlock sub = new TextBlock { Text = "导入本机漫画文件夹与压缩包，分组整理并可设置 PIN 锁", FontSize = 13, Margin = new Thickness(0, 4, 0, 0) };
             sub.SetResourceReference(TextBlock.ForegroundProperty, "Brush.TextMuted");
             titles.Children.Add(sub);
             header.Children.Add(titles);
@@ -5408,39 +6033,9 @@ namespace KomaComic.Windows
             Button btnRescan = UiTheme.MakeButton("↻ 重新扫描", false, false);
             btnFolder.Margin = new Thickness(0, 0, 8, 0);
             btnArchive.Margin = new Thickness(0, 0, 8, 0);
-            btnFolder.Click += delegate (object s, RoutedEventArgs e)
-            {
-                using (System.Windows.Forms.FolderBrowserDialog fbd = new System.Windows.Forms.FolderBrowserDialog())
-                {
-                    fbd.Description = "选择包含漫画图片目录或 ZIP/CBZ/EPUB 的文件夹";
-                    if (fbd.ShowDialog() == System.Windows.Forms.DialogResult.OK)
-                    {
-                        _services.AddWarehousePath(fbd.SelectedPath);
-                        RenderWarehouseView();
-                        ShowToast("已添加并扫描：" + _services.GetLocalComicCards().Count + " 本本地漫画");
-                    }
-                }
-            };
-            btnArchive.Click += delegate (object s, RoutedEventArgs e)
-            {
-                using (System.Windows.Forms.OpenFileDialog ofd = new System.Windows.Forms.OpenFileDialog())
-                {
-                    ofd.Filter = "漫画压缩包 (*.zip;*.cbz;*.epub)|*.zip;*.cbz;*.epub|所有文件 (*.*)|*.*";
-                    ofd.Multiselect = true;
-                    if (ofd.ShowDialog() == System.Windows.Forms.DialogResult.OK)
-                    {
-                        foreach (string f in ofd.FileNames) _services.AddWarehousePath(f);
-                        RenderWarehouseView();
-                        ShowToast("导入完成：" + _services.GetLocalComicCards().Count + " 本本地漫画");
-                    }
-                }
-            };
-            btnRescan.Click += delegate (object s, RoutedEventArgs e)
-            {
-                _services.RescanLocalLibrary();
-                RenderWarehouseView();
-                ShowToast("重新扫描完成");
-            };
+            btnFolder.Click += delegate { AddLocalFolderAction(); };
+            btnArchive.Click += delegate { ImportLocalArchiveAction(); };
+            btnRescan.Click += delegate { RescanLocalLibraryAction(); };
             btns.Children.Add(btnFolder);
             btns.Children.Add(btnArchive);
             btns.Children.Add(btnRescan);
@@ -5815,12 +6410,16 @@ namespace KomaComic.Windows
             StackPanel spBtns = new StackPanel { Orientation = Orientation.Horizontal };
             DockPanel.SetDock(spBtns, Dock.Right);
             Button bsSin = UiTheme.MakeButton("单页", _services.ReaderDefaults.Spread == "single", false);
-            Button bsDbl = UiTheme.MakeButton("双页拼合", _services.ReaderDefaults.Spread == "double", false);
+            Button bsDbl = UiTheme.MakeButton("双页合并", _services.ReaderDefaults.Spread == "double", false);
+            Button bsSpl = UiTheme.MakeButton("双页分割", _services.ReaderDefaults.Spread == "split", false);
             bsSin.Margin = new Thickness(0, 0, 6, 0);
-            bsSin.Click += delegate (object s, RoutedEventArgs e) { _services.ReaderDefaults.Spread = "single"; _services.SaveState(); bsSin.Style = UiTheme.BuildPillButtonStyle(true, false); bsDbl.Style = UiTheme.BuildPillButtonStyle(false, false); };
-            bsDbl.Click += delegate (object s, RoutedEventArgs e) { _services.ReaderDefaults.Spread = "double"; _services.SaveState(); bsSin.Style = UiTheme.BuildPillButtonStyle(false, false); bsDbl.Style = UiTheme.BuildPillButtonStyle(true, false); };
+            bsDbl.Margin = new Thickness(0, 0, 6, 0);
+            bsSin.Click += delegate (object s, RoutedEventArgs e) { _services.ReaderDefaults.Spread = "single"; _services.SaveState(); bsSin.Style = UiTheme.BuildPillButtonStyle(true, false); bsDbl.Style = UiTheme.BuildPillButtonStyle(false, false); bsSpl.Style = UiTheme.BuildPillButtonStyle(false, false); };
+            bsDbl.Click += delegate (object s, RoutedEventArgs e) { _services.ReaderDefaults.Spread = "double"; _services.SaveState(); bsSin.Style = UiTheme.BuildPillButtonStyle(false, false); bsDbl.Style = UiTheme.BuildPillButtonStyle(true, false); bsSpl.Style = UiTheme.BuildPillButtonStyle(false, false); };
+            bsSpl.Click += delegate (object s, RoutedEventArgs e) { _services.ReaderDefaults.Spread = "split"; _services.SaveState(); bsSin.Style = UiTheme.BuildPillButtonStyle(false, false); bsDbl.Style = UiTheme.BuildPillButtonStyle(false, false); bsSpl.Style = UiTheme.BuildPillButtonStyle(true, false); };
             spBtns.Children.Add(bsSin);
             spBtns.Children.Add(bsDbl);
+            spBtns.Children.Add(bsSpl);
             rowSp.Children.Add(spBtns);
             rowSp.Children.Add(new TextBlock { Text = "宽屏单双页布局", VerticalAlignment = VerticalAlignment.Center, FontSize = 13.5 });
             rdc.Children.Add(rowSp);
@@ -5874,6 +6473,8 @@ namespace KomaComic.Windows
         private void ApplyLibraryMaterial()
         {
             UiTheme.ApplyTheme(Application.Current, _services.ThemeMode, _services.GlassMaterial);
+            IntPtr hwnd = new WindowInteropHelper(this).Handle;
+            if (hwnd != IntPtr.Zero) NativeMethods.ApplyDarkTitleBar(hwnd, UiTheme.IsDarkActive);
             if (_wallpaper == null) return;
             _wallpaper.Source = null;
             _wallpaper.Effect = null;
@@ -5888,8 +6489,8 @@ namespace KomaComic.Windows
                 source.EndInit();
                 source.Freeze();
                 _wallpaper.Source = source;
-                _wallpaper.Opacity = UiTheme.IsDarkActive ? 0.25 : 0.34;
-                if (_services.GlassMaterial) _wallpaper.Effect = new System.Windows.Media.Effects.BlurEffect { Radius = 16 };
+                _wallpaper.Opacity = UiTheme.IsDarkActive ? 0.26 : 0.32;
+                if (_services.GlassMaterial) _wallpaper.Effect = new System.Windows.Media.Effects.BlurEffect { Radius = 22 };
             }
             catch (Exception ex) { ShowToast("无法读取壁纸：" + ex.Message); }
         }
@@ -6178,10 +6779,51 @@ namespace KomaComic.Windows
         /* ================= NATIVE WPF IMMERSIVE READER OVERLAY ================= */
         private Grid BuildReaderOverlay()
         {
-            Grid overlay = new Grid { Background = new SolidColorBrush(Color.FromRgb(7, 8, 11)) };
+            Grid overlay = new Grid { Background = new SolidColorBrush(Color.FromRgb(7, 9, 13)) };
 
             _readerZoomTransform = new ScaleTransform(1.0, 1.0);
+            _readerSpreadSlideTransform = new TranslateTransform(0, 0);
+            _readerSpreadAnimScale = new ScaleTransform(1.0, 1.0);
+            _readerSpreadTransformGroup = new TransformGroup();
+            _readerSpreadTransformGroup.Children.Add(_readerZoomTransform);
+            _readerSpreadTransformGroup.Children.Add(_readerSpreadAnimScale);
+            _readerSpreadTransformGroup.Children.Add(_readerSpreadSlideTransform);
+
+            _readerGhostSlideTransform = new TranslateTransform(0, 0);
+            _readerGhostAnimScale = new ScaleTransform(1.0, 1.0);
+            _readerGhostTransformGroup = new TransformGroup();
+            _readerGhostTransformGroup.Children.Add(_readerGhostAnimScale);
+            _readerGhostTransformGroup.Children.Add(_readerGhostSlideTransform);
+
             _readerViewport = new Grid { Background = Brushes.Transparent, ClipToBounds = true };
+
+            // Outgoing Ghost Layer (for zero-allocation smooth page-turn transitions)
+            _readerGhostGrid = new Grid
+            {
+                HorizontalAlignment = HorizontalAlignment.Stretch,
+                VerticalAlignment = VerticalAlignment.Stretch,
+                RenderTransformOrigin = new Point(0.5, 0.5),
+                RenderTransform = _readerGhostTransformGroup,
+                Visibility = Visibility.Collapsed,
+                IsHitTestVisible = false
+            };
+            _readerGhostSingleImg = new Image { Stretch = Stretch.Uniform, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
+            RenderOptions.SetBitmapScalingMode(_readerGhostSingleImg, BitmapScalingMode.HighQuality);
+            _readerGhostGrid.Children.Add(_readerGhostSingleImg);
+
+            Grid ghostTwoCol = new Grid();
+            ghostTwoCol.ColumnDefinitions.Add(new ColumnDefinition());
+            ghostTwoCol.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(6) });
+            ghostTwoCol.ColumnDefinitions.Add(new ColumnDefinition());
+            _readerGhostLeftImg = new Image { Stretch = Stretch.Uniform, HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Center };
+            _readerGhostRightImg = new Image { Stretch = Stretch.Uniform, HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Center };
+            RenderOptions.SetBitmapScalingMode(_readerGhostLeftImg, BitmapScalingMode.HighQuality);
+            RenderOptions.SetBitmapScalingMode(_readerGhostRightImg, BitmapScalingMode.HighQuality);
+            Grid.SetColumn(_readerGhostRightImg, 2);
+            ghostTwoCol.Children.Add(_readerGhostLeftImg);
+            ghostTwoCol.Children.Add(_readerGhostRightImg);
+            _readerGhostGrid.Children.Add(ghostTwoCol);
+            _readerViewport.Children.Add(_readerGhostGrid);
 
             // Single / Double Spread Canvas
             _readerSpreadGrid = new Grid
@@ -6189,7 +6831,7 @@ namespace KomaComic.Windows
                 HorizontalAlignment = HorizontalAlignment.Stretch,
                 VerticalAlignment = VerticalAlignment.Stretch,
                 RenderTransformOrigin = new Point(0.5, 0.5),
-                RenderTransform = _readerZoomTransform
+                RenderTransform = _readerSpreadTransformGroup
             };
             _readerSingleImg = new Image { Stretch = Stretch.Uniform, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
             RenderOptions.SetBitmapScalingMode(_readerSingleImg, BitmapScalingMode.HighQuality);
@@ -6197,7 +6839,8 @@ namespace KomaComic.Windows
 
             Grid twoCol = new Grid();
             twoCol.ColumnDefinitions.Add(new ColumnDefinition());
-            twoCol.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(8) });
+            _readerSpreadGapCol = new ColumnDefinition { Width = new GridLength(6) };
+            twoCol.ColumnDefinitions.Add(_readerSpreadGapCol);
             twoCol.ColumnDefinitions.Add(new ColumnDefinition());
             _readerLeftImg = new Image { Stretch = Stretch.Uniform, HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Center };
             _readerRightImg = new Image { Stretch = Stretch.Uniform, HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Center };
@@ -6208,6 +6851,23 @@ namespace KomaComic.Windows
             twoCol.Children.Add(_readerRightImg);
             _readerSpreadGrid.Children.Add(twoCol);
             _readerViewport.Children.Add(_readerSpreadGrid);
+
+            // Page-turn curl/cover shadow overlay
+            _readerAnimShadow = new Rectangle
+            {
+                Width = 48,
+                HorizontalAlignment = HorizontalAlignment.Left,
+                VerticalAlignment = VerticalAlignment.Stretch,
+                IsHitTestVisible = false,
+                Visibility = Visibility.Collapsed
+            };
+            LinearGradientBrush shadowGrad = new LinearGradientBrush { StartPoint = new Point(0, 0.5), EndPoint = new Point(1, 0.5) };
+            shadowGrad.GradientStops.Add(new GradientStop(Color.FromArgb(0, 0, 0, 0), 0.0));
+            shadowGrad.GradientStops.Add(new GradientStop(Color.FromArgb(150, 0, 0, 0), 0.5));
+            shadowGrad.GradientStops.Add(new GradientStop(Color.FromArgb(0, 0, 0, 0), 1.0));
+            shadowGrad.Freeze();
+            _readerAnimShadow.Fill = shadowGrad;
+            _readerViewport.Children.Add(_readerAnimShadow);
 
             // Vertical Scroll Mode Canvas
             _readerScrollViewer = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Visibility = Visibility.Collapsed };
@@ -6220,11 +6880,9 @@ namespace KomaComic.Windows
             _readerBrightnessScrim = new Rectangle { Fill = Brushes.Black, Opacity = 0, IsHitTestVisible = false };
             _readerViewport.Children.Add(_readerBrightnessScrim);
 
-            // Click zones for turn/chrome + double-click zoom + wheel zoom
-            int clickCount = 0;
+            // Click zones for turn/chrome + double-click zoom + wheel page turn & Ctrl+wheel zoom
             _readerViewport.MouseLeftButtonUp += delegate (object s, MouseButtonEventArgs e)
             {
-                clickCount = e.ClickCount;
                 ReaderPrefModel prof = GetActiveReaderProfile();
                 if (e.ClickCount >= 2 && prof.DoubleTapZoom)
                 {
@@ -6233,12 +6891,17 @@ namespace KomaComic.Windows
                     _readerZoomTransform.ScaleY = _zoomScale;
                     return;
                 }
+                if (_readerDrawer.Visibility == Visibility.Visible)
+                {
+                    SetReaderDrawerVisible(false);
+                    return;
+                }
                 Point pt = e.GetPosition(_readerViewport);
                 double relX = pt.X / Math.Max(1.0, _readerViewport.ActualWidth);
                 if (relX > 0.30 && relX < 0.70)
                 {
                     _chromeVisible = !_chromeVisible;
-                    SyncReaderChromeVisibility();
+                    SyncReaderChromeVisibility(true);
                 }
                 else if (prof.Mode != "scroll")
                 {
@@ -6254,6 +6917,16 @@ namespace KomaComic.Windows
                     _zoomScale = Math.Max(0.6, Math.Min(3.0, _zoomScale + (e.Delta > 0 ? 0.15 : -0.15)));
                     _readerZoomTransform.ScaleX = _zoomScale;
                     _readerZoomTransform.ScaleY = _zoomScale;
+                    return;
+                }
+                ReaderPrefModel prof = GetActiveReaderProfile();
+                if (prof.Mode != "scroll" && prof.WheelPageTurn && _zoomScale <= 1.05)
+                {
+                    e.Handled = true;
+                    long now = Environment.TickCount;
+                    if (Math.Abs(now - _lastWheelTurnTick) < 135) return;
+                    _lastWheelTurnTick = now;
+                    TurnReaderPage(e.Delta < 0 ? 1 : -1);
                 }
             };
 
@@ -6261,8 +6934,8 @@ namespace KomaComic.Windows
             _readerTranslationStatus = new TextBlock
             {
                 HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Top,
-                Margin = new Thickness(0, 62, 18, 0), Padding = new Thickness(10, 5, 10, 5),
-                Background = new SolidColorBrush(Color.FromArgb(225, 21, 32, 52)), Foreground = Brushes.White,
+                Margin = new Thickness(0, 68, 18, 0), Padding = new Thickness(12, 6, 12, 6),
+                Background = new SolidColorBrush(Color.FromArgb(220, 18, 26, 42)), Foreground = Brushes.White,
                 Visibility = Visibility.Collapsed, Cursor = Cursors.Hand, TextWrapping = TextWrapping.Wrap
             };
             _readerTranslationStatus.MouseLeftButtonUp += delegate { _readerTranslationEpoch++; QueueVisibleTranslation(); };
@@ -6273,9 +6946,11 @@ namespace KomaComic.Windows
             // Loading Box
             _readerLoadingBox = new Border
             {
-                CornerRadius = new CornerRadius(12),
-                Background = new SolidColorBrush(Color.FromArgb(225, 20, 26, 36)),
-                Padding = new Thickness(18, 11, 18, 11),
+                CornerRadius = new CornerRadius(16),
+                Background = new SolidColorBrush(Color.FromArgb(228, 18, 24, 36)),
+                BorderBrush = new SolidColorBrush(Color.FromArgb(65, 255, 255, 255)),
+                BorderThickness = new Thickness(1),
+                Padding = new Thickness(20, 13, 20, 13),
                 HorizontalAlignment = HorizontalAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Center,
                 Visibility = Visibility.Collapsed
@@ -6295,49 +6970,64 @@ namespace KomaComic.Windows
             _readerPageBadge = new Border
             {
                 CornerRadius = new CornerRadius(99),
-                Background = new SolidColorBrush(Color.FromArgb(180, 12, 16, 22)),
-                Padding = new Thickness(11, 4, 11, 4),
+                Background = new SolidColorBrush(Color.FromArgb(175, 14, 19, 29)),
+                BorderBrush = new SolidColorBrush(Color.FromArgb(46, 255, 255, 255)),
+                BorderThickness = new Thickness(1),
+                Padding = new Thickness(12, 4, 12, 4),
                 HorizontalAlignment = HorizontalAlignment.Right,
                 VerticalAlignment = VerticalAlignment.Bottom,
                 Margin = new Thickness(0, 0, 18, 14),
                 IsHitTestVisible = false
             };
-            _readerPageBadgeText = new TextBlock { Foreground = new SolidColorBrush(Color.FromRgb(203, 213, 225)), FontSize = 12 };
+            _readerPageBadgeText = new TextBlock { Foreground = new SolidColorBrush(Color.FromRgb(215, 224, 238)), FontSize = 12 };
             _readerPageBadge.Child = _readerPageBadgeText;
             overlay.Children.Add(_readerPageBadge);
 
-            // Top Chrome Bar
+            // Top Chrome Bar (slides down smoothly)
+            _readerTopTranslate = new TranslateTransform(0, -68);
             _readerTopBar = new Border
             {
-                Height = 62,
+                Height = 64,
                 VerticalAlignment = VerticalAlignment.Top,
                 Padding = new Thickness(18, 0, 18, 0),
-                Background = new LinearGradientBrush(Color.FromArgb(225, 7, 9, 14), Color.FromArgb(0, 7, 9, 14), 90)
+                Background = new LinearGradientBrush(Color.FromArgb(232, 9, 13, 22), Color.FromArgb(0, 9, 13, 22), 90),
+                RenderTransform = _readerTopTranslate,
+                Opacity = 0,
+                Visibility = Visibility.Collapsed
             };
             DockPanel topDock = new DockPanel();
             StackPanel topRight = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
             DockPanel.SetDock(topRight, Dock.Right);
-            _btnSpreadPairShift = new Button
+
+            _btnTopSpreadMerge = MakeReaderTopPillBtn("双页合并", "双页模式：将相邻两页拼合显示");
+            _btnTopSpreadMerge.Click += delegate
             {
-                Content = "更改跨页匹配",
-                Foreground = new SolidColorBrush(Color.FromRgb(232, 241, 255)),
-                Background = new SolidColorBrush(Color.FromArgb(215, 24, 30, 42)),
-                BorderBrush = new SolidColorBrush(Color.FromArgb(65, 255, 255, 255)),
-                BorderThickness = new Thickness(1),
-                Padding = new Thickness(14, 6, 14, 6),
-                Margin = new Thickness(0, 0, 10, 0),
-                Cursor = Cursors.Hand,
-                Template = UiTheme.CreateRoundedButtonTemplate(16, null)
+                ReaderPrefModel curP = GetActiveReaderProfile();
+                string nextSpread = curP.Spread == "double" ? "single" : "double";
+                UpdateActiveReaderProfile(delegate (ReaderPrefModel p) { p.Spread = nextSpread; });
+                ShowToast(nextSpread == "double" ? "已切换：双页合并" : "已切换：单页模式");
             };
+            _btnTopSpreadSplit = MakeReaderTopPillBtn("双页分割", "双页模式：将宽幅双页图裁切为左右半页阅读");
+            _btnTopSpreadSplit.Click += delegate
+            {
+                ReaderPrefModel curP = GetActiveReaderProfile();
+                string nextSpread = curP.Spread == "split" ? "single" : "split";
+                _splitHalf = 0;
+                UpdateActiveReaderProfile(delegate (ReaderPrefModel p) { p.Spread = nextSpread; });
+                ShowToast(nextSpread == "split" ? "已切换：双页分割" : "已切换：单页模式");
+            };
+            _btnSpreadPairShift = MakeReaderTopPillBtn("跨页偏移", "切换双页合并的奇偶页配对（首页单页/双页起）");
             _btnSpreadPairShift.Click += delegate (object s, RoutedEventArgs e)
             {
                 _spreadShift = _spreadShift == 0 ? 1 : 0;
                 RenderCurrentReaderPagesAsync();
                 ShowToast(_spreadShift == 1 ? "跨页匹配：首页单页起" : "跨页匹配：默认双页起");
             };
-            Button btnFull = UiTheme.MakeButton("⛶", false, false);
-            btnFull.Width = 38; btnFull.Height = 38; btnFull.Padding = new Thickness(0);
+            Button btnFull = MakeReaderTopPillBtn("⛶", "切换全屏 (F11)");
+            btnFull.Width = 38; btnFull.Height = 36; btnFull.Padding = new Thickness(0); btnFull.Margin = new Thickness(0);
             btnFull.Click += delegate (object s, RoutedEventArgs e) { ToggleFullscreen(); };
+            topRight.Children.Add(_btnTopSpreadMerge);
+            topRight.Children.Add(_btnTopSpreadSplit);
             topRight.Children.Add(_btnSpreadPairShift);
             topRight.Children.Add(btnFull);
             topDock.Children.Add(topRight);
@@ -6349,16 +7039,18 @@ namespace KomaComic.Windows
                 Width = 38,
                 Height = 38,
                 Foreground = Brushes.White,
-                Background = new SolidColorBrush(Color.FromArgb(190, 24, 30, 42)),
-                BorderThickness = new Thickness(0),
+                Background = new SolidColorBrush(Color.FromArgb(186, 22, 30, 46)),
+                BorderBrush = new SolidColorBrush(Color.FromArgb(72, 255, 255, 255)),
+                BorderThickness = new Thickness(1),
                 Cursor = Cursors.Hand,
+                FocusVisualStyle = null,
                 FontSize = 17,
                 Template = UiTheme.CreateRoundedButtonTemplate(19, null)
             };
             btnBack.Click += delegate (object s, RoutedEventArgs e) { CloseReader(); };
             StackPanel titleStack = new StackPanel { Margin = new Thickness(12, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center };
             _readerTitleText = new TextBlock { Foreground = Brushes.White, FontSize = 14.5, FontWeight = FontWeights.Bold };
-            _readerChapterText = new TextBlock { Foreground = new SolidColorBrush(Color.FromRgb(166, 179, 200)), FontSize = 12 };
+            _readerChapterText = new TextBlock { Foreground = new SolidColorBrush(Color.FromRgb(176, 190, 212)), FontSize = 12 };
             titleStack.Children.Add(_readerTitleText);
             titleStack.Children.Add(_readerChapterText);
             topLeft.Children.Add(btnBack);
@@ -6367,20 +7059,43 @@ namespace KomaComic.Windows
             _readerTopBar.Child = topDock;
             overlay.Children.Add(_readerTopBar);
 
-            // Floating Rounded Capsule Bottom Menu
+            // Floating Liquid Glass Capsule Bottom Menu (slides smoothly from bottom)
+            _readerBottomTranslate = new TranslateTransform(0, 96);
+            LinearGradientBrush hudGlassBg = new LinearGradientBrush { StartPoint = new Point(0, 0), EndPoint = new Point(1, 1) };
+            hudGlassBg.GradientStops.Add(new GradientStop(Color.FromArgb(228, 24, 33, 50), 0.0));
+            hudGlassBg.GradientStops.Add(new GradientStop(Color.FromArgb(218, 13, 18, 29), 1.0));
+            hudGlassBg.Freeze();
+
+            LinearGradientBrush hudGlassRim = new LinearGradientBrush { StartPoint = new Point(0, 0), EndPoint = new Point(1, 1) };
+            hudGlassRim.GradientStops.Add(new GradientStop(Color.FromArgb(115, 255, 255, 255), 0.0));
+            hudGlassRim.GradientStops.Add(new GradientStop(Color.FromArgb(30, 255, 255, 255), 0.45));
+            hudGlassRim.GradientStops.Add(new GradientStop(Color.FromArgb(72, 125, 196, 255), 1.0));
+            hudGlassRim.Freeze();
+
+            LinearGradientBrush hudSheen = new LinearGradientBrush { StartPoint = new Point(0.5, 0), EndPoint = new Point(0.5, 1) };
+            hudSheen.GradientStops.Add(new GradientStop(Color.FromArgb(46, 255, 255, 255), 0.0));
+            hudSheen.GradientStops.Add(new GradientStop(Color.FromArgb(0, 255, 255, 255), 0.55));
+            hudSheen.Freeze();
+
             _readerBottomCapsule = new Border
             {
-                Width = 560,
+                Width = 600,
                 VerticalAlignment = VerticalAlignment.Bottom,
                 HorizontalAlignment = HorizontalAlignment.Center,
                 Margin = new Thickness(0, 0, 0, 22),
-                CornerRadius = new CornerRadius(26),
-                Background = new SolidColorBrush(Color.FromArgb(236, 22, 26, 34)),
-                BorderBrush = new SolidColorBrush(Color.FromArgb(35, 255, 255, 255)),
+                CornerRadius = new CornerRadius(28),
+                Background = hudGlassBg,
+                BorderBrush = hudGlassRim,
                 BorderThickness = new Thickness(1),
-                Padding = new Thickness(18, 10, 18, 8)
+                RenderTransform = _readerBottomTranslate,
+                Opacity = 0,
+                Visibility = Visibility.Collapsed,
+                Effect = new DropShadowEffect { Color = Colors.Black, BlurRadius = 30, ShadowDepth = 8, Direction = 270, Opacity = 0.52 }
             };
-            StackPanel capStack = new StackPanel();
+            Grid hudLayers = new Grid();
+            hudLayers.Children.Add(new Border { CornerRadius = new CornerRadius(28), Background = hudSheen, IsHitTestVisible = false });
+
+            StackPanel capStack = new StackPanel { Margin = new Thickness(20, 12, 20, 10) };
             Grid progGrid = new Grid();
             progGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
             progGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
@@ -6393,7 +7108,15 @@ namespace KomaComic.Windows
                 if (_readerChapterIdx > 0) LoadOnlineChapterAsync(_readerChapterIdx - 1, 0);
                 else ShowToast("已是第一话");
             };
-            _readerSeekSlider = new Slider { Minimum = 1, Maximum = 1, Value = 1, IsSnapToTickEnabled = true, TickFrequency = 1, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(10, 0, 10, 0) };
+            _readerSeekSlider = new Slider
+            {
+                Minimum = 1, Maximum = 1, Value = 1,
+                IsSnapToTickEnabled = true, TickFrequency = 1,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(12, 0, 12, 0),
+                FocusVisualStyle = null,
+                Template = UiTheme.CreateGlassSliderTemplate()
+            };
             _readerSeekSlider.ValueChanged += delegate (object s, RoutedPropertyChangedEventArgs<double> e)
             {
                 if (_readerPages.Count == 0) return;
@@ -6401,10 +7124,12 @@ namespace KomaComic.Windows
                 if (target != _readerPageIdx)
                 {
                     _readerPageIdx = target;
+                    _splitHalf = 0;
+                    _pendingAnimDir = 0;
                     RenderCurrentReaderPagesAsync();
                 }
             };
-            _readerSeekText = new TextBlock { Foreground = new SolidColorBrush(Color.FromRgb(203, 213, 225)), FontSize = 12, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 10, 0), Text = "1/1" };
+            _readerSeekText = new TextBlock { Foreground = new SolidColorBrush(Color.FromRgb(215, 224, 238)), FontSize = 12.5, FontWeight = FontWeights.SemiBold, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 10, 0), Text = "1/1" };
             Button btnNextCh = MakeReaderCapsuleMiniBtn("⏭", "下一话");
             btnNextCh.Click += delegate (object s, RoutedEventArgs e)
             {
@@ -6420,61 +7145,115 @@ namespace KomaComic.Windows
             progGrid.Children.Add(btnNextCh);
             capStack.Children.Add(progGrid);
 
-            Grid actGrid = new Grid { Margin = new Thickness(0, 6, 0, 0) };
+            Grid actGrid = new Grid { Margin = new Thickness(0, 8, 0, 0) };
             actGrid.ColumnDefinitions.Add(new ColumnDefinition());
             actGrid.ColumnDefinitions.Add(new ColumnDefinition());
             actGrid.ColumnDefinitions.Add(new ColumnDefinition());
-            Button bSet = MakeReaderCapsuleMiniBtn("阅读设置", "阅读设置");
-            Button bFav = MakeReaderCapsuleMiniBtn("收藏", "添加或取消收藏");
-            Button bDir = MakeReaderCapsuleMiniBtn("目录", "章节目录");
             actGrid.ColumnDefinitions.Add(new ColumnDefinition());
-            _readerTranslationButton = MakeReaderCapsuleMiniBtn("翻译", "切换原文与译文");
+
+            Button bSet = MakeReaderCapsuleMiniBtn("⚙ 阅读设置", "阅读设置");
+            _readerFavButton = MakeReaderCapsuleMiniBtn("☆ 收藏", "添加或取消收藏");
+            Button bDir = MakeReaderCapsuleMiniBtn("☰ 目录", "章节目录");
+            _readerTranslationButton = MakeReaderCapsuleMiniBtn("译 翻译", "切换原文与译文");
             _readerTranslationButton.Click += delegate { ToggleReaderTranslation(); };
-            Grid.SetColumn(_readerTranslationButton, 3);
-            actGrid.Children.Add(_readerTranslationButton);
             bSet.Click += delegate (object s, RoutedEventArgs e)
             {
-                _readerDrawer.Visibility = _readerDrawer.Visibility == Visibility.Visible ? Visibility.Collapsed : Visibility.Visible;
+                SetReaderDrawerVisible(_readerDrawer.Visibility != Visibility.Visible);
             };
-            bFav.Click += delegate (object s, RoutedEventArgs e) { if (_readerComic != null) ToggleFavorite(_readerComic); };
+            _readerFavButton.Click += delegate (object s, RoutedEventArgs e) { if (_readerComic != null) ToggleFavorite(_readerComic); };
             bDir.Click += delegate (object s, RoutedEventArgs e) { OpenReaderChaptersDialog(); };
-            Grid.SetColumn(bFav, 1);
+            Grid.SetColumn(_readerFavButton, 1);
             Grid.SetColumn(bDir, 2);
+            Grid.SetColumn(_readerTranslationButton, 3);
             actGrid.Children.Add(bSet);
-            actGrid.Children.Add(bFav);
+            actGrid.Children.Add(_readerFavButton);
             actGrid.Children.Add(bDir);
+            actGrid.Children.Add(_readerTranslationButton);
             capStack.Children.Add(actGrid);
-            _readerBottomCapsule.Child = capStack;
+
+            hudLayers.Children.Add(capStack);
+            _readerBottomCapsule.Child = hudLayers;
             overlay.Children.Add(_readerBottomCapsule);
 
-            // Dark Card Right Settings Drawer (Matches Figure 3)
+            // Frosted Liquid Glass Right Settings Drawer
+            _readerDrawerTranslate = new TranslateTransform(360, 0);
             _readerDrawer = BuildReaderSettingsDrawer();
+            _readerDrawer.RenderTransform = _readerDrawerTranslate;
+            _readerDrawer.Opacity = 0;
             _readerDrawer.Visibility = Visibility.Collapsed;
             overlay.Children.Add(_readerDrawer);
 
             return overlay;
         }
 
+        private static Button MakeReaderTopPillBtn(string text, string tip)
+        {
+            return new Button
+            {
+                Content = text,
+                ToolTip = tip,
+                Foreground = new SolidColorBrush(Color.FromRgb(232, 241, 255)),
+                Background = new SolidColorBrush(Color.FromArgb(190, 22, 30, 46)),
+                BorderBrush = new SolidColorBrush(Color.FromArgb(68, 255, 255, 255)),
+                BorderThickness = new Thickness(1),
+                Padding = new Thickness(12, 6, 12, 6),
+                Margin = new Thickness(0, 0, 8, 0),
+                FontSize = 12.5,
+                FontWeight = FontWeights.SemiBold,
+                Cursor = Cursors.Hand,
+                FocusVisualStyle = null,
+                Template = UiTheme.CreateRoundedButtonTemplate(16, null)
+            };
+        }
+
+        private void SyncReaderFavoriteButton()
+        {
+            if (_readerFavButton == null) return;
+            bool fav = IsFavorite(_readerComic);
+            if (fav)
+            {
+                _readerFavButton.Content = "★ 已收藏";
+                _readerFavButton.Foreground = new SolidColorBrush(Color.FromRgb(255, 212, 102));
+                _readerFavButton.Background = new SolidColorBrush(Color.FromArgb(58, 245, 158, 11));
+                _readerFavButton.BorderBrush = new SolidColorBrush(Color.FromArgb(165, 251, 191, 36));
+                _readerFavButton.BorderThickness = new Thickness(1);
+            }
+            else
+            {
+                _readerFavButton.Content = "☆ 收藏";
+                _readerFavButton.Foreground = new SolidColorBrush(Color.FromRgb(220, 228, 242));
+                _readerFavButton.Background = Brushes.Transparent;
+                _readerFavButton.BorderBrush = Brushes.Transparent;
+                _readerFavButton.BorderThickness = new Thickness(0);
+            }
+        }
+
         private Border BuildReaderSettingsDrawer()
         {
+            LinearGradientBrush drawerBg = new LinearGradientBrush { StartPoint = new Point(0, 0), EndPoint = new Point(1, 1) };
+            drawerBg.GradientStops.Add(new GradientStop(Color.FromArgb(242, 19, 27, 42), 0.0));
+            drawerBg.GradientStops.Add(new GradientStop(Color.FromArgb(242, 12, 17, 28), 1.0));
+            drawerBg.Freeze();
+
             Border drawer = new Border
             {
-                Width = 340,
+                Width = 356,
                 HorizontalAlignment = HorizontalAlignment.Right,
-                Background = new SolidColorBrush(Color.FromRgb(16, 22, 32)),
-                BorderBrush = new SolidColorBrush(Color.FromArgb(24, 255, 255, 255)),
-                BorderThickness = new Thickness(1, 0, 0, 0)
+                Background = drawerBg,
+                BorderBrush = new SolidColorBrush(Color.FromArgb(56, 255, 255, 255)),
+                BorderThickness = new Thickness(1, 0, 0, 0),
+                Effect = new DropShadowEffect { Color = Colors.Black, BlurRadius = 28, ShadowDepth = 6, Direction = 180, Opacity = 0.52 }
             };
 
             DockPanel dp = new DockPanel();
-            Border dHeader = new Border { Padding = new Thickness(18, 15, 18, 15), BorderThickness = new Thickness(0, 0, 0, 1), BorderBrush = new SolidColorBrush(Color.FromArgb(22, 255, 255, 255)) };
+            Border dHeader = new Border { Padding = new Thickness(18, 15, 18, 15), BorderThickness = new Thickness(0, 0, 0, 1), BorderBrush = new SolidColorBrush(Color.FromArgb(28, 255, 255, 255)) };
             DockPanel.SetDock(dHeader, Dock.Top);
             DockPanel hd = new DockPanel();
-            Button bCloseD = new Button { Content = "✕", Foreground = Brushes.White, Background = Brushes.Transparent, BorderThickness = new Thickness(0), FontSize = 15, Cursor = Cursors.Hand };
+            Button bCloseD = new Button { Content = "✕", Foreground = Brushes.White, Background = Brushes.Transparent, BorderThickness = new Thickness(0), FontSize = 15, Cursor = Cursors.Hand, FocusVisualStyle = null };
             DockPanel.SetDock(bCloseD, Dock.Right);
-            bCloseD.Click += delegate (object s, RoutedEventArgs e) { _readerDrawer.Visibility = Visibility.Collapsed; };
+            bCloseD.Click += delegate (object s, RoutedEventArgs e) { SetReaderDrawerVisible(false); };
             hd.Children.Add(bCloseD);
-            hd.Children.Add(new TextBlock { Text = "设置", Foreground = Brushes.White, FontSize = 16, FontWeight = FontWeights.Bold });
+            hd.Children.Add(new TextBlock { Text = "阅读设置", Foreground = Brushes.White, FontSize = 16, FontWeight = FontWeights.Bold });
             dHeader.Child = hd;
             dp.Children.Add(dHeader);
 
@@ -6490,7 +7269,7 @@ namespace KomaComic.Windows
             brTop.Children.Add(_drawerBrightnessText);
             brTop.Children.Add(new TextBlock { Text = "亮度", Foreground = new SolidColorBrush(Color.FromRgb(180, 192, 212)), FontSize = 13 });
             c1s.Children.Add(brTop);
-            _drawerBrightnessSlider = new Slider { Minimum = 35, Maximum = 115, Value = 100 };
+            _drawerBrightnessSlider = new Slider { Minimum = 35, Maximum = 115, Value = 100, FocusVisualStyle = null, Template = UiTheme.CreateGlassSliderTemplate() };
             _drawerBrightnessSlider.ValueChanged += delegate (object s, RoutedPropertyChangedEventArgs<double> e)
             {
                 if (_readerOpen) UpdateActiveReaderProfile(delegate (ReaderPrefModel p) { p.Brightness = (int)_drawerBrightnessSlider.Value; });
@@ -6530,7 +7309,7 @@ namespace KomaComic.Windows
             c2.Child = c2s;
             stack.Children.Add(c2);
 
-            // Card 3: Quality & Spread Mode
+            // Card 3: Quality & Spread Mode (Single / Double Merge / Double Split)
             Border c3 = MakeDrawerCard();
             StackPanel c3s = new StackPanel();
             c3s.Children.Add(new TextBlock { Text = "画质", Foreground = new SolidColorBrush(Color.FromRgb(180, 192, 212)), FontSize = 13, Margin = new Thickness(0, 0, 0, 8) });
@@ -6551,30 +7330,101 @@ namespace KomaComic.Windows
             qGrid.Children.Add(_btnQSmooth);
             c3s.Children.Add(qGrid);
 
-            c3s.Children.Add(new TextBlock { Text = "模式", Foreground = new SolidColorBrush(Color.FromRgb(180, 192, 212)), FontSize = 13, Margin = new Thickness(0, 0, 0, 8) });
-            Grid sGrid = new Grid();
+            c3s.Children.Add(new TextBlock { Text = "单双页排版（合并 / 分割）", Foreground = new SolidColorBrush(Color.FromRgb(180, 192, 212)), FontSize = 13, Margin = new Thickness(0, 0, 0, 8) });
+            Grid sGrid = new Grid { Margin = new Thickness(0, 0, 0, 8) };
+            sGrid.ColumnDefinitions.Add(new ColumnDefinition());
             sGrid.ColumnDefinitions.Add(new ColumnDefinition());
             sGrid.ColumnDefinitions.Add(new ColumnDefinition());
             _btnSpreadSingle = MakeDrawerOptBtn("单页");
-            _btnSpreadDouble = MakeDrawerOptBtn("双页");
+            _btnSpreadDouble = MakeDrawerOptBtn("双页合并");
+            _btnSpreadSplit = MakeDrawerOptBtn("双页分割");
             Grid.SetColumn(_btnSpreadDouble, 1);
-            _btnSpreadSingle.Click += delegate (object s, RoutedEventArgs e) { UpdateActiveReaderProfile(delegate (ReaderPrefModel p) { p.Spread = "single"; }); };
-            _btnSpreadDouble.Click += delegate (object s, RoutedEventArgs e) { UpdateActiveReaderProfile(delegate (ReaderPrefModel p) { p.Spread = "double"; }); };
+            Grid.SetColumn(_btnSpreadSplit, 2);
+            _btnSpreadSingle.Click += delegate (object s, RoutedEventArgs e) { _splitHalf = 0; UpdateActiveReaderProfile(delegate (ReaderPrefModel p) { p.Spread = "single"; }); };
+            _btnSpreadDouble.Click += delegate (object s, RoutedEventArgs e) { _splitHalf = 0; UpdateActiveReaderProfile(delegate (ReaderPrefModel p) { p.Spread = "double"; }); };
+            _btnSpreadSplit.Click += delegate (object s, RoutedEventArgs e) { _splitHalf = 0; UpdateActiveReaderProfile(delegate (ReaderPrefModel p) { p.Spread = "split"; }); };
             sGrid.Children.Add(_btnSpreadSingle);
             sGrid.Children.Add(_btnSpreadDouble);
+            sGrid.Children.Add(_btnSpreadSplit);
             c3s.Children.Add(sGrid);
+
+            _chkSpreadGap = AddDrawerToggle(c3s, "双页合并保留中缝间距", delegate (bool v) { UpdateActiveReaderProfile(delegate (ReaderPrefModel p) { p.SpreadGap = v; }); });
+            _chkSplitAll = AddDrawerToggle(c3s, "双页分割强制裁切全部页", delegate (bool v) { _splitHalf = 0; UpdateActiveReaderProfile(delegate (ReaderPrefModel p) { p.SplitAllPages = v; }); });
             c3.Child = c3s;
             stack.Children.Add(c3);
 
-            // Card 4: Toggles
+            // Card 4: Page-Turn Animations
+            Border cAnim = MakeDrawerCard();
+            StackPanel cAnimS = new StackPanel();
+            cAnimS.Children.Add(new TextBlock { Text = "翻页动画", Foreground = new SolidColorBrush(Color.FromRgb(180, 192, 212)), FontSize = 13, Margin = new Thickness(0, 0, 0, 8) });
+            _animButtons.Clear();
+            string[,] animOpts = new string[,]
+            {
+                { "none", "无动画" },
+                { "fade", "柔和淡入" },
+                { "slide", "平滑滑动" },
+                { "cover", "覆层覆盖" },
+                { "curl", "拟真翻书" },
+                { "depth", "景深缩放" }
+            };
+            Grid aGrid = new Grid();
+            aGrid.ColumnDefinitions.Add(new ColumnDefinition());
+            aGrid.ColumnDefinitions.Add(new ColumnDefinition());
+            aGrid.ColumnDefinitions.Add(new ColumnDefinition());
+            aGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            aGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            for (int i = 0; i < 6; i++)
+            {
+                string key = animOpts[i, 0];
+                string lbl = animOpts[i, 1];
+                Button ab = MakeDrawerOptBtn(lbl);
+                ab.Margin = new Thickness(3, 3, 3, 3);
+                ab.Click += delegate { UpdateActiveReaderProfile(delegate (ReaderPrefModel p) { p.PageTurnAnim = key; }); };
+                Grid.SetRow(ab, i / 3);
+                Grid.SetColumn(ab, i % 3);
+                aGrid.Children.Add(ab);
+                _animButtons[key] = ab;
+            }
+            cAnimS.Children.Add(aGrid);
+            cAnim.Child = cAnimS;
+            stack.Children.Add(cAnim);
+
+            // Card 5: Page Prefetch Cache
+            Border cPref = MakeDrawerCard();
+            StackPanel cPrefS = new StackPanel();
+            cPrefS.Children.Add(new TextBlock { Text = "后续页提前预加载缓存", Foreground = new SolidColorBrush(Color.FromRgb(180, 192, 212)), FontSize = 13, Margin = new Thickness(0, 0, 0, 8) });
+            _prefetchButtons.Clear();
+            int[] prefCounts = new int[] { 0, 2, 4, 6, 8 };
+            Grid pGrid = new Grid();
+            for (int i = 0; i < prefCounts.Length; i++)
+            {
+                int count = prefCounts[i];
+                pGrid.ColumnDefinitions.Add(new ColumnDefinition());
+                Button pb = MakeDrawerOptBtn(count == 0 ? "关闭" : (count + "页"));
+                pb.Click += delegate
+                {
+                    UpdateActiveReaderProfile(delegate (ReaderPrefModel p) { p.PrefetchPages = count; });
+                    if (count > 0) PrefetchNextReaderPages(_readerPageIdx, _readerChapterRequest);
+                };
+                Grid.SetColumn(pb, i);
+                pGrid.Children.Add(pb);
+                _prefetchButtons[count] = pb;
+            }
+            cPrefS.Children.Add(pGrid);
+            cPref.Child = cPrefS;
+            stack.Children.Add(cPref);
+
+            // Card 6: Toggles
             Border c4 = MakeDrawerCard();
             StackPanel c4s = new StackPanel();
+            _chkWheelTurn = AddDrawerToggle(c4s, "鼠标滚轮翻页", delegate (bool v) { UpdateActiveReaderProfile(delegate (ReaderPrefModel p) { p.WheelPageTurn = v; }); });
             _chkTrimMargins = AddDrawerToggle(c4s, "去白边", delegate (bool v) { UpdateActiveReaderProfile(delegate (ReaderPrefModel p) { p.TrimMargins = v; }); });
             _chkDoubleZoom = AddDrawerToggle(c4s, "允许双击缩放画面", delegate (bool v) { UpdateActiveReaderProfile(delegate (ReaderPrefModel p) { p.DoubleTapZoom = v; }); });
             _chkShowComment = AddDrawerToggle(c4s, "展示单话评论页", delegate (bool v) { UpdateActiveReaderProfile(delegate (ReaderPrefModel p) { p.ShowCommentPage = v; }); });
             _chkShowPageNum = AddDrawerToggle(c4s, "展示页码", delegate (bool v) { UpdateActiveReaderProfile(delegate (ReaderPrefModel p) { p.ShowPageNumber = v; }); });
             c4.Child = c4s;
             stack.Children.Add(c4);
+
             var translationCard = MakeDrawerCard();
             var translationPanel = new StackPanel();
             var translationSettings = AddBrowseButton(translationPanel, "翻译设置", OpenReaderTranslationSettings);
@@ -6604,9 +7454,9 @@ namespace KomaComic.Windows
         {
             return new Border
             {
-                CornerRadius = new CornerRadius(14),
-                Background = new SolidColorBrush(Color.FromRgb(23, 31, 45)),
-                BorderBrush = new SolidColorBrush(Color.FromArgb(18, 255, 255, 255)),
+                CornerRadius = new CornerRadius(16),
+                Background = new SolidColorBrush(Color.FromArgb(185, 26, 36, 54)),
+                BorderBrush = new SolidColorBrush(Color.FromArgb(32, 255, 255, 255)),
                 BorderThickness = new Thickness(1),
                 Padding = new Thickness(14, 12, 14, 12),
                 Margin = new Thickness(0, 0, 0, 10)
@@ -6624,6 +7474,7 @@ namespace KomaComic.Windows
                 FontWeight = FontWeights.SemiBold,
                 BorderThickness = new Thickness(1),
                 Cursor = Cursors.Hand,
+                FocusVisualStyle = null,
                 Template = UiTheme.CreateRoundedButtonTemplate(10, null)
             };
         }
@@ -6638,9 +7489,12 @@ namespace KomaComic.Windows
                 Background = Brushes.Transparent,
                 BorderThickness = new Thickness(0),
                 FontSize = 13.5,
-                Padding = new Thickness(8, 4, 8, 4),
+                FontWeight = FontWeights.Medium,
+                Padding = new Thickness(10, 6, 10, 6),
+                Margin = new Thickness(2, 0, 2, 0),
                 Cursor = Cursors.Hand,
-                Template = UiTheme.CreateRoundedButtonTemplate(12, null)
+                FocusVisualStyle = null,
+                Template = UiTheme.CreateRoundedButtonTemplate(14, null)
             };
         }
 
@@ -6675,6 +7529,70 @@ namespace KomaComic.Windows
             RenderCurrentReaderPagesAsync();
         }
 
+        private void ClearReaderPageMemoryCache()
+        {
+            lock (_readerCacheLock)
+            {
+                _readerPageCache.Clear();
+                _readerPageCacheOrder.Clear();
+                _readerPageInFlight.Clear();
+            }
+        }
+
+        private string GetReaderCacheKey(PageImageModel page, int pageIdx)
+        {
+            if (page == null) return "";
+            if (page.IsLocal) return "local::" + page.LocalComicId + "::" + page.LocalPageIndex;
+            string chId = (_readerChapterIdx >= 0 && _readerChapterIdx < _readerChapters.Count) ? _readerChapters[_readerChapterIdx].Id : "";
+            string uid = _readerComic != null ? _readerComic.Uid : "";
+            return "online::" + uid + "::" + chId + "::" + pageIdx + "::" + (page.Url ?? "");
+        }
+
+        private BitmapImage TryGetCachedReaderBitmap(string key)
+        {
+            if (string.IsNullOrEmpty(key)) return null;
+            lock (_readerCacheLock)
+            {
+                BitmapImage bmp;
+                if (_readerPageCache.TryGetValue(key, out bmp))
+                {
+                    _readerPageCacheOrder.Remove(key);
+                    _readerPageCacheOrder.AddLast(key);
+                    return bmp;
+                }
+            }
+            return null;
+        }
+
+        private void PutCachedReaderBitmap(string key, BitmapImage bmp)
+        {
+            if (string.IsNullOrEmpty(key) || bmp == null) return;
+            lock (_readerCacheLock)
+            {
+                _readerPageCache[key] = bmp;
+                _readerPageCacheOrder.Remove(key);
+                _readerPageCacheOrder.AddLast(key);
+                while (_readerPageCacheOrder.Count > MaxReaderMemoryCachePages)
+                {
+                    string oldest = _readerPageCacheOrder.First.Value;
+                    _readerPageCacheOrder.RemoveFirst();
+                    _readerPageCache.Remove(oldest);
+                }
+            }
+        }
+
+        private static BitmapSource CropBitmapHalf(BitmapImage bmp, bool leftHalf)
+        {
+            if (bmp == null || bmp.PixelWidth < 4 || bmp.PixelHeight < 2) return bmp;
+            int halfW = bmp.PixelWidth / 2;
+            Int32Rect rect = leftHalf
+                ? new Int32Rect(0, 0, halfW, bmp.PixelHeight)
+                : new Int32Rect(halfW, 0, bmp.PixelWidth - halfW, bmp.PixelHeight);
+            CroppedBitmap cropped = new CroppedBitmap(bmp, rect);
+            cropped.Freeze();
+            return cropped;
+        }
+
         private void OpenLocalComicInReader(ComicCardModel card)
         {
             ++_readerChapterRequest;
@@ -6689,8 +7607,14 @@ namespace KomaComic.Windows
             ReaderPrefModel saved = null;
             _readerPageIdx = (_services.ComicPrefs.TryGetValue(card.Uid, out saved)) ? saved.LastPage : 0;
             _spreadShift = 0;
+            _splitHalf = 0;
+            _currentPageIsSplit = false;
+            _pendingAnimDir = 0;
             _zoomScale = 1.0;
+            _readerZoomTransform.ScaleX = 1.0;
+            _readerZoomTransform.ScaleY = 1.0;
             _widePageFlags.Clear();
+            ClearReaderPageMemoryCache();
             _chromeVisible = false;
 
             int count = _services.GetLocalPageCount(card.Id);
@@ -6703,7 +7627,8 @@ namespace KomaComic.Windows
             if (_readerPageIdx >= _readerPages.Count) _readerPageIdx = 0;
 
             _readerOverlay.Visibility = Visibility.Visible;
-            SyncReaderChromeVisibility();
+            SyncReaderFavoriteButton();
+            SyncReaderChromeVisibility(false);
             SyncReaderDrawerState();
             RenderCurrentReaderPagesAsync();
         }
@@ -6742,12 +7667,19 @@ namespace KomaComic.Windows
             _readerChapterIdx = chIdx;
             _readerPageIdx = pageIdx;
             _spreadShift = 0;
+            _splitHalf = 0;
+            _currentPageIsSplit = false;
+            _pendingAnimDir = 0;
             _zoomScale = 1.0;
+            _readerZoomTransform.ScaleX = 1.0;
+            _readerZoomTransform.ScaleY = 1.0;
             _widePageFlags.Clear();
+            ClearReaderPageMemoryCache();
             _chromeVisible = false;
 
             _readerOverlay.Visibility = Visibility.Visible;
-            SyncReaderChromeVisibility();
+            SyncReaderFavoriteButton();
+            SyncReaderChromeVisibility(false);
             SyncReaderDrawerState();
             LoadOnlineChapterAsync(chIdx, pageIdx);
         }
@@ -6771,11 +7703,16 @@ namespace KomaComic.Windows
             CancelReaderTranslation();
             _readerPages = new List<PageImageModel>();
             _widePageFlags.Clear();
+            ClearReaderPageMemoryCache();
             _readerPageIdx = targetPage;
+            _splitHalf = 0;
+            _currentPageIsSplit = false;
+            _pendingAnimDir = 0;
             ShowReaderMessage("正在加载章节…", null);
             _readerSingleImg.Source = null;
             _readerLeftImg.Source = null;
             _readerRightImg.Source = null;
+            _readerGhostGrid.Visibility = Visibility.Collapsed;
             _readerScrollStack.Children.Clear();
 
             ChapterItem chapter = _readerChapters[chIdx];
@@ -6816,11 +7753,105 @@ namespace KomaComic.Windows
             _services.SaveState();
         }
 
-        private void SyncReaderChromeVisibility()
+        private void SyncReaderChromeVisibility(bool animate = true)
         {
-            Visibility vis = _chromeVisible ? Visibility.Visible : Visibility.Collapsed;
-            _readerTopBar.Visibility = vis;
-            _readerBottomCapsule.Visibility = vis;
+            int gen = ++_chromeAnimGen;
+            bool smooth = animate && SystemParameters.ClientAreaAnimation;
+            if (_chromeVisible)
+            {
+                _readerTopBar.Visibility = Visibility.Visible;
+                _readerBottomCapsule.Visibility = Visibility.Visible;
+                if (!smooth)
+                {
+                    _readerTopTranslate.BeginAnimation(TranslateTransform.YProperty, null);
+                    _readerBottomTranslate.BeginAnimation(TranslateTransform.YProperty, null);
+                    _readerTopBar.BeginAnimation(UIElement.OpacityProperty, null);
+                    _readerBottomCapsule.BeginAnimation(UIElement.OpacityProperty, null);
+                    _readerTopTranslate.Y = 0;
+                    _readerBottomTranslate.Y = 0;
+                    _readerTopBar.Opacity = 1;
+                    _readerBottomCapsule.Opacity = 1;
+                    return;
+                }
+                CubicEase easeOut = new CubicEase { EasingMode = EasingMode.EaseOut };
+                _readerTopTranslate.BeginAnimation(TranslateTransform.YProperty, new DoubleAnimation(-64, 0, TimeSpan.FromMilliseconds(240)) { EasingFunction = easeOut });
+                _readerTopBar.BeginAnimation(UIElement.OpacityProperty, new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(220)) { EasingFunction = easeOut });
+                _readerBottomTranslate.BeginAnimation(TranslateTransform.YProperty, new DoubleAnimation(96, 0, TimeSpan.FromMilliseconds(280)) { EasingFunction = easeOut });
+                _readerBottomCapsule.BeginAnimation(UIElement.OpacityProperty, new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(240)) { EasingFunction = easeOut });
+            }
+            else
+            {
+                if (!smooth)
+                {
+                    _readerTopTranslate.BeginAnimation(TranslateTransform.YProperty, null);
+                    _readerBottomTranslate.BeginAnimation(TranslateTransform.YProperty, null);
+                    _readerTopBar.BeginAnimation(UIElement.OpacityProperty, null);
+                    _readerBottomCapsule.BeginAnimation(UIElement.OpacityProperty, null);
+                    _readerTopTranslate.Y = -68;
+                    _readerBottomTranslate.Y = 96;
+                    _readerTopBar.Opacity = 0;
+                    _readerBottomCapsule.Opacity = 0;
+                    _readerTopBar.Visibility = Visibility.Collapsed;
+                    _readerBottomCapsule.Visibility = Visibility.Collapsed;
+                    return;
+                }
+                CubicEase easeIn = new CubicEase { EasingMode = EasingMode.EaseIn };
+                DoubleAnimation topOut = new DoubleAnimation(_readerTopTranslate.Y, -68, TimeSpan.FromMilliseconds(190)) { EasingFunction = easeIn };
+                DoubleAnimation botOut = new DoubleAnimation(_readerBottomTranslate.Y, 96, TimeSpan.FromMilliseconds(210)) { EasingFunction = easeIn };
+                botOut.Completed += delegate
+                {
+                    if (gen == _chromeAnimGen && !_chromeVisible)
+                    {
+                        _readerTopBar.Visibility = Visibility.Collapsed;
+                        _readerBottomCapsule.Visibility = Visibility.Collapsed;
+                    }
+                };
+                _readerTopTranslate.BeginAnimation(TranslateTransform.YProperty, topOut);
+                _readerTopBar.BeginAnimation(UIElement.OpacityProperty, new DoubleAnimation(_readerTopBar.Opacity, 0, TimeSpan.FromMilliseconds(180)) { EasingFunction = easeIn });
+                _readerBottomTranslate.BeginAnimation(TranslateTransform.YProperty, botOut);
+                _readerBottomCapsule.BeginAnimation(UIElement.OpacityProperty, new DoubleAnimation(_readerBottomCapsule.Opacity, 0, TimeSpan.FromMilliseconds(190)) { EasingFunction = easeIn });
+            }
+        }
+
+        private void SetReaderDrawerVisible(bool visible, bool animate = true)
+        {
+            int gen = ++_drawerAnimGen;
+            bool smooth = animate && SystemParameters.ClientAreaAnimation;
+            if (visible)
+            {
+                _readerDrawer.Visibility = Visibility.Visible;
+                if (!smooth)
+                {
+                    _readerDrawerTranslate.BeginAnimation(TranslateTransform.XProperty, null);
+                    _readerDrawer.BeginAnimation(UIElement.OpacityProperty, null);
+                    _readerDrawerTranslate.X = 0;
+                    _readerDrawer.Opacity = 1;
+                    return;
+                }
+                CubicEase easeOut = new CubicEase { EasingMode = EasingMode.EaseOut };
+                _readerDrawerTranslate.BeginAnimation(TranslateTransform.XProperty, new DoubleAnimation(360, 0, TimeSpan.FromMilliseconds(260)) { EasingFunction = easeOut });
+                _readerDrawer.BeginAnimation(UIElement.OpacityProperty, new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(220)) { EasingFunction = easeOut });
+            }
+            else
+            {
+                if (!smooth)
+                {
+                    _readerDrawerTranslate.BeginAnimation(TranslateTransform.XProperty, null);
+                    _readerDrawer.BeginAnimation(UIElement.OpacityProperty, null);
+                    _readerDrawerTranslate.X = 360;
+                    _readerDrawer.Opacity = 0;
+                    _readerDrawer.Visibility = Visibility.Collapsed;
+                    return;
+                }
+                CubicEase easeIn = new CubicEase { EasingMode = EasingMode.EaseIn };
+                DoubleAnimation slideOut = new DoubleAnimation(_readerDrawerTranslate.X, 360, TimeSpan.FromMilliseconds(200)) { EasingFunction = easeIn };
+                slideOut.Completed += delegate
+                {
+                    if (gen == _drawerAnimGen) _readerDrawer.Visibility = Visibility.Collapsed;
+                };
+                _readerDrawerTranslate.BeginAnimation(TranslateTransform.XProperty, slideOut);
+                _readerDrawer.BeginAnimation(UIElement.OpacityProperty, new DoubleAnimation(_readerDrawer.Opacity, 0, TimeSpan.FromMilliseconds(180)) { EasingFunction = easeIn });
+            }
         }
 
         private void SyncReaderDrawerState()
@@ -6843,36 +7874,218 @@ namespace KomaComic.Windows
 
             StyleDrawerOpt(_btnSpreadSingle, prof.Spread == "single");
             StyleDrawerOpt(_btnSpreadDouble, prof.Spread == "double");
+            StyleDrawerOpt(_btnSpreadSplit, prof.Spread == "split");
+
+            string activeAnim = string.IsNullOrEmpty(prof.PageTurnAnim) ? "slide" : prof.PageTurnAnim;
+            foreach (KeyValuePair<string, Button> kv in _animButtons)
+                StyleDrawerOpt(kv.Value, kv.Key == activeAnim);
+
+            foreach (KeyValuePair<int, Button> kv in _prefetchButtons)
+                StyleDrawerOpt(kv.Value, kv.Key == prof.PrefetchPages);
 
             _chkApplyGlobal.IsChecked = _services.ReaderDefaults.ApplyGlobal;
             _chkTrimMargins.IsChecked = prof.TrimMargins;
             _chkDoubleZoom.IsChecked = prof.DoubleTapZoom;
             _chkShowComment.IsChecked = prof.ShowCommentPage;
             _chkShowPageNum.IsChecked = prof.ShowPageNumber;
+            _chkWheelTurn.IsChecked = prof.WheelPageTurn;
+            _chkSplitAll.IsChecked = prof.SplitAllPages;
+            _chkSpreadGap.IsChecked = prof.SpreadGap;
 
-            _btnSpreadPairShift.Visibility = (prof.Mode != "scroll" && prof.Spread == "double") ? Visibility.Visible : Visibility.Collapsed;
+            if (_readerSpreadGapCol != null)
+                _readerSpreadGapCol.Width = new GridLength(prof.SpreadGap ? 6 : 0);
+
+            bool paged = prof.Mode != "scroll";
+            _btnTopSpreadMerge.Visibility = paged ? Visibility.Visible : Visibility.Collapsed;
+            _btnTopSpreadSplit.Visibility = paged ? Visibility.Visible : Visibility.Collapsed;
+            StyleTopTogglePill(_btnTopSpreadMerge, prof.Spread == "double");
+            StyleTopTogglePill(_btnTopSpreadSplit, prof.Spread == "split");
+            _btnSpreadPairShift.Visibility = (paged && prof.Spread == "double") ? Visibility.Visible : Visibility.Collapsed;
             _readerPageBadge.Visibility = prof.ShowPageNumber ? Visibility.Visible : Visibility.Collapsed;
+            SyncReaderFavoriteButton();
+        }
+
+        private static void StyleTopTogglePill(Button b, bool active)
+        {
+            if (b == null) return;
+            if (active)
+            {
+                b.Background = new SolidColorBrush(Color.FromArgb(95, 56, 163, 255));
+                b.BorderBrush = new SolidColorBrush(Color.FromRgb(88, 180, 255));
+                b.Foreground = Brushes.White;
+            }
+            else
+            {
+                b.Background = new SolidColorBrush(Color.FromArgb(190, 22, 30, 46));
+                b.BorderBrush = new SolidColorBrush(Color.FromArgb(68, 255, 255, 255));
+                b.Foreground = new SolidColorBrush(Color.FromRgb(220, 232, 248));
+            }
         }
 
         private static void StyleDrawerOpt(Button b, bool active)
         {
+            if (b == null) return;
             if (active)
             {
-                b.Background = new SolidColorBrush(Color.FromArgb(52, 56, 163, 255));
-                b.BorderBrush = new SolidColorBrush(Color.FromRgb(56, 163, 255));
-                b.Foreground = new SolidColorBrush(Color.FromRgb(88, 180, 255));
+                b.Background = new SolidColorBrush(Color.FromArgb(64, 56, 163, 255));
+                b.BorderBrush = new SolidColorBrush(Color.FromRgb(72, 174, 255));
+                b.Foreground = new SolidColorBrush(Color.FromRgb(125, 206, 255));
             }
             else
             {
-                b.Background = new SolidColorBrush(Color.FromRgb(28, 38, 54));
-                b.BorderBrush = new SolidColorBrush(Color.FromArgb(35, 255, 255, 255));
+                b.Background = new SolidColorBrush(Color.FromArgb(180, 30, 42, 62));
+                b.BorderBrush = new SolidColorBrush(Color.FromArgb(38, 255, 255, 255));
                 b.Foreground = new SolidColorBrush(Color.FromRgb(203, 213, 225));
+            }
+        }
+
+        private void CaptureGhostSpread()
+        {
+            if (_readerSingleImg.Visibility == Visibility.Visible && _readerSingleImg.Source != null)
+            {
+                _readerGhostSingleImg.Source = _readerSingleImg.Source;
+                _readerGhostSingleImg.Visibility = Visibility.Visible;
+                _readerGhostLeftImg.Source = null;
+                _readerGhostRightImg.Source = null;
+            }
+            else if (_readerLeftImg.Source != null || _readerRightImg.Source != null)
+            {
+                _readerGhostSingleImg.Source = null;
+                _readerGhostSingleImg.Visibility = Visibility.Collapsed;
+                _readerGhostLeftImg.Source = _readerLeftImg.Source;
+                _readerGhostRightImg.Source = _readerRightImg.Source;
+            }
+            else
+            {
+                _readerGhostGrid.Visibility = Visibility.Collapsed;
+                return;
+            }
+            _readerGhostGrid.Opacity = 1;
+            _readerGhostSlideTransform.BeginAnimation(TranslateTransform.XProperty, null);
+            _readerGhostAnimScale.BeginAnimation(ScaleTransform.ScaleXProperty, null);
+            _readerGhostAnimScale.BeginAnimation(ScaleTransform.ScaleYProperty, null);
+            _readerGhostSlideTransform.X = 0;
+            _readerGhostAnimScale.ScaleX = 1;
+            _readerGhostAnimScale.ScaleY = 1;
+            _readerGhostGrid.RenderTransformOrigin = new Point(0.5, 0.5);
+            _readerGhostGrid.Visibility = Visibility.Visible;
+        }
+
+        private void ResetReaderPageAnimations()
+        {
+            _readerSpreadGrid.BeginAnimation(UIElement.OpacityProperty, null);
+            _readerSpreadSlideTransform.BeginAnimation(TranslateTransform.XProperty, null);
+            _readerSpreadAnimScale.BeginAnimation(ScaleTransform.ScaleXProperty, null);
+            _readerSpreadAnimScale.BeginAnimation(ScaleTransform.ScaleYProperty, null);
+            _readerSpreadGrid.Opacity = 1;
+            _readerSpreadGrid.RenderTransformOrigin = new Point(0.5, 0.5);
+            _readerSpreadSlideTransform.X = 0;
+            _readerSpreadAnimScale.ScaleX = 1;
+            _readerSpreadAnimScale.ScaleY = 1;
+
+            _readerGhostGrid.BeginAnimation(UIElement.OpacityProperty, null);
+            _readerGhostSlideTransform.BeginAnimation(TranslateTransform.XProperty, null);
+            _readerGhostAnimScale.BeginAnimation(ScaleTransform.ScaleXProperty, null);
+            _readerGhostAnimScale.BeginAnimation(ScaleTransform.ScaleYProperty, null);
+            _readerGhostGrid.Visibility = Visibility.Collapsed;
+            _readerAnimShadow.BeginAnimation(FrameworkElement.MarginProperty, null);
+            _readerAnimShadow.Visibility = Visibility.Collapsed;
+        }
+
+        private void PlayPageTurnAnimation(int visualDir, string animMode)
+        {
+            if (visualDir == 0 || string.IsNullOrEmpty(animMode) || animMode == "none" || !SystemParameters.ClientAreaAnimation)
+            {
+                ResetReaderPageAnimations();
+                return;
+            }
+            double w = Math.Max(320, _readerViewport.ActualWidth);
+            Panel.SetZIndex(_readerGhostGrid, 1);
+            Panel.SetZIndex(_readerSpreadGrid, 2);
+            Panel.SetZIndex(_readerAnimShadow, 3);
+
+            CubicEase easeOut = new CubicEase { EasingMode = EasingMode.EaseOut };
+            QuadraticEase easeInOut = new QuadraticEase { EasingMode = EasingMode.EaseInOut };
+
+            Action cleanup = delegate
+            {
+                _readerGhostGrid.Visibility = Visibility.Collapsed;
+                _readerAnimShadow.Visibility = Visibility.Collapsed;
+                _readerSpreadGrid.RenderTransformOrigin = new Point(0.5, 0.5);
+                _readerGhostGrid.RenderTransformOrigin = new Point(0.5, 0.5);
+            };
+
+            if (animMode == "fade")
+            {
+                TimeSpan dur = TimeSpan.FromMilliseconds(220);
+                DoubleAnimation fadeIn = new DoubleAnimation(0, 1, dur) { EasingFunction = easeOut };
+                fadeIn.Completed += delegate { cleanup(); };
+                _readerSpreadGrid.BeginAnimation(UIElement.OpacityProperty, fadeIn);
+                _readerGhostGrid.BeginAnimation(UIElement.OpacityProperty, new DoubleAnimation(1, 0, dur) { EasingFunction = easeOut });
+            }
+            else if (animMode == "slide")
+            {
+                TimeSpan dur = TimeSpan.FromMilliseconds(260);
+                DoubleAnimation inX = new DoubleAnimation(visualDir * w, 0, dur) { EasingFunction = easeOut };
+                inX.Completed += delegate { cleanup(); };
+                _readerSpreadSlideTransform.BeginAnimation(TranslateTransform.XProperty, inX);
+                _readerGhostSlideTransform.BeginAnimation(TranslateTransform.XProperty, new DoubleAnimation(0, -visualDir * w, dur) { EasingFunction = easeOut });
+            }
+            else if (animMode == "cover")
+            {
+                TimeSpan dur = TimeSpan.FromMilliseconds(280);
+                DoubleAnimation inX = new DoubleAnimation(visualDir * w, 0, dur) { EasingFunction = easeOut };
+                inX.Completed += delegate { cleanup(); };
+                _readerSpreadSlideTransform.BeginAnimation(TranslateTransform.XProperty, inX);
+                _readerGhostGrid.BeginAnimation(UIElement.OpacityProperty, new DoubleAnimation(1, 0.62, dur) { EasingFunction = easeOut });
+                _readerGhostAnimScale.BeginAnimation(ScaleTransform.ScaleXProperty, new DoubleAnimation(1.0, 0.96, dur) { EasingFunction = easeOut });
+                _readerGhostAnimScale.BeginAnimation(ScaleTransform.ScaleYProperty, new DoubleAnimation(1.0, 0.96, dur) { EasingFunction = easeOut });
+                _readerAnimShadow.Visibility = Visibility.Visible;
+                Thickness fromM = new Thickness(visualDir > 0 ? w - 24 : -24, 0, 0, 0);
+                Thickness toM = new Thickness(visualDir > 0 ? -24 : w - 24, 0, 0, 0);
+                _readerAnimShadow.BeginAnimation(FrameworkElement.MarginProperty, new ThicknessAnimation(fromM, toM, dur) { EasingFunction = easeOut });
+            }
+            else if (animMode == "curl")
+            {
+                TimeSpan dur = TimeSpan.FromMilliseconds(320);
+                Panel.SetZIndex(_readerSpreadGrid, 1);
+                Panel.SetZIndex(_readerGhostGrid, 2);
+                _readerGhostGrid.RenderTransformOrigin = new Point(visualDir > 0 ? 0.0 : 1.0, 0.5);
+                DoubleAnimation foldX = new DoubleAnimation(1.0, 0.0, dur) { EasingFunction = easeInOut };
+                foldX.Completed += delegate { cleanup(); };
+                _readerGhostAnimScale.BeginAnimation(ScaleTransform.ScaleXProperty, foldX);
+                _readerGhostGrid.BeginAnimation(UIElement.OpacityProperty, new DoubleAnimation(1.0, 0.35, dur) { EasingFunction = easeInOut });
+                _readerSpreadGrid.BeginAnimation(UIElement.OpacityProperty, new DoubleAnimation(0.75, 1.0, dur) { EasingFunction = easeOut });
+                _readerAnimShadow.Visibility = Visibility.Visible;
+                Thickness fromM = new Thickness(visualDir > 0 ? w - 24 : 0, 0, 0, 0);
+                Thickness toM = new Thickness(visualDir > 0 ? 0 : w - 24, 0, 0, 0);
+                _readerAnimShadow.BeginAnimation(FrameworkElement.MarginProperty, new ThicknessAnimation(fromM, toM, dur) { EasingFunction = easeInOut });
+            }
+            else if (animMode == "depth")
+            {
+                TimeSpan dur = TimeSpan.FromMilliseconds(280);
+                DoubleAnimation inScale = new DoubleAnimation(1.06, 1.0, dur) { EasingFunction = easeOut };
+                inScale.Completed += delegate { cleanup(); };
+                _readerSpreadAnimScale.BeginAnimation(ScaleTransform.ScaleXProperty, inScale);
+                _readerSpreadAnimScale.BeginAnimation(ScaleTransform.ScaleYProperty, new DoubleAnimation(1.06, 1.0, dur) { EasingFunction = easeOut });
+                _readerSpreadGrid.BeginAnimation(UIElement.OpacityProperty, new DoubleAnimation(0, 1, dur) { EasingFunction = easeOut });
+                _readerGhostAnimScale.BeginAnimation(ScaleTransform.ScaleXProperty, new DoubleAnimation(1.0, 0.90, dur) { EasingFunction = easeOut });
+                _readerGhostAnimScale.BeginAnimation(ScaleTransform.ScaleYProperty, new DoubleAnimation(1.0, 0.90, dur) { EasingFunction = easeOut });
+                _readerGhostGrid.BeginAnimation(UIElement.OpacityProperty, new DoubleAnimation(1, 0, dur) { EasingFunction = easeOut });
+            }
+            else
+            {
+                cleanup();
             }
         }
 
         private async void RenderCurrentReaderPagesAsync()
         {
             int request = ++_readerRenderRequest;
+            int chapterReq = _readerChapterRequest;
+            int animDir = _pendingAnimDir;
+            _pendingAnimDir = 0;
+
             _readerSingleImg.Tag = _readerLeftImg.Tag = _readerRightImg.Tag = null;
             ReaderPrefModel prof = GetActiveReaderProfile();
             int total = _readerPages.Count;
@@ -6886,6 +8099,7 @@ namespace KomaComic.Windows
             _readerSingleImg.Margin = trimPad;
             _readerLeftImg.Margin = trimPad;
             _readerRightImg.Margin = trimPad;
+            if (_readerSpreadGapCol != null) _readerSpreadGapCol.Width = new GridLength(prof.SpreadGap ? 6 : 0);
 
             if (total == 0)
             {
@@ -6899,6 +8113,7 @@ namespace KomaComic.Windows
             _readerLoadingBox.Visibility = Visibility.Collapsed;
             if (prof.Mode == "scroll")
             {
+                ResetReaderPageAnimations();
                 _readerSpreadGrid.Visibility = Visibility.Collapsed;
                 _readerScrollViewer.Visibility = Visibility.Visible;
                 _readerScrollStack.Children.Clear();
@@ -6916,8 +8131,53 @@ namespace KomaComic.Windows
             _readerScrollViewer.Visibility = Visibility.Collapsed;
             _readerSpreadGrid.Visibility = Visibility.Visible;
 
-            bool isDouble = prof.Spread == "double";
             int cur = _readerPageIdx;
+            if (prof.Spread == "split")
+            {
+                _readerLeftImg.Source = null;
+                _readerRightImg.Source = null;
+                _readerSingleImg.Visibility = Visibility.Visible;
+                BitmapImage bmp = null;
+                string failure = "";
+                try { bmp = await LoadReaderBitmapAsync(_readerPages[cur], cur, _readerPages); }
+                catch (Exception error) { failure = "：" + error.Message.Split('\n')[0]; }
+                if (request != _readerRenderRequest || !_readerOpen) return;
+                if (bmp == null)
+                {
+                    ShowReaderMessage("第 " + (cur + 1) + " 页图片加载失败" + failure, RenderCurrentReaderPagesAsync);
+                    return;
+                }
+                bool isWide = bmp.PixelWidth > bmp.PixelHeight * 1.15;
+                _widePageFlags[cur] = isWide;
+                _currentPageIsSplit = prof.SplitAllPages || isWide;
+                if (_currentPageIsSplit)
+                {
+                    bool rtl = prof.Mode == "rtl";
+                    bool leftHalf = rtl ? (_splitHalf == 1) : (_splitHalf == 0);
+                    _readerSingleImg.Source = CropBitmapHalf(bmp, leftHalf);
+                    string halfTag = leftHalf ? "左半页" : "右半页";
+                    _readerPageBadgeText.Text = string.Format("{0}/{1} · {2}", cur + 1, total, halfTag);
+                }
+                else
+                {
+                    _splitHalf = 0;
+                    _readerSingleImg.Source = bmp;
+                }
+                if (!_readerPageReady)
+                {
+                    _readerPageReady = true;
+                    StartReadingClock();
+                }
+                _readerSingleImg.Tag = new ReaderImageState { Original = bmp, PageIndex = cur };
+                QueueVisibleTranslation();
+                PlayPageTurnAnimation(animDir, prof.PageTurnAnim);
+                PrefetchNextReaderPages(cur, chapterReq);
+                return;
+            }
+
+            _currentPageIsSplit = false;
+            _splitHalf = 0;
+            bool isDouble = prof.Spread == "double";
             bool curWide = false;
             bool nextWide = false;
             _widePageFlags.TryGetValue(cur, out curWide);
@@ -6930,6 +8190,11 @@ namespace KomaComic.Windows
                 _readerRightImg.Source = null;
                 _readerSingleImg.Visibility = Visibility.Visible;
                 await LoadFullPageIntoImageAsync(_readerPages[cur], cur, _readerSingleImg, true, request);
+                if (request == _readerRenderRequest && _readerOpen)
+                {
+                    PlayPageTurnAnimation(animDir, prof.PageTurnAnim);
+                    PrefetchNextReaderPages(cur, chapterReq);
+                }
             }
             else
             {
@@ -6941,30 +8206,105 @@ namespace KomaComic.Windows
                     LoadFullPageIntoImageAsync(_readerPages[cur], cur, firstTarget, true, request),
                     LoadFullPageIntoImageAsync(_readerPages[cur + 1], cur + 1, secondTarget, true, request)
                 );
+                if (request == _readerRenderRequest && _readerOpen)
+                {
+                    _readerPageBadgeText.Text = string.Format("{0}-{1}/{2}", cur + 1, Math.Min(cur + 2, total), total);
+                    PlayPageTurnAnimation(animDir, prof.PageTurnAnim);
+                    PrefetchNextReaderPages(cur + 1, chapterReq);
+                }
             }
         }
 
-        private async Task<BitmapImage> LoadReaderBitmapAsync(PageImageModel page, int pageIdx, List<PageImageModel> pages)
+        private Task<BitmapImage> LoadReaderBitmapAsync(PageImageModel page, int pageIdx, List<PageImageModel> pages)
         {
-            if (page.IsLocal)
-                return await _services.LoadLocalPageBitmapAsync(page.LocalComicId, page.LocalPageIndex, 0);
-            BitmapImage bitmap = null;
-            Uri pageUri;
-            bool browserFormat = Uri.TryCreate(page.Url, UriKind.Absolute, out pageUri) &&
-                (pageUri.AbsolutePath.EndsWith(".webp", StringComparison.OrdinalIgnoreCase) ||
-                 pageUri.AbsolutePath.EndsWith(".avif", StringComparison.OrdinalIgnoreCase));
-            if (!page.UseSourceLoader && !browserFormat)
-                bitmap = await _services.LoadComicImageAsync(page.Url, page.Headers, 0);
-            if (bitmap == null && ReferenceEquals(pages, _readerPages) && _readerOpen)
+            string memKey = GetReaderCacheKey(page, pageIdx);
+            BitmapImage cached = TryGetCachedReaderBitmap(memKey);
+            if (cached != null) return Task.FromResult(cached);
+
+            lock (_readerCacheLock)
             {
-                ComicCardModel comic = _readerComic;
-                ChapterItem chapter = _readerChapters[_readerChapterIdx];
-                SourceItem source = _services.Sources.Find(item => item.Key == comic.SourceKey);
-                string cacheKey = JsonUtil.CreateSerializer().Serialize(new object[] { comic.Uid, chapter.Id, pageIdx, page.Url, page.Headers });
-                bitmap = await _services.LoadSourcePageBitmapAsync(cacheKey,
-                    () => _jsRunner.LoadPageBytesAsync(source, comic.Id, chapter.Id, page));
+                Task<BitmapImage> existing;
+                if (!string.IsNullOrEmpty(memKey) && _readerPageInFlight.TryGetValue(memKey, out existing))
+                    return existing;
+                Task<BitmapImage> created = LoadReaderBitmapCoreAsync(page, pageIdx, pages, memKey);
+                if (!string.IsNullOrEmpty(memKey)) _readerPageInFlight[memKey] = created;
+                return created;
             }
-            return bitmap;
+        }
+
+        private async Task<BitmapImage> LoadReaderBitmapCoreAsync(PageImageModel page, int pageIdx, List<PageImageModel> pages, string memKey)
+        {
+            try
+            {
+                BitmapImage bitmap = null;
+                if (page.IsLocal)
+                {
+                    bitmap = await _services.LoadLocalPageBitmapAsync(page.LocalComicId, page.LocalPageIndex, 0);
+                }
+                else
+                {
+                    Uri pageUri;
+                    bool browserFormat = Uri.TryCreate(page.Url, UriKind.Absolute, out pageUri) &&
+                        (pageUri.AbsolutePath.EndsWith(".webp", StringComparison.OrdinalIgnoreCase) ||
+                         pageUri.AbsolutePath.EndsWith(".avif", StringComparison.OrdinalIgnoreCase));
+                    if (!page.UseSourceLoader && !browserFormat)
+                        bitmap = await _services.LoadComicImageAsync(page.Url, page.Headers, 0);
+                    if (bitmap == null && ReferenceEquals(pages, _readerPages) && _readerOpen)
+                    {
+                        ComicCardModel comic = _readerComic;
+                        ChapterItem chapter = _readerChapters[_readerChapterIdx];
+                        SourceItem source = _services.Sources.Find(item => item.Key == comic.SourceKey);
+                        string cacheKey = JsonUtil.CreateSerializer().Serialize(new object[] { comic.Uid, chapter.Id, pageIdx, page.Url, page.Headers });
+                        bitmap = await _services.LoadSourcePageBitmapAsync(cacheKey,
+                            () => _jsRunner.LoadPageBytesAsync(source, comic.Id, chapter.Id, page));
+                    }
+                }
+                if (bitmap != null) PutCachedReaderBitmap(memKey, bitmap);
+                return bitmap;
+            }
+            finally
+            {
+                if (!string.IsNullOrEmpty(memKey))
+                {
+                    lock (_readerCacheLock) { _readerPageInFlight.Remove(memKey); }
+                }
+            }
+        }
+
+        private async void PrefetchNextReaderPages(int anchorPage, int chapterReq)
+        {
+            ReaderPrefModel prof = GetActiveReaderProfile();
+            int count = prof.PrefetchPages;
+            List<PageImageModel> pages = _readerPages;
+            if (!_readerOpen || count <= 0 || pages == null || pages.Count <= 1 || chapterReq != _readerChapterRequest) return;
+
+            List<int> targets = new List<int>();
+            for (int offset = 1; offset <= count; offset++)
+            {
+                int idx = anchorPage + offset;
+                if (idx >= 0 && idx < pages.Count) targets.Add(idx);
+            }
+            if (anchorPage - 1 >= 0) targets.Add(anchorPage - 1);
+
+            foreach (int idx in targets)
+            {
+                if (!_readerOpen || chapterReq != _readerChapterRequest || !ReferenceEquals(pages, _readerPages)) return;
+                string key = GetReaderCacheKey(pages[idx], idx);
+                if (TryGetCachedReaderBitmap(key) != null) continue;
+
+                await _prefetchSemaphore.WaitAsync();
+                try
+                {
+                    if (!_readerOpen || chapterReq != _readerChapterRequest || !ReferenceEquals(pages, _readerPages)) return;
+                    BitmapImage bmp = await LoadReaderBitmapAsync(pages[idx], idx, pages);
+                    if (bmp != null && _readerOpen && chapterReq == _readerChapterRequest && !_widePageFlags.ContainsKey(idx))
+                    {
+                        _widePageFlags[idx] = bmp.PixelWidth > bmp.PixelHeight * 1.15;
+                    }
+                }
+                catch { }
+                finally { _prefetchSemaphore.Release(); }
+            }
         }
 
         private async Task LoadFullPageIntoImageAsync(PageImageModel page, int pageIdx, Image target, bool detectWide, int request)
@@ -7035,7 +8375,7 @@ namespace KomaComic.Windows
             _readerTranslationEnabled = !_readerTranslationEnabled;
             CancelReaderTranslation();
             _readerTranslationEpoch++;
-            _readerTranslationButton.Content = _readerTranslationEnabled ? "原文" : "翻译";
+            _readerTranslationButton.Content = _readerTranslationEnabled ? "文 原文" : "译 翻译";
             _readerTranslationStatus.Visibility = _readerTranslationEnabled ? Visibility.Visible : Visibility.Collapsed;
             _readerTranslationBall.Visibility = _readerTranslationStatus.Visibility;
             _readerTranslationStatus.Text = model.AcceptsPageImage ? "等待页面…" : "点击译球输入原文";
@@ -7112,12 +8452,68 @@ namespace KomaComic.Windows
                 return;
             }
 
+            int visualDir = prof.Mode == "rtl" ? (delta > 0 ? -1 : 1) : (delta > 0 ? 1 : -1);
+
+            if (prof.Spread == "split")
+            {
+                if (delta > 0 && _currentPageIsSplit && _splitHalf == 0)
+                {
+                    CaptureGhostSpread();
+                    _pendingAnimDir = visualDir;
+                    _splitHalf = 1;
+                    RenderCurrentReaderPagesAsync();
+                    return;
+                }
+                if (delta < 0 && _currentPageIsSplit && _splitHalf == 1)
+                {
+                    CaptureGhostSpread();
+                    _pendingAnimDir = visualDir;
+                    _splitHalf = 0;
+                    RenderCurrentReaderPagesAsync();
+                    return;
+                }
+                int nextSplitPage = _readerPageIdx + (delta > 0 ? 1 : -1);
+                if (nextSplitPage < 0)
+                {
+                    if (_readerChapterIdx > 0) LoadOnlineChapterAsync(_readerChapterIdx - 1, 0);
+                    else ShowToast("已经是第一页");
+                    return;
+                }
+                if (nextSplitPage >= total)
+                {
+                    if (_readerChapterIdx + 1 < _readerChapters.Count) LoadOnlineChapterAsync(_readerChapterIdx + 1, 0);
+                    else ShowToast("已是最后一页");
+                    return;
+                }
+                CaptureGhostSpread();
+                _pendingAnimDir = visualDir;
+                _readerPageIdx = nextSplitPage;
+                _splitHalf = delta > 0 ? 0 : 1;
+                _zoomScale = 1.0;
+                _readerZoomTransform.ScaleX = 1.0;
+                _readerZoomTransform.ScaleY = 1.0;
+                SaveReaderProgress();
+                RenderCurrentReaderPagesAsync();
+                return;
+            }
+
             bool curWide = false;
+            bool nextWide = false;
             _widePageFlags.TryGetValue(_readerPageIdx, out curWide);
-            int step = (prof.Spread == "double" && !curWide && !(_readerPageIdx == 0 && _spreadShift == 1)) ? 2 : 1;
+            _widePageFlags.TryGetValue(_readerPageIdx + 1, out nextWide);
+            int step = (prof.Spread == "double" && !curWide && !nextWide && !(_readerPageIdx == 0 && _spreadShift == 1)) ? 2 : 1;
+            if (delta < 0 && prof.Spread == "double")
+            {
+                bool prevWide = false;
+                bool prev2Wide = false;
+                _widePageFlags.TryGetValue(_readerPageIdx - 1, out prevWide);
+                _widePageFlags.TryGetValue(_readerPageIdx - 2, out prev2Wide);
+                step = (!prevWide && !prev2Wide && _readerPageIdx >= 2) ? 2 : 1;
+            }
 
             int next = _readerPageIdx + (delta > 0 ? step : -step);
             if (delta < 0 && prof.Spread == "double" && _readerPageIdx == 1 && _spreadShift == 1) next = 0;
+            if (delta < 0 && next < 0 && _readerPageIdx > 0) next = 0;
 
             if (next < 0)
             {
@@ -7132,6 +8528,8 @@ namespace KomaComic.Windows
                 return;
             }
 
+            CaptureGhostSpread();
+            _pendingAnimDir = visualDir;
             _readerPageIdx = next;
             _zoomScale = 1.0;
             _readerZoomTransform.ScaleX = 1.0;
@@ -7172,17 +8570,24 @@ namespace KomaComic.Windows
             _readerTranslationEnabled = false;
             CancelReaderTranslation();
             _readerTranslationEpoch++;
-            _readerTranslationButton.Content = "翻译";
+            _readerTranslationButton.Content = "译 翻译";
             _readerTranslationStatus.Visibility = Visibility.Collapsed;
             _readerTranslationBall.Visibility = Visibility.Collapsed;
             ++_readerChapterRequest;
             ++_readerRenderRequest;
+            ClearReaderPageMemoryCache();
+            ResetReaderPageAnimations();
             _readerLoadingBox.Visibility = Visibility.Collapsed;
-            _readerDrawer.Visibility = Visibility.Collapsed;
+            SetReaderDrawerVisible(false, false);
+            _chromeVisible = false;
+            SyncReaderChromeVisibility(false);
             _readerOverlay.Visibility = Visibility.Collapsed;
             _readerSingleImg.Source = null;
             _readerLeftImg.Source = null;
             _readerRightImg.Source = null;
+            _readerGhostSingleImg.Source = null;
+            _readerGhostLeftImg.Source = null;
+            _readerGhostRightImg.Source = null;
             _readerScrollStack.Children.Clear();
         }
 
@@ -7211,7 +8616,7 @@ namespace KomaComic.Windows
             ReaderPrefModel prof = GetActiveReaderProfile();
             if (e.Key == Key.Escape)
             {
-                if (_readerDrawer.Visibility == Visibility.Visible) _readerDrawer.Visibility = Visibility.Collapsed;
+                if (_readerDrawer.Visibility == Visibility.Visible) SetReaderDrawerVisible(false);
                 else CloseReader();
                 e.Handled = true;
             }
@@ -7290,13 +8695,14 @@ namespace KomaComic.Windows
         {
             Border b = new Border
             {
-                CornerRadius = new CornerRadius(14),
+                CornerRadius = new CornerRadius(18),
                 BorderThickness = new Thickness(1),
                 Padding = new Thickness(18, 16, 18, 16),
                 Margin = new Thickness(0, 0, 0, 14)
             };
             b.SetResourceReference(Border.BackgroundProperty, "Brush.BgElevated");
             b.SetResourceReference(Border.BorderBrushProperty, "Brush.Border");
+            b.Effect = UiTheme.CreateGlassShadow(UiTheme.IsDarkActive, true);
             return b;
         }
 

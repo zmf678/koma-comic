@@ -140,4 +140,16 @@ class PrefsManager(context: Context) {
     var readerQuality: Int
         get() = sp.getInt("reader_quality", 0) // 0超清, 1高清, 2流畅
         set(value) = sp.edit().putInt("reader_quality", value.coerceIn(0, 2)).apply()
+
+    var pageTurnAnimation: String
+        get() = sp.getString("page_turn_animation", "slide").orEmpty().ifBlank { "slide" }
+        set(value) = sp.edit().putString("page_turn_animation", value).apply()
+
+    var pagePrefetchCount: Int
+        get() = sp.getInt("page_prefetch_count", 4).coerceIn(0, 8)
+        set(value) = sp.edit().putInt("page_prefetch_count", value.coerceIn(0, 8)).apply()
+
+    var wheelPageTurn: Boolean
+        get() = sp.getBoolean("wheel_page_turn", true)
+        set(value) = sp.edit().putBoolean("wheel_page_turn", value).apply()
 }

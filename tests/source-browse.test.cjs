@@ -92,29 +92,66 @@ test("cursor-based search and discovery use only the supplied request cursor", a
     assert.equal((await load(source, target, 2, search.nextCursor, ["popular"])).maxPage, 2);
 });
 
-test("dynamic category targets preserve filter positions and optional values", async () => {
+test("dynamic category targets filter hidden options and handle dropdown defaults", async () => {
     const source = {
-        category: { parts: [{ name: "书库", type: "dynamic", loader: () => [{
-            label: "冒险", target: { page: "category", attributes: { category: "冒险", param: "library:1" } }
-        }] }] },
+        tagPrefix: "library",
+        category: { parts: [{ name: "书库", type: "dynamic", loader() {
+            return [{
+                label: "冒险", target: new context.PageJumpTarget({ page: "category", attributes: { category: "冒险", param: this.tagPrefix + ":1" } })
+            }];
+        } }] },
         categoryComics: {
             optionLoader(category, param) {
                 assert.equal(category, "冒险");
                 assert.equal(param, "library:1");
                 return [
                     { label: "隐藏项", showWhen: ["其他"], options: ["all-全部"] },
+                    { label: "按参数隐藏", notShowWhen: ["library:1"], options: ["hidden-隐藏"] },
                     { label: "状态", type: "dropdown", options: ["done-已完结"] }
                 ];
             },
-            load() {}
+            loadNext(category, param, options, cursor) {
+                assert.equal(category, "冒险");
+                assert.equal(param, "library:1");
+                assert.deepEqual(Array.from(options), [""]);
+                return { comics: [comic], next: null };
+            }
         }
     };
     const menu = menuFor(source);
     assert.equal(menu.canSearch, false);
     const [target] = await categoriesFor(source, menu.groups[0].index);
     const filters = await filtersFor(source, target);
-    assert.deepEqual(Array.from(filters.values), ["all", null]);
+    assert.deepEqual(Array.from(filters.values), [""]);
     assert.equal(filters.fields.length, 1);
-    assert.equal(filters.fields[0].index, 1);
-    assert.equal(filters.fields[0].choices[0].value, null);
+    assert.equal(filters.fields[0].index, 0);
+    assert.equal(filters.fields[0].choices[0].value, "");
+    const feed = await load(source, target, 1, null, filters.values);
+    assert.equal(feed.sections[0].comics[0].id, "1");
+});
+
+test("conditional showWhen filters pass only active values to categoryComics.load", async () => {
+    let seenOptions = null;
+    const source = {
+        category: { parts: [{ name: "排行", type: "fixed", itemType: "category", categories: ["日排行", "热血"], categoryParams: ["0", "theme1"] }] },
+        categoryComics: {
+            optionList: [
+                { options: ["1-更新", "2-人气"], showWhen: ["热血"] },
+                { options: ["0-全部", "1-少年"], showWhen: ["热血"] },
+                { options: ["0-人气", "1-吐槽"], showWhen: ["日排行"], notshowWhen: null }
+            ],
+            load(category, param, options) {
+                seenOptions = Array.from(options);
+                return { comics: [comic], maxPage: 1 };
+            }
+        }
+    };
+    const cats = await categoriesFor(source, 0);
+    const rankFilters = await filtersFor(source, cats[0]);
+    await load(source, cats[0], 1, null, rankFilters.values);
+    assert.deepEqual(seenOptions, ["0"]);
+
+    const themeFilters = await filtersFor(source, cats[1]);
+    await load(source, cats[1], 1, null, themeFilters.values);
+    assert.deepEqual(seenOptions, ["1", "0"]);
 });

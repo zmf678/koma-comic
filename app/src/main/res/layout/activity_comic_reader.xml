@@ -228,6 +228,16 @@
                     app:tint="#FFFFFF" />
 
                 <ImageButton
+                    android:id="@+id/btnReaderFavorite"
+                    android:layout_width="0dp"
+                    android:layout_height="match_parent"
+                    android:layout_weight="1"
+                    android:background="?attr/selectableItemBackgroundBorderless"
+                    android:contentDescription="收藏"
+                    android:src="@drawable/ic_favorite_border"
+                    app:tint="#FFFFFF" />
+
+                <ImageButton
                     android:id="@+id/btnBookmark"
                     android:layout_width="0dp"
                     android:layout_height="match_parent"
@@ -607,17 +617,70 @@
                             android:id="@+id/btnPageDouble"
                             android:layout_width="0dp"
                             android:layout_height="34dp"
-                            android:layout_marginStart="6dp"
+                            android:layout_marginStart="5dp"
                             android:layout_weight="1"
                             android:background="@drawable/bg_reader_seg_unselected"
                             android:gravity="center"
                             android:maxLines="1"
-                            android:text="双页"
+                            android:text="合并"
                             android:textColor="#B8C0D0"
-                            android:textSize="13sp" />
+                            android:textSize="12sp" />
+
+                        <TextView
+                            android:id="@+id/btnPageSplit"
+                            android:layout_width="0dp"
+                            android:layout_height="34dp"
+                            android:layout_marginStart="5dp"
+                            android:layout_weight="1"
+                            android:background="@drawable/bg_reader_seg_unselected"
+                            android:gravity="center"
+                            android:maxLines="1"
+                            android:text="分割"
+                            android:textColor="#B8C0D0"
+                            android:textSize="12sp" />
 
                         <TextView
                             android:id="@+id/btnPageAuto"
+                            android:layout_width="0dp"
+                            android:layout_height="34dp"
+                            android:layout_marginStart="5dp"
+                            android:layout_weight="1"
+                            android:background="@drawable/bg_reader_seg_unselected"
+                            android:gravity="center"
+                            android:maxLines="1"
+                            android:text="自动"
+                            android:textColor="#B8C0D0"
+                            android:textSize="12sp" />
+                    </LinearLayout>
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="10dp"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal">
+
+                        <TextView
+                            android:layout_width="52dp"
+                            android:layout_height="wrap_content"
+                            android:text="动画"
+                            android:textColor="#FFE5E8F0"
+                            android:textSize="14sp" />
+
+                        <TextView
+                            android:id="@+id/btnPageAnimPicker"
+                            android:layout_width="0dp"
+                            android:layout_height="34dp"
+                            android:layout_weight="1"
+                            android:background="@drawable/bg_reader_seg_unselected"
+                            android:gravity="center"
+                            android:maxLines="1"
+                            android:text="平滑滑动 ▾"
+                            android:textColor="#E5E8F0"
+                            android:textSize="12sp" />
+
+                        <TextView
+                            android:id="@+id/btnPrefetchPicker"
                             android:layout_width="0dp"
                             android:layout_height="34dp"
                             android:layout_marginStart="6dp"
@@ -625,9 +688,9 @@
                             android:background="@drawable/bg_reader_seg_unselected"
                             android:gravity="center"
                             android:maxLines="1"
-                            android:text="自动"
-                            android:textColor="#B8C0D0"
-                            android:textSize="13sp" />
+                            android:text="预加载 4页 ▾"
+                            android:textColor="#E5E8F0"
+                            android:textSize="12sp" />
                     </LinearLayout>
 
                     <LinearLayout

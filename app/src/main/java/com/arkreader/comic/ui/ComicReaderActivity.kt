@@ -10,10 +10,14 @@ import android.os.Bundle
 import android.util.LruCache
 import android.view.Gravity
 import android.view.HapticFeedbackConstants
+import android.view.InputDevice
 import android.view.KeyEvent
+import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
+import android.view.animation.AccelerateInterpolator
+import android.view.animation.DecelerateInterpolator
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.SeekBar
@@ -57,7 +61,10 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
+import kotlin.math.abs
 
 class ComicReaderActivity : AppCompatActivity() {
 
@@ -92,8 +99,12 @@ class ComicReaderActivity : AppCompatActivity() {
     private var translationRequest = 0
     private var translatingView: View? = null
     private var toolbarVisible = false
+    private var lastWheelTurnMs = 0L
+    private var prefetchJob: Job? = null
+    private val prefetchSemaphore = Semaphore(2)
+    private val inFlightSlotJobs = java.util.concurrent.ConcurrentHashMap<Int, Deferred<Bitmap?>>()
 
-    private val bitmapCache = object : LruCache<Int, Bitmap>(12) {}
+    private val bitmapCache = object : LruCache<Int, Bitmap>(18) {}
     private val vpCallback = object : ViewPager2.OnPageChangeCallback() {
         override fun onPageSelected(position: Int) {
             onSlotSelected(position)
@@ -262,14 +273,15 @@ class ComicReaderActivity : AppCompatActivity() {
         if (app.prefs.glassMaterial) {
             binding.bottomCapsuleCard.background = android.graphics.drawable.GradientDrawable(
                 android.graphics.drawable.GradientDrawable.Orientation.TL_BR,
-                intArrayOf(0xE6496188.toInt(), 0xDB15243D.toInt())
+                intArrayOf(0xE41B263B.toInt(), 0xD80E1524.toInt())
             ).apply {
-                cornerRadius = 20 * resources.displayMetrics.density
-                setStroke(1, 0x76B4D8FF)
+                cornerRadius = 26 * resources.displayMetrics.density
+                setStroke((resources.displayMetrics.density).toInt().coerceAtLeast(1), 0x74FFFFFF)
             }
         }
         binding.btnBack.setOnClickListener { finish() }
         binding.btnReaderMore.setOnClickListener { openReaderSettingsPanel() }
+        binding.btnReaderFavorite.setOnClickListener { toggleReaderFavorite() }
         binding.btnTranslate.setOnClickListener { toggleTranslation() }
         binding.translationBall.setOnClickListener {
             val textOnly = !app.prefs.translationModel().acceptsPageImage
@@ -385,9 +397,131 @@ class ComicReaderActivity : AppCompatActivity() {
 
         binding.tvReaderComicTitle.text = c.title
         binding.tvReaderChapterTitle.text = ch.title
-        setToolbarVisible(readerConfig.showToolbarOnOpen)
+        syncReaderFavoriteButton()
+        setToolbarVisible(readerConfig.showToolbarOnOpen, animate = false)
         applyReaderConfigStyle()
+        applyPageTurnTransformer()
         openChapterSource(ch, initialRawPage)
+    }
+
+    private fun toggleReaderFavorite() {
+        val c = currentComic ?: return
+        val next = !c.isFavorite
+        app.db.setFavorite(c.id, next)
+        currentComic = c.copy(isFavorite = next)
+        syncReaderFavoriteButton()
+        Toast.makeText(this, if (next) "已加入收藏" else "已取消收藏", Toast.LENGTH_SHORT).show()
+    }
+
+    private fun syncReaderFavoriteButton() {
+        val fav = currentComic?.isFavorite == true
+        binding.btnReaderFavorite.setImageResource(if (fav) R.drawable.ic_favorite else R.drawable.ic_favorite_border)
+        binding.btnReaderFavorite.setColorFilter(if (fav) 0xFFFFBE3D.toInt() else Color.WHITE)
+        binding.btnReaderFavorite.contentDescription = if (fav) "已收藏，点击取消" else "收藏"
+    }
+
+    private fun pageTurnAnimLabel(key: String): String = when (key) {
+        "none" -> "无动画"
+        "fade" -> "柔和淡入"
+        "slide" -> "平滑滑动"
+        "cover" -> "覆层覆盖"
+        "curl" -> "拟真翻书"
+        "depth" -> "景深缩放"
+        else -> "平滑滑动"
+    }
+
+    private fun applyPageTurnTransformer() {
+        val mode = app.prefs.pageTurnAnimation
+        binding.vpHorizontal.setPageTransformer(
+            when (mode) {
+                "none" -> ViewPager2.PageTransformer { page, position ->
+                    page.translationX = -position * page.width
+                    page.alpha = if (position in -0.5f..0.5f) 1f else 0f
+                    page.scaleX = 1f
+                    page.scaleY = 1f
+                    page.rotationY = 0f
+                }
+                "fade" -> ViewPager2.PageTransformer { page, position ->
+                    page.translationX = -position * page.width
+                    page.alpha = (1f - abs(position)).coerceIn(0f, 1f)
+                    page.scaleX = 1f
+                    page.scaleY = 1f
+                    page.rotationY = 0f
+                }
+                "cover" -> ViewPager2.PageTransformer { page, position ->
+                    page.rotationY = 0f
+                    when {
+                        position <= 0f -> {
+                            page.alpha = (1f + position * 0.35f).coerceIn(0.6f, 1f)
+                            page.translationX = -position * page.width
+                            val scale = (1f + position * 0.05f).coerceIn(0.95f, 1f)
+                            page.scaleX = scale
+                            page.scaleY = scale
+                            page.translationZ = 0f
+                        }
+                        else -> {
+                            page.alpha = 1f
+                            page.translationX = 0f
+                            page.scaleX = 1f
+                            page.scaleY = 1f
+                            page.translationZ = 4f
+                        }
+                    }
+                }
+                "curl" -> ViewPager2.PageTransformer { page, position ->
+                    page.cameraDistance = 18000f
+                    page.translationX = -position * page.width
+                    page.pivotY = page.height * 0.5f
+                    when {
+                        position < -1f || position > 1f -> page.alpha = 0f
+                        position <= 0f -> {
+                            page.pivotX = 0f
+                            page.rotationY = position * 88f
+                            page.alpha = (1f + position * 0.65f).coerceIn(0f, 1f)
+                            page.scaleX = 1f
+                            page.scaleY = 1f
+                            page.translationZ = 2f
+                        }
+                        else -> {
+                            page.pivotX = page.width.toFloat()
+                            page.rotationY = 0f
+                            page.alpha = (1f - position * 0.25f).coerceIn(0.75f, 1f)
+                            page.scaleX = 1f
+                            page.scaleY = 1f
+                            page.translationZ = 0f
+                        }
+                    }
+                }
+                "depth" -> ViewPager2.PageTransformer { page, position ->
+                    page.rotationY = 0f
+                    when {
+                        position < -1f || position > 1f -> page.alpha = 0f
+                        position <= 0f -> {
+                            page.alpha = (1f + position).coerceIn(0f, 1f)
+                            page.translationX = -position * page.width
+                            val scale = (1f + position * 0.1f).coerceIn(0.9f, 1f)
+                            page.scaleX = scale
+                            page.scaleY = scale
+                        }
+                        else -> {
+                            page.alpha = (1f - position).coerceIn(0f, 1f)
+                            page.translationX = 0f
+                            val scale = (1f + position * 0.06f).coerceIn(1f, 1.06f)
+                            page.scaleX = scale
+                            page.scaleY = scale
+                        }
+                    }
+                }
+                else -> ViewPager2.PageTransformer { page, _ ->
+                    page.alpha = 1f
+                    page.translationX = 0f
+                    page.scaleX = 1f
+                    page.scaleY = 1f
+                    page.rotationY = 0f
+                    page.translationZ = 0f
+                }
+            }
+        )
     }
 
     private fun applyReaderConfigStyle() {
@@ -723,11 +857,25 @@ class ComicReaderActivity : AppCompatActivity() {
     }
 
     private fun preloadAdjacent(slotIndex: Int) {
-        val range = ((slotIndex - 1).coerceAtLeast(0))..((slotIndex + 2).coerceAtMost(slots.size - 1))
-        for (i in range) {
-            if (bitmapCache.get(i) == null) {
-                lifecycleScope.launch(Dispatchers.IO) {
-                    renderSlotBitmap(i)
+        val ahead = app.prefs.pagePrefetchCount
+        if (ahead <= 0 || slots.isEmpty()) return
+        val sourceRef = pageSource ?: return
+        prefetchJob?.cancel()
+        prefetchJob = lifecycleScope.launch(Dispatchers.IO) {
+            val targets = buildList {
+                for (offset in 1..ahead) {
+                    val idx = slotIndex + offset
+                    if (idx in slots.indices) add(idx)
+                }
+                if (slotIndex - 1 in slots.indices) add(slotIndex - 1)
+            }
+            for (idx in targets) {
+                if (sourceRef !== pageSource) break
+                if (bitmapCache.get(idx) != null) continue
+                prefetchSemaphore.withPermit {
+                    if (sourceRef === pageSource && bitmapCache.get(idx) == null) {
+                        runCatching { renderSlotBitmap(idx) }
+                    }
                 }
             }
         }
@@ -740,6 +888,22 @@ class ComicReaderActivity : AppCompatActivity() {
     }
 
     private suspend fun renderSlotBitmap(slotIndex: Int): Bitmap? {
+        bitmapCache.get(slotIndex)?.let { return it }
+        inFlightSlotJobs[slotIndex]?.let { return runCatching { it.await() }.getOrNull() }
+        val deferred = lifecycleScope.async(Dispatchers.IO) { renderSlotBitmapCore(slotIndex) }
+        val existing = inFlightSlotJobs.putIfAbsent(slotIndex, deferred)
+        if (existing != null) {
+            deferred.cancel()
+            return runCatching { existing.await() }.getOrNull()
+        }
+        return try {
+            deferred.await()
+        } finally {
+            inFlightSlotJobs.remove(slotIndex, deferred)
+        }
+    }
+
+    private suspend fun renderSlotBitmapCore(slotIndex: Int): Bitmap? {
         bitmapCache.get(slotIndex)?.let { return it }
         val src = pageSource ?: return null
         val slot = slots.getOrNull(slotIndex) ?: return null
@@ -840,6 +1004,27 @@ class ComicReaderActivity : AppCompatActivity() {
         }
     }
 
+    override fun onGenericMotionEvent(event: MotionEvent?): Boolean {
+        if (event != null &&
+            event.action == MotionEvent.ACTION_SCROLL &&
+            (event.source and InputDevice.SOURCE_CLASS_POINTER) != 0 &&
+            this::readerConfig.isInitialized &&
+            readerConfig.scrollMode != ScrollMode.VERTICAL &&
+            app.prefs.wheelPageTurn
+        ) {
+            val vScroll = event.getAxisValue(MotionEvent.AXIS_VSCROLL)
+            if (vScroll != 0f) {
+                val now = android.os.SystemClock.uptimeMillis()
+                if (now - lastWheelTurnMs >= 135L) {
+                    lastWheelTurnMs = now
+                    stepPage(if (vScroll < 0f) 1 else -1)
+                }
+                return true
+            }
+        }
+        return super.onGenericMotionEvent(event)
+    }
+
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
         if (readerConfig.volumeKeyFlip) {
             if (keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) {
@@ -855,14 +1040,45 @@ class ComicReaderActivity : AppCompatActivity() {
     }
 
     private fun toggleToolbar() {
-        setToolbarVisible(!toolbarVisible)
+        setToolbarVisible(!toolbarVisible, animate = true)
     }
 
-    private fun setToolbarVisible(visible: Boolean) {
+    private fun setToolbarVisible(visible: Boolean, animate: Boolean = true) {
         toolbarVisible = visible
-        val vis = if (visible) View.VISIBLE else View.GONE
-        binding.topOverlay.visibility = vis
-        binding.bottomOverlay.visibility = vis
+        binding.topOverlay.animate().cancel()
+        binding.bottomOverlay.animate().cancel()
+        val smooth = animate && android.animation.ValueAnimator.areAnimatorsEnabled()
+        if (visible) {
+            binding.topOverlay.visibility = View.VISIBLE
+            binding.bottomOverlay.visibility = View.VISIBLE
+            if (smooth) {
+                val topH = (if (binding.topOverlay.height > 0) binding.topOverlay.height else (72 * resources.displayMetrics.density).toInt()).toFloat()
+                val botH = (if (binding.bottomOverlay.height > 0) binding.bottomOverlay.height else (120 * resources.displayMetrics.density).toInt()).toFloat()
+                binding.topOverlay.translationY = -topH
+                binding.topOverlay.alpha = 0f
+                binding.topOverlay.animate().translationY(0f).alpha(1f).setDuration(230L).setInterpolator(DecelerateInterpolator()).start()
+                binding.bottomOverlay.translationY = botH
+                binding.bottomOverlay.alpha = 0f
+                binding.bottomOverlay.animate().translationY(0f).alpha(1f).setDuration(260L).setInterpolator(DecelerateInterpolator()).start()
+            } else {
+                binding.topOverlay.translationY = 0f
+                binding.topOverlay.alpha = 1f
+                binding.bottomOverlay.translationY = 0f
+                binding.bottomOverlay.alpha = 1f
+            }
+        } else {
+            if (smooth && binding.bottomOverlay.visibility == View.VISIBLE) {
+                val topH = (if (binding.topOverlay.height > 0) binding.topOverlay.height else (72 * resources.displayMetrics.density).toInt()).toFloat()
+                val botH = (if (binding.bottomOverlay.height > 0) binding.bottomOverlay.height else (120 * resources.displayMetrics.density).toInt()).toFloat()
+                binding.topOverlay.animate().translationY(-topH).alpha(0f).setDuration(180L).setInterpolator(AccelerateInterpolator())
+                    .withEndAction { if (!toolbarVisible) binding.topOverlay.visibility = View.GONE }.start()
+                binding.bottomOverlay.animate().translationY(botH).alpha(0f).setDuration(200L).setInterpolator(AccelerateInterpolator())
+                    .withEndAction { if (!toolbarVisible) binding.bottomOverlay.visibility = View.GONE }.start()
+            } else {
+                binding.topOverlay.visibility = View.GONE
+                binding.bottomOverlay.visibility = View.GONE
+            }
+        }
         applySystemBarsForToolbarState(visible)
         updatePageIndicatorVisibility()
     }
@@ -1004,8 +1220,21 @@ class ComicReaderActivity : AppCompatActivity() {
     }
 
     private fun closeReaderSettingsPanel() {
-        binding.readerSettingsOverlay.visibility = View.GONE
-        if (translationEnabled) binding.translationBall.visibility = View.VISIBLE
+        binding.readerSettingsPanel.animate().cancel()
+        if (android.animation.ValueAnimator.areAnimatorsEnabled() && binding.readerSettingsOverlay.visibility == View.VISIBLE) {
+            binding.readerSettingsPanel.animate()
+                .translationX(80f)
+                .alpha(0f)
+                .setDuration(160)
+                .withEndAction {
+                    binding.readerSettingsOverlay.visibility = View.GONE
+                    if (translationEnabled) binding.translationBall.visibility = View.VISIBLE
+                }
+                .start()
+        } else {
+            binding.readerSettingsOverlay.visibility = View.GONE
+            if (translationEnabled) binding.translationBall.visibility = View.VISIBLE
+        }
     }
 
     private fun setupReaderSettingsDrawer() {
@@ -1095,7 +1324,40 @@ class ComicReaderActivity : AppCompatActivity() {
         }
         binding.btnPageSingle.setOnClickListener { selectDoublePage(DoublePageMode.NORMAL) }
         binding.btnPageDouble.setOnClickListener { selectDoublePage(DoublePageMode.MERGE) }
+        binding.btnPageSplit.setOnClickListener { selectDoublePage(DoublePageMode.SPLIT) }
         binding.btnPageAuto.setOnClickListener { selectDoublePage(DoublePageMode.AUTO_LANDSCAPE) }
+
+        binding.btnPageAnimPicker.setOnClickListener {
+            val keys = arrayOf("none", "fade", "slide", "cover", "curl", "depth")
+            val labels = keys.map { pageTurnAnimLabel(it) }.toTypedArray()
+            val cur = keys.indexOf(app.prefs.pageTurnAnimation).coerceAtLeast(0)
+            MaterialAlertDialogBuilder(this)
+                .setTitle("选择翻页动画")
+                .setSingleChoiceItems(labels, cur) { dialog, which ->
+                    app.prefs.pageTurnAnimation = keys[which]
+                    applyPageTurnTransformer()
+                    syncReaderSettingsPanelState()
+                    dialog.dismiss()
+                }
+                .setNegativeButton("取消", null)
+                .show()
+        }
+
+        binding.btnPrefetchPicker.setOnClickListener {
+            val counts = intArrayOf(0, 2, 4, 6, 8)
+            val labels = counts.map { if (it == 0) "关闭预加载" else "提前缓存后续 $it 页" }.toTypedArray()
+            val cur = counts.indexOf(app.prefs.pagePrefetchCount).coerceAtLeast(0)
+            MaterialAlertDialogBuilder(this)
+                .setTitle("后续页预加载缓存")
+                .setSingleChoiceItems(labels, cur) { dialog, which ->
+                    app.prefs.pagePrefetchCount = counts[which]
+                    syncReaderSettingsPanelState()
+                    preloadAdjacent(currentSlotIndex)
+                    dialog.dismiss()
+                }
+                .setNegativeButton("取消", null)
+                .show()
+        }
 
         val selectSpreadOdd: (Boolean) -> Unit = { firstSingle ->
             if (this::readerConfig.isInitialized && readerConfig.firstPageSingle != firstSingle) {
@@ -1183,10 +1445,11 @@ class ComicReaderActivity : AppCompatActivity() {
 
         stylePill(binding.btnPageSingle, readerConfig.doublePageMode == DoublePageMode.NORMAL)
         stylePill(binding.btnPageDouble, readerConfig.doublePageMode == DoublePageMode.MERGE)
-        stylePill(
-            binding.btnPageAuto,
-            readerConfig.doublePageMode == DoublePageMode.AUTO_LANDSCAPE || readerConfig.doublePageMode == DoublePageMode.SPLIT
-        )
+        stylePill(binding.btnPageSplit, readerConfig.doublePageMode == DoublePageMode.SPLIT)
+        stylePill(binding.btnPageAuto, readerConfig.doublePageMode == DoublePageMode.AUTO_LANDSCAPE)
+        binding.btnPageAnimPicker.text = "${pageTurnAnimLabel(app.prefs.pageTurnAnimation)} ▾"
+        val prefCount = app.prefs.pagePrefetchCount
+        binding.btnPrefetchPicker.text = if (prefCount == 0) "预加载 关闭 ▾" else "预加载 ${prefCount}页 ▾"
 
         stylePill(binding.btnSpreadOdd, readerConfig.firstPageSingle)
         stylePill(binding.btnSpreadEven, !readerConfig.firstPageSingle)
