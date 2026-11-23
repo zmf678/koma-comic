@@ -6825,18 +6825,42 @@ namespace KomaComic.Windows
             string escInstall = installDir.Replace("'", "''");
             string escTemp = tempRoot.Replace("'", "''");
             string psScript =
-                "$ErrorActionPreference = 'SilentlyContinue'\r\n" +
                 "$pidToWait = " + currentPid + "\r\n" +
-                "for ($i = 0; $i -lt 40; $i++) {\r\n" +
-                "  if (-not (Get-Process -Id $pidToWait -ErrorAction SilentlyContinue)) { break }\r\n" +
-                "  Start-Sleep -Milliseconds 300\r\n" +
-                "}\r\n" +
                 "$stage = '" + escStage + "'\r\n" +
                 "$dst = '" + escInstall + "'\r\n" +
-                "Get-ChildItem -Path $stage -Force | Where-Object { $_.Name -ne 'data' } | ForEach-Object {\r\n" +
-                "  Copy-Item -Path $_.FullName -Destination $dst -Recurse -Force\r\n" +
+                "$dstExe = Join-Path $dst 'KomaComic.exe'\r\n" +
+                "for ($i = 0; $i -lt 30; $i++) {\r\n" +
+                "  if (-not (Get-Process -Id $pidToWait -ErrorAction SilentlyContinue)) { break }\r\n" +
+                "  Start-Sleep -Milliseconds 250\r\n" +
                 "}\r\n" +
-                "Start-Process -FilePath (Join-Path $dst 'KomaComic.exe') -WorkingDirectory $dst\r\n" +
+                "# Stop any lingering KomaComic instances running from the same install directory so files can be replaced\r\n" +
+                "Get-Process -Name KomaComic -ErrorAction SilentlyContinue | ForEach-Object {\r\n" +
+                "  try {\r\n" +
+                "    if ($_.Path -and [string]::Equals($_.Path, $dstExe, [System.StringComparison]::OrdinalIgnoreCase)) {\r\n" +
+                "      Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue\r\n" +
+                "    }\r\n" +
+                "  } catch {}\r\n" +
+                "}\r\n" +
+                "Start-Sleep -Milliseconds 400\r\n" +
+                "$copied = $false\r\n" +
+                "for ($attempt = 0; $attempt -lt 15; $attempt++) {\r\n" +
+                "  try {\r\n" +
+                "    Get-ChildItem -Path $stage -File -Force | ForEach-Object {\r\n" +
+                "      Copy-Item -Path $_.FullName -Destination (Join-Path $dst $_.Name) -Force -ErrorAction Stop\r\n" +
+                "    }\r\n" +
+                "    $stageAssets = Join-Path $stage 'assets'\r\n" +
+                "    if (Test-Path $stageAssets) {\r\n" +
+                "      $dstAssets = Join-Path $dst 'assets'\r\n" +
+                "      if (-not (Test-Path $dstAssets)) { New-Item -ItemType Directory -Path $dstAssets -Force | Out-Null }\r\n" +
+                "      Copy-Item -Path (Join-Path $stageAssets '*') -Destination $dstAssets -Recurse -Force -ErrorAction Stop\r\n" +
+                "    }\r\n" +
+                "    $copied = $true\r\n" +
+                "    break\r\n" +
+                "  } catch {\r\n" +
+                "    Start-Sleep -Milliseconds 350\r\n" +
+                "  }\r\n" +
+                "}\r\n" +
+                "Start-Process -FilePath $dstExe -WorkingDirectory $dst\r\n" +
                 "Start-Sleep -Seconds 2\r\n" +
                 "Remove-Item -Path '" + escTemp + "' -Recurse -Force -ErrorAction SilentlyContinue\r\n";
             File.WriteAllText(scriptPath, psScript, new UTF8Encoding(true));
@@ -6849,7 +6873,8 @@ namespace KomaComic.Windows
                 CreateNoWindow = true
             };
             Process.Start(psi);
-            Application.Current.Shutdown();
+            try { StopReadingClock(); _jsRunner.Dispose(); _services.Dispose(); } catch { }
+            Environment.Exit(0);
         }
 
         private void ApplyLibraryMaterial()
