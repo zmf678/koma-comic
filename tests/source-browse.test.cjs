@@ -15,6 +15,23 @@ const filtersFor = context.__sourceBrowseFilters;
 const load = context.__sourceBrowseFeed;
 const comic = { id: "1", title: "漫画" };
 
+test("comic previews retain source tags and synopsis in lists and details", async () => {
+    const map = vm.runInContext('new Map([["题材", ["冒险", { name: "奇幻" }]], ["作者", ["原作者"]]])', context);
+    const list = context.__normalizeComicsResult([
+        { ...comic, tags: map, introduction: "一段由漫画源提供的作品简介" },
+        { id: "2", title: "只有更新信息", last_update_chapter_name: "第 23 话" }
+    ], 1, true).comics;
+    assert.equal(list[0].description, "一段由漫画源提供的作品简介");
+    assert.deepEqual(Array.from(list[0].tags), ["冒险", "奇幻", "原作者"]);
+    assert.equal(list[1].description, "");
+    assert.deepEqual(Array.from(list[1].tags), []);
+    const details = await context.__sourceComicDetails({
+        comic: { loadInfo: () => ({ title: comic.title, desc: "详情里的作品介绍", tags: ["冒险", { label: "校园" }, "冒险", { id: "0" }] }) }
+    }, comic.id);
+    assert.equal(details.description, "详情里的作品介绍");
+    assert.deepEqual(Array.from(details.tags), ["冒险", "校园"]);
+});
+
 test("discovery sections retain their titles and supported more links", async () => {
     const source = {
         explore: [

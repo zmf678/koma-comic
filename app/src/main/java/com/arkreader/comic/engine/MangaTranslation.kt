@@ -9,6 +9,11 @@ import android.graphics.Paint
 import com.arkreader.comic.data.TranslationModel
 import com.arkreader.comic.data.TranslationMode
 import com.arkreader.comic.data.TranslationUsage
+import com.arkreader.comic.engine.DirectMangaTranslation.Region
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import org.json.JSONException
 import org.json.JSONObject
@@ -25,11 +30,15 @@ import java.net.URI
 import java.net.URISyntaxException
 import java.security.MessageDigest
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 
 object MangaTranslation {
     private const val PATH = "/translate/with-form/image"
     private const val STREAM_PATH = "$PATH/stream"
     private const val MAX_IMAGE = 32 * 1024 * 1024
+    private const val MAX_REGIONS = 2 * 1024 * 1024
+    private val cacheWriter = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val pendingRegions = ConcurrentHashMap<File, List<Region>>()
 
     class LoginRequired : IllegalStateException("请在漫画翻译设置中登录翻译服务")
     internal class TranslationFailure(message: String) : IllegalStateException(message)
@@ -108,10 +117,16 @@ object MangaTranslation {
         val sample = Bitmap.createBitmap(600, 220, Bitmap.Config.ARGB_8888)
         try {
             Canvas(sample).apply {
-                drawColor(Color.WHITE)
+                drawColor(0xFFD4DCE6.toInt())
+                val border = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.BLACK; style = Paint.Style.STROKE; strokeWidth = 2f }
+                val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE }
+                for (y in listOf(26f, 115f)) {
+                    drawRoundRect(35f, y, 565f, y + 79f, 33f, 33f, fill)
+                    drawRoundRect(35f, y, 565f, y + 79f, 33f, 33f, border)
+                }
                 val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.BLACK; textSize = 46f }
-                drawText("Good morning!", 55f, 100f, paint)
-                drawText("今日はいい天気です。", 55f, 158f, paint)
+                drawText("Good morning!", 55f, 80f, paint)
+                drawText("今日はいい天気です。", 55f, 169f, paint)
             }
             val translated = translate(context, sample, server, config, model, apiKey, session, cacheResult = false)
             if (translated === sample) throw TranslationFailure("API 未在测试图中返回可排版的译文")
@@ -125,9 +140,12 @@ object MangaTranslation {
         cacheResult: Boolean = true): Bitmap {
         validateModel(model)
         require(model.acceptsPageImage) { "图片输入已关闭，请输入原文" }
-        val direct = model.mode == TranslationMode.DIRECT
-        val endpoint = if (direct) DirectMangaTranslation.endpoint(URI(model.apiBase)) else endpoint(server, model.mode)
         val settings = translationConfig(config, model.mode)
+        val directory = context?.takeIf { cacheResult }?.let { File(it.cacheDir, "translations") }
+        if (model.mode == TranslationMode.DIRECT) {
+            return translateDirect(context, bitmap, model, apiKey, settings, directory)
+        }
+        val endpoint = endpoint(server, model.mode)
         val environment = if (model.mode.translator != null) {
             JSONObject().put("OPENAI_API_BASE", model.apiBase)
                 .put("OPENAI_MODEL", model.modelId)
@@ -135,32 +153,54 @@ object MangaTranslation {
         } else null
         val image = encodeJpeg(bitmap)
         if (image.size > MAX_IMAGE) throw TranslationFailure("此页图片过大")
-        val cache = context?.takeIf { cacheResult }?.let {
-            val digest = MessageDigest.getInstance("SHA-256")
-            val profile = when {
-                !direct -> environment.orEmpty()
-                model.reasoningEffort.isEmpty() -> "direct-v1\n${model.modelId}\n$apiKey\n${bitmap.width}x${bitmap.height}"
-                else -> "direct-v2\n${model.modelId}\n${model.reasoningEffort}\n$apiKey\n${bitmap.width}x${bitmap.height}"
-            }
-            digest.update(("$endpoint\n$settings\n$profile\n").toByteArray())
-            val key = digest.digest(image).joinToString("") { "%02x".format(it) }
-            File(File(it.cacheDir, "translations"), "$key.image")
-        }
-        cache?.takeIf { it.isFile }?.let { BitmapFactory.decodeFile(it.absolutePath) }?.let { return it }
-        if (direct) {
-            val regions = DirectMangaTranslation.request(endpoint, model.modelId, apiKey, targetLanguage(settings),
-                DirectMangaTranslation.preview(bitmap, image), model.reasoningEffort) {
-                if (context != null) TranslationUsage.record(context, model.modelId, it)
-            }
-            if (regions.isEmpty()) return bitmap
-            val translated = DirectMangaTranslation.render(bitmap, regions)
-            saveCache(cache) { pending -> pending.outputStream().use { check(translated.compress(Bitmap.CompressFormat.PNG, 100, it)) } }
-            return translated
-        }
+        val cache = cacheFile(directory, endpoint, settings, environment.orEmpty(), image, "image")
+        loadImage(cache)?.let { return it }
         val data = requestImage(endpoint, settings, environment, session, image)
         val translated = BitmapFactory.decodeByteArray(data, 0, data.size) ?: throw TranslationFailure("服务未返回可读的译图")
         saveCache(cache) { it.writeBytes(data) }
         return translated
+    }
+
+    private suspend fun translateDirect(context: Context?, bitmap: Bitmap, model: TranslationModel, apiKey: String,
+        settings: JSONObject, directory: File?): Bitmap {
+        val endpoint = DirectMangaTranslation.endpoint(URI(model.apiBase))
+        val preview = DirectMangaTranslation.preview(bitmap)
+        val profile = "direct-regions-v1\n${model.modelId}\n${model.reasoningEffort}\n$apiKey"
+        val cache = cacheFile(directory, endpoint, settings, profile, preview, "regions")
+        val ready = readRegions(cache)
+        if (ready != null) return if (ready.isEmpty()) bitmap else DirectMangaTranslation.render(bitmap, ready)
+
+        val regions = DirectMangaTranslation.request(endpoint, model.modelId, apiKey, targetLanguage(settings),
+            preview, model.reasoningEffort) {
+            if (context != null) TranslationUsage.record(context, model.modelId, it)
+        }
+        if (cache != null && pendingRegions.putIfAbsent(cache, regions) == null) {
+            cacheWriter.launch {
+                try { saveCache(cache) { it.writeText(DirectMangaTranslation.encodeRegions(regions)) } }
+                finally { pendingRegions.remove(cache, regions) }
+            }
+        }
+        return if (regions.isEmpty()) bitmap else DirectMangaTranslation.render(bitmap, regions)
+    }
+
+    private fun loadImage(cache: File?) = cache?.takeIf { it.isFile }?.let { BitmapFactory.decodeFile(it.absolutePath) }
+
+    private fun readRegions(cache: File?): List<Region>? {
+        if (cache == null) return null
+        pendingRegions[cache]?.let { return it }
+        if (!cache.isFile) return null
+        return runCatching {
+            val json = cache.inputStream().use { readBounded(it, MAX_REGIONS) }.toString(Charsets.UTF_8)
+            DirectMangaTranslation.decodeRegions(json)
+        }.getOrNull()
+    }
+
+    private fun cacheFile(directory: File?, endpoint: URI, settings: JSONObject, profile: String, image: ByteArray, extension: String): File? {
+        if (directory == null) return null
+        val digest = MessageDigest.getInstance("SHA-256")
+        digest.update(("$endpoint\n$settings\n$profile\n").toByteArray())
+        val key = digest.digest(image).joinToString("") { "%02x".format(it) }
+        return File(directory, "$key.$extension")
     }
 
     internal fun encodeJpeg(bitmap: Bitmap): ByteArray = ByteArrayOutputStream().use { bytes ->

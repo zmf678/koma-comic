@@ -24,6 +24,12 @@ data class RemoteComicItem(
     val headers: Map<String, String> = emptyMap()
 )
 
+data class OnlineComicMetadata(
+    val description: String = "",
+    val url: String = "",
+    val tags: List<String> = emptyList()
+)
+
 data class SourceBrowseTarget(
     val kind: String,
     val title: String,

@@ -579,6 +579,47 @@
 
     window.__sourceAppWebsite = src => webUrl(src.appWebsite);
 
+    function sourceText(value) {
+        if (typeof value !== "string") return "";
+        const text = value.trim();
+        return text === "null" || text === "undefined" ? "" : text;
+    }
+
+    function comicDescription(comic) {
+        for (const value of [comic.description, comic.desc, comic.summary, comic.introduction, comic.intro]) {
+            const text = sourceText(value);
+            if (text) return text.slice(0, 16000);
+        }
+        return "";
+    }
+
+    function comicTags(comic) {
+        const tags = new Set();
+        function collect(value, depth) {
+            if (value == null || depth > 6 || tags.size >= 64) return;
+            if (typeof value === "string") {
+                const text = sourceText(value);
+                if (text && text.length <= 80) tags.add(text);
+            } else if (value instanceof Map) {
+                for (const item of value.values()) collect(item, depth + 1);
+            } else if (Array.isArray(value)) {
+                for (const item of value) collect(item, depth + 1);
+            } else if (Array.isArray(value.__mapEntries__)) {
+                for (const pair of value.__mapEntries__) if (Array.isArray(pair)) collect(pair[1], depth + 1);
+            } else if (typeof value === "object") {
+                const label = [value.name, value.title, value.label, value.tag].map(sourceText).find(Boolean);
+                if (label) collect(label, depth + 1);
+                else for (const [key, item] of Object.entries(value)) {
+                    if (!["id", "key", "slug", "url", "type"].includes(key)) collect(item, depth + 1);
+                }
+            }
+        }
+        collect(comic.tags, 0);
+        collect(comic.genres, 0);
+        collect(comic.tagList, 0);
+        return Array.from(tags);
+    }
+
     window.__sourceComicDetails = async function (src, id) {
         if (typeof src.comic?.loadInfo !== "function") throw new Error("漫画源没有提供作品详情");
         const details = await src.comic.loadInfo(id);
@@ -586,6 +627,8 @@
         return {
             ...details,
             subTitle: details.subTitle ?? details.subtitle,
+            description: comicDescription(details),
+            tags: comicTags(details),
             headers: { ...window.__extractSourceImageHeaders(src), ...details.headers },
             url: webUrl(details.url, window.__sourceWebsite(src)),
             wholeBook: details.chapters == null && typeof src.comic.loadEp === "function"
@@ -724,8 +767,8 @@
                 title: title,
                 subTitle: String(sub || ""),
                 cover: String(c.cover || c.pic || c.img || c.image || ""),
-                tags: Array.isArray(c.tags) ? c.tags : [],
-                description: String(c.description || c.desc || c.last_update_chapter_name || c.last_name || ""),
+                tags: comicTags(c),
+                description: comicDescription(c),
                 headers: mergedHeaders,
             });
         }

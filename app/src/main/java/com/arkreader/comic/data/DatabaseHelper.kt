@@ -6,6 +6,7 @@ import android.database.Cursor
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 import com.arkreader.comic.engine.NaturalSort
+import org.json.JSONArray
 import java.security.MessageDigest
 
 class DatabaseHelper(context: Context) : SQLiteOpenHelper(context, DB_NAME, null, DB_VERSION) {
@@ -177,6 +178,7 @@ class DatabaseHelper(context: Context) : SQLiteOpenHelper(context, DB_NAME, null
             db.execSQL("UPDATE comics SET is_favorite = 1 WHERE format = 'ONLINE' AND id IN (SELECT comic_id FROM bookshelf_comics)")
         }
         if (oldVersion < 5) createReadingTimeTable(db)
+        if (oldVersion in 4..5) db.execSQL("ALTER TABLE online_metadata ADD COLUMN tags_json TEXT NOT NULL DEFAULT '[]'")
     }
 
     private fun createReadingTimeTable(db: SQLiteDatabase) {
@@ -226,21 +228,24 @@ class DatabaseHelper(context: Context) : SQLiteOpenHelper(context, DB_NAME, null
             CREATE TABLE IF NOT EXISTS online_metadata (
                 comic_id INTEGER PRIMARY KEY,
                 description TEXT NOT NULL DEFAULT '',
-                official_url TEXT NOT NULL DEFAULT ''
+                official_url TEXT NOT NULL DEFAULT '',
+                tags_json TEXT NOT NULL DEFAULT '[]'
             )
         """.trimIndent())
     }
 
-    fun saveOnlineMetadata(comicId: Long, description: String, url: String = "") {
-        val values = ContentValues().apply {
-            if (description.isNotBlank()) put("description", description)
-            if (url.isNotBlank()) put("official_url", url)
-        }
-        if (values.size() == 0) return
+    fun saveOnlineMetadata(comicId: Long, description: String, url: String = "", tags: List<String> = emptyList(), onlyMissing: Boolean = false) {
+        if (description.isBlank() && url.isBlank() && tags.isEmpty()) return
         val database = writableDatabase
         database.beginTransaction()
         try {
-            if (database.update("online_metadata", values, "comic_id = ?", arrayOf(comicId.toString())) == 0) {
+            val previous = if (onlyMissing) getOnlineMetadata(comicId) else OnlineComicMetadata()
+            val values = ContentValues().apply {
+                if (description.isNotBlank() && previous.description.isBlank()) put("description", description)
+                if (url.isNotBlank() && previous.url.isBlank()) put("official_url", url)
+                if (tags.isNotEmpty() && previous.tags.isEmpty()) put("tags_json", JSONArray(tags).toString())
+            }
+            if (values.size() > 0 && database.update("online_metadata", values, "comic_id = ?", arrayOf(comicId.toString())) == 0) {
                 values.put("comic_id", comicId)
                 database.insertOrThrow("online_metadata", null, values)
             }
@@ -250,12 +255,17 @@ class DatabaseHelper(context: Context) : SQLiteOpenHelper(context, DB_NAME, null
         }
     }
 
-    fun getOnlineMetadata(comicId: Long): Pair<String, String> =
+    fun getOnlineMetadata(comicId: Long): OnlineComicMetadata =
         readableDatabase.rawQuery(
-            "SELECT description, official_url FROM online_metadata WHERE comic_id = ?",
+            "SELECT description, official_url, tags_json FROM online_metadata WHERE comic_id = ?",
             arrayOf(comicId.toString())
         ).use { cursor ->
-            if (cursor.moveToFirst()) cursor.getString(0) to cursor.getString(1) else "" to ""
+            if (!cursor.moveToFirst()) return@use OnlineComicMetadata()
+            val tags = runCatching {
+                val array = JSONArray(cursor.getString(2))
+                List(array.length()) { array.getString(it) }
+            }.getOrDefault(emptyList())
+            OnlineComicMetadata(cursor.getString(0), cursor.getString(1), tags)
         }
 
 
@@ -1055,7 +1065,7 @@ class DatabaseHelper(context: Context) : SQLiteOpenHelper(context, DB_NAME, null
 
     companion object {
         private const val DB_NAME = "ark_reader.db"
-        private const val DB_VERSION = 5
+        private const val DB_VERSION = 6
 
         fun hashPin(pin: String): String {
             val digest = MessageDigest.getInstance("SHA-256").digest(pin.toByteArray(Charsets.UTF_8))

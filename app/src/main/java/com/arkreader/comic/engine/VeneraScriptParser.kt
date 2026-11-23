@@ -141,22 +141,8 @@ object VeneraScriptParser {
             val cover = listOf("cover", "pic", "img", "image").firstNotNullOfOrNull { k ->
                 item.optString(k, "").trim().takeIf { it.isNotEmpty() && it != "null" }
             }.orEmpty()
-            val desc = listOf("description", "desc", "last_update_chapter_name", "last_name").firstNotNullOfOrNull { k ->
-                item.optString(k, "").trim().takeIf { it.isNotEmpty() && it != "null" }
-            }.orEmpty()
-
-            val tags = mutableListOf<String>()
-            val tagsArr = item.optJSONArray("tags")
-            if (tagsArr != null) {
-                for (j in 0 until tagsArr.length()) {
-                    val elem = tagsArr.opt(j)
-                    val t = when (elem) {
-                        is JSONObject -> elem.optString("name", "").trim()
-                        else -> elem?.toString()?.trim().orEmpty()
-                    }
-                    if (t.isNotEmpty() && t != "null") tags.add(t)
-                }
-            }
+            val desc = readSynopsis(item)
+            val tags = readTagLabels(item.optJSONArray("tags"))
             val itemHeaders = defaultHeaders + jsonToStringMap(item.optJSONObject("headers"))
             list.add(
                 RemoteComicItem(
@@ -245,11 +231,13 @@ object VeneraScriptParser {
         val title = obj.optString("title", "").ifEmpty { remoteId }
         val subTitle = obj.optString("subTitle", "")
         val cover = obj.optString("cover", "")
-        val desc = obj.optString("description", "")
+        val desc = readSynopsis(obj)
         val url = obj.optString("url", "")
         val headers = jsonToStringMap(obj.optJSONObject("headers"))
 
         val tags = linkedMapOf<String, List<String>>()
+        val flatTags = readTagLabels(obj.optJSONArray("tags"))
+        if (flatTags.isNotEmpty()) tags["标签"] = flatTags
         val tagsObj = obj.optJSONObject("tags")
         if (tagsObj != null) {
             // Handle serialized Map or plain object
@@ -259,7 +247,7 @@ object VeneraScriptParser {
                     val pair = mapEntries.optJSONArray(i) ?: continue
                     val k = pair.optString(0, "")
                     val vArr = pair.optJSONArray(1) ?: continue
-                    val vals = (0 until vArr.length()).mapNotNull { vArr.optString(it).takeIf(String::isNotEmpty) }
+                    val vals = readTagLabels(vArr)
                     if (k.isNotEmpty() && vals.isNotEmpty()) tags[k] = vals
                 }
             } else {
@@ -267,7 +255,7 @@ object VeneraScriptParser {
                 while (keys.hasNext()) {
                     val k = keys.next()
                     val vArr = tagsObj.optJSONArray(k) ?: continue
-                    val vals = (0 until vArr.length()).mapNotNull { vArr.optString(it).takeIf(String::isNotEmpty) }
+                    val vals = readTagLabels(vArr)
                     if (vals.isNotEmpty()) tags[k] = vals
                 }
             }
@@ -295,6 +283,24 @@ object VeneraScriptParser {
             headers = headers,
             url = url
         )
+    }
+
+    private fun readSynopsis(comic: JSONObject): String =
+        listOf("description", "desc", "summary", "introduction", "intro").firstNotNullOfOrNull { key ->
+            (comic.opt(key) as? String)?.trim()?.takeIf { it.isNotEmpty() && it != "null" && it != "undefined" }
+        }.orEmpty().take(16000)
+
+    private fun readTagLabels(raw: JSONArray?): List<String> {
+        if (raw == null) return emptyList()
+        return (0 until raw.length()).asSequence().mapNotNull {
+            when (val value = raw.opt(it)) {
+                is String -> value.trim()
+                is JSONObject -> listOf("name", "title", "label", "tag").firstNotNullOfOrNull { key ->
+                    (value.opt(key) as? String)?.trim()?.takeIf(String::isNotEmpty)
+                }
+                else -> null
+            }?.takeIf { text -> text.length in 1..80 && text != "null" && text != "undefined" }
+        }.distinct().take(64).toList()
     }
 
     private fun extractChaptersRecursive(node: JSONObject, defaultGroup: String, out: MutableList<RemoteChapter>) {

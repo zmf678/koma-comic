@@ -602,7 +602,7 @@ class ComicReaderActivity : AppCompatActivity() {
             if (request != translationRequest || view.tag != position || !translationEnabled) return@launch
             result.onSuccess {
                 view.setImageBitmap(it.image)
-                binding.tvTranslationState.text = if (it.changed) "已显示译文" else "未找到需要翻译的文字"
+                binding.tvTranslationState.text = if (it.changed) "已显示译文" else "未找到可安全排版的译文"
                 prefetchTranslations()
             }.onFailure { error ->
                 translatingView = null

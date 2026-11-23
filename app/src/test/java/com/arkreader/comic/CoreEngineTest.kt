@@ -23,6 +23,18 @@ import java.time.Instant
 import java.time.ZoneId
 
 class CoreEngineTest {
+    @Test
+    fun comicPreviewParsesTagsAndSynopsisFromSourceDetails() {
+        val detail = VeneraScriptParser.parseComicDetailsResult("source", "id",
+            """{"title":"作品","intro":"源简介","tags":[" 冒险 ",{"name":"校园"},"冒险",null,{"id":42}]}""")
+        assertEquals("源简介", detail.description)
+        assertEquals(listOf("冒险", "校园"), detail.tags.values.flatten())
+        val (comics, _) = VeneraScriptParser.parseComicsListResult("source",
+            """{"comics":[{"id":"1","title":"作品","last_name":"第 23 话","tags":["冒险"]}]}""")
+        assertEquals("", comics.single().description)
+        assertEquals(listOf("冒险"), comics.single().tags)
+    }
+
 
     @Test
     fun readingTimeCrossingMidnightCountsOnBothDates() {

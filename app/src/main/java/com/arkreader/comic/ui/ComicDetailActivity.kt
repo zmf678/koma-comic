@@ -113,8 +113,8 @@ class ComicDetailActivity : AppCompatActivity() {
         if (comicId <= 0L && remoteSourceKey.isNotEmpty() && remoteComicId.isNotEmpty()) {
             val coverKey = if (remotePreviewCover.isBlank()) "" else app.coverCache.makeKey("url:$remotePreviewCover")
             comicId = app.db.saveOnlinePreview(remoteSourceKey, remoteComicId, remotePreviewTitle, coverKey).id
-            val description = intent.getStringExtra(EXTRA_REMOTE_DESCRIPTION).orEmpty()
-            if (app.db.getOnlineMetadata(comicId).first.isBlank()) app.db.saveOnlineMetadata(comicId, description)
+            app.db.saveOnlineMetadata(comicId, intent.getStringExtra(EXTRA_REMOTE_DESCRIPTION).orEmpty(),
+                tags = intent.getStringArrayListExtra(EXTRA_REMOTE_TAGS).orEmpty(), onlyMissing = true)
         }
 
         val loaded = app.db.getComic(comicId)
@@ -159,7 +159,13 @@ class ComicDetailActivity : AppCompatActivity() {
         val shelfCount = app.db.getBookshelfIdsForComic(loaded.id).size
         binding.btnBookshelf.text = if (shelfCount > 0) "书架 ($shelfCount)" else "加入本地书架"
         if (loaded.format == ComicFormat.ONLINE) {
-            val (description, url) = app.db.getOnlineMetadata(loaded.id)
+            val (description, url, tags) = app.db.getOnlineMetadata(loaded.id)
+            binding.tvTags.visibility = if (tags.isEmpty()) View.GONE else View.VISIBLE
+            binding.tvTags.text = tags.joinToString(" · ")
+            binding.tvTags.setOnClickListener {
+                MaterialAlertDialogBuilder(this).setTitle("作品标签").setMessage(tags.joinToString(" · "))
+                    .setPositiveButton("关闭", null).show()
+            }
             binding.tvDescription.visibility = if (description.isBlank()) View.GONE else View.VISIBLE
             binding.tvDescription.text = description
             binding.tvDescription.setOnClickListener {
@@ -207,7 +213,7 @@ class ComicDetailActivity : AppCompatActivity() {
                 val coverKey = if (coverUrl.isBlank()) "" else app.coverCache.makeKey("url:$coverUrl")
                 withContext(Dispatchers.IO) {
                     val id = app.db.upsertOnlineComic(sourceKey, remoteId, loaded.title, coverKey, loaded.chapters)
-                    app.db.saveOnlineMetadata(id, loaded.description, loaded.url)
+                    app.db.saveOnlineMetadata(id, loaded.description, loaded.url, loaded.tags.values.flatten().distinct().take(64))
                 }
                 if (coverUrl.isNotBlank()) launch {
                     val (_, bitmap) = withContext(Dispatchers.IO) { app.coverCache.getOrDownloadHttpCover(coverUrl, loaded.headers) }
@@ -270,6 +276,7 @@ class ComicDetailActivity : AppCompatActivity() {
         const val EXTRA_REMOTE_TITLE = "extra_remote_title"
         const val EXTRA_REMOTE_COVER = "extra_remote_cover"
         const val EXTRA_REMOTE_DESCRIPTION = "extra_remote_description"
+        const val EXTRA_REMOTE_TAGS = "extra_remote_tags"
         const val EXTRA_REMOTE_SUB = "extra_remote_sub"
     }
 }

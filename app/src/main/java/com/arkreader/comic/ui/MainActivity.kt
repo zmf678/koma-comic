@@ -1170,6 +1170,7 @@ class MainActivity : AppCompatActivity() {
             putExtra(ComicDetailActivity.EXTRA_REMOTE_COVER, remote.cover)
             putExtra(ComicDetailActivity.EXTRA_REMOTE_SUB, remote.subTitle)
             putExtra(ComicDetailActivity.EXTRA_REMOTE_DESCRIPTION, remote.description)
+            putStringArrayListExtra(ComicDetailActivity.EXTRA_REMOTE_TAGS, ArrayList(remote.tags))
         })
     }
 
@@ -1234,7 +1235,7 @@ class MainActivity : AppCompatActivity() {
                 val saved = app.db.saveOnlinePreview(remote.sourceKey, remote.id, remote.title, coverKey)
                 val next = !favorite
                 app.db.setFavorite(saved.id, next)
-                app.db.saveOnlineMetadata(saved.id, remote.description)
+                app.db.saveOnlineMetadata(saved.id, remote.description, tags = remote.tags, onlyMissing = true)
                 Toast.makeText(this, if (next) "已加入在线收藏" else "已取消在线收藏", Toast.LENGTH_SHORT).show()
                 if (remote.cover.isNotBlank()) lifecycleScope.launch(Dispatchers.IO) {
                     app.coverCache.getOrDownloadHttpCover(remote.cover, remote.headers)

@@ -3,10 +3,12 @@ package com.arkreader.comic
 import com.arkreader.comic.data.TranslationMode
 import com.arkreader.comic.data.TranslationTokens
 import com.arkreader.comic.engine.DirectMangaTranslation
+import com.arkreader.comic.engine.LightBalloonFinder
 import com.arkreader.comic.engine.GithubFeedback
 import com.arkreader.comic.engine.MangaTranslation
 import kotlinx.coroutines.runBlocking
 import org.json.JSONObject
+import org.json.JSONException
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -141,6 +143,50 @@ class MangaTranslationTest {
         assertThrows(MangaTranslation.TranslationFailure::class.java) {
             DirectMangaTranslation.parseResponse(completion(validRegions.replace("600", "1001")))
         }
+    }
+
+    @Test
+    fun compactRegionsKeepOverlayDataAndRememberPagesWithoutText() {
+        val named = DirectMangaTranslation.parseResponse(completion(validRegions))
+        val compact = DirectMangaTranslation.parseResponse(completion("""{"regions":[[100,110,600,500,"早上好"]]}"""))
+        assertEquals(named, compact)
+        assertEquals(named, DirectMangaTranslation.decodeRegions(DirectMangaTranslation.encodeRegions(compact)))
+        assertEquals(emptyList<DirectMangaTranslation.Region>(),
+            DirectMangaTranslation.decodeRegions(DirectMangaTranslation.encodeRegions(emptyList())))
+        assertThrows(JSONException::class.java) {
+            DirectMangaTranslation.decodeRegions("""{"regions":[[100,110,1001,500,"早上好"]]}""")
+        }
+    }
+
+    @Test
+    fun balloonMaskStaysInsideAnOvalEvenWhenTheModelBoxSpillsOut() {
+        val width = 220
+        val height = 260
+        fun inside(x: Int, y: Int) = (x - 110).toDouble().let { it * it / 3600 } +
+            (y - 130).toDouble().let { it * it / 7225 } <= 1.0
+        val pixels = IntArray(width * height) { i ->
+            val x = i % width
+            val y = i / width
+            when {
+                x in 91..106 && y in 85..162 -> 0xFF141414.toInt()
+                inside(x, y) -> 0xFFFFFFFF.toInt()
+                else -> 0xFF848484.toInt()
+            }
+        }
+        val result = requireNotNull(LightBalloonFinder(width, height, pixels).find(130, 130, 870, 900))
+        val shape = result.bounds
+        for (i in result.safe.indices) {
+            if (result.safe[i]) assertTrue(inside(shape.x + i % shape.width, shape.y + i / shape.width))
+        }
+        val box = result.textArea
+        assertTrue(box.width > 50 && box.height > 50)
+        for (y in box.y until box.y + box.height) for (x in box.x until box.x + box.width) {
+            assertTrue(result.safe[(y - shape.y) * shape.width + (x - shape.x)])
+        }
+        val unbounded = IntArray(width * height) { x ->
+            if (x % width in 75..81 && x / width in 90..155) 0xFF101010.toInt() else 0xFFFFFFFF.toInt()
+        }
+        assertEquals(null, LightBalloonFinder(width, height, unbounded).find(180, 230, 790, 820))
     }
 
     private val validRegions = """{"regions":[{"left":100,"top":110,"right":600,"bottom":500,"text":"早上好"}]}"""

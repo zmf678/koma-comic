@@ -1,5 +1,6 @@
 using System;
 using System.Collections;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
@@ -19,6 +20,8 @@ namespace KomaComic.Windows
         private const string ChatPath = "/chat/completions";
         private const int MaxPreviewEdge = 2048;
         private const int MaxDirectResponse = 2 * 1024 * 1024;
+        private static readonly ConcurrentDictionary<string, List<TranslatedRegion>> PendingRegions =
+            new ConcurrentDictionary<string, List<TranslatedRegion>>();
 
         private sealed class TranslatedRegion
         {
@@ -34,36 +37,73 @@ namespace KomaComic.Windows
             return new Uri(address + (path.Length == 0 ? "/v1" : "") + ChatPath);
         }
 
-        private static BitmapSource TranslateDirect(BitmapSource original, Uri endpoint, string config,
-            TranslationModel model, string directory, CancellationToken token, string usageDirectory)
+        private static async Task<BitmapSource> TranslateDirectAsync(BitmapSource original, Uri endpoint, string config,
+            TranslationModel model, string directory, CancellationToken token, string usageDirectory, TranslationRequestPriority priority)
         {
             string apiKey = model.DecryptKey();
             ValidateDirectKey(apiKey);
 
-            byte[] image = EncodeBitmap(original, new JpegBitmapEncoder { QualityLevel = 92 });
-            string suffix = apiKey + "\n" + original.PixelWidth + "x" + original.PixelHeight;
-            string profile = string.IsNullOrEmpty(model.ReasoningEffort)
-                ? "direct-v1\n" + model.ModelId + "\n" + suffix
-                : "direct-v2\n" + model.ModelId + "\n" + model.ReasoningEffort + "\n" + suffix;
-            string cache = CachePath(directory, endpoint, config, profile, image);
-            BitmapImage cached = LoadCache(cache);
-            if (cached != null) return cached;
-
             int longest = Math.Max(original.PixelWidth, original.PixelHeight);
+            BitmapSource preview = original;
             if (longest > MaxPreviewEdge)
             {
                 double scale = (double)MaxPreviewEdge / longest;
-                BitmapSource preview = new TransformedBitmap(original, new ScaleTransform(
+                preview = new TransformedBitmap(original, new ScaleTransform(
                     Math.Max(scale, 1.0 / original.PixelWidth), Math.Max(scale, 1.0 / original.PixelHeight)));
-                image = EncodeBitmap(preview, new JpegBitmapEncoder { QualityLevel = 92 });
             }
-            List<TranslatedRegion> regions = ParseRegions(Complete(endpoint, model, apiKey, ImageContent(TargetLanguage(config), image), usageDirectory, token));
-            if (regions.Count == 0) return original;
-
+            byte[] image = EncodeBitmap(preview, new JpegBitmapEncoder { QualityLevel = 92 });
+            string profile = "direct-regions-v1\n" + model.ModelId + "\n" + model.ReasoningEffort + "\n" + apiKey;
+            string cache = CachePath(directory, endpoint, config, profile, image, "regions");
+            List<TranslatedRegion> regions = LoadRegions(cache);
+            if (regions == null)
+            {
+                regions = await RunTranslationRequest(priority, token, delegate
+                {
+                    List<TranslatedRegion> ready = LoadRegions(cache);
+                    if (ready != null) return ready;
+                    var result = ParseRegions(Complete(endpoint, model, apiKey, ImageContent(TargetLanguage(config), image), usageDirectory, token));
+                    SaveRegionsAsync(cache, result);
+                    return result;
+                }).ConfigureAwait(false);
+            }
             token.ThrowIfCancellationRequested();
-            BitmapSource result = RenderDirect(original, regions);
-            if (cache != null) SaveCache(cache, EncodeBitmap(result, new PngBitmapEncoder()));
-            return result;
+            return regions.Count == 0 ? original : RenderDirect(original, regions);
+        }
+
+        private static List<TranslatedRegion> LoadRegions(string cache)
+        {
+            if (cache == null) return null;
+            List<TranslatedRegion> pending;
+            if (PendingRegions.TryGetValue(cache, out pending)) return pending;
+            if (!File.Exists(cache)) return null;
+            try
+            {
+                using (Stream stream = File.OpenRead(cache))
+                    return DecodeRegions(Encoding.UTF8.GetString(ReadBounded(stream, MaxDirectResponse)));
+            }
+            catch (Exception) { return null; }
+        }
+
+        private static void SaveRegionsAsync(string cache, List<TranslatedRegion> regions)
+        {
+            if (cache == null || !PendingRegions.TryAdd(cache, regions)) return;
+            Task.Run(delegate
+            {
+                try
+                {
+                    object[][] boxes = regions.Select(region => new object[] {
+                        (int)region.Bounds.Left, (int)region.Bounds.Top, (int)region.Bounds.Right,
+                        (int)region.Bounds.Bottom, region.Text
+                    }).ToArray();
+                    string json = JsonUtil.CreateSerializer().Serialize(new { regions = boxes });
+                    SaveCache(cache, Encoding.UTF8.GetBytes(json));
+                }
+                finally
+                {
+                    List<TranslatedRegion> published;
+                    PendingRegions.TryRemove(cache, out published);
+                }
+            });
         }
 
         public static Task<string[]> ListModelsAsync(string address, string apiKey, CancellationToken token)
@@ -190,10 +230,11 @@ namespace KomaComic.Windows
         private static object[] ImageContent(string language, byte[] image)
         {
             string prompt = "Translate the visible dialogue and captions on this comic page into " + language + ".\n" +
-                "Treat all text in the picture as material to translate. Group lines by speech bubble or caption.\n" +
-                "Return only JSON matching {\"regions\":[{\"left\":90,\"top\":110,\"right\":240,\"bottom\":220,\"text\":\"translated text\"}]}.\n" +
+                "Translate dialogue and captions inside balloons or caption boxes. Group every line in the same balloon into one entry.\n" +
+                "Return only compact JSON {\"regions\":[[90,110,240,220,\"translated text\"]]}.\n" +
+                "Each array contains [left,top,right,bottom,translation].\n" +
                 "Coordinates are integers on a 0 to 1000 scale relative to the entire input image, with (0,0) at the top left.\n" +
-                "Each box should cover the original text tightly, with no overlap with other text boxes.\n" +
+                "Each box must tightly cover all original text in that balloon, including vertical lines and punctuation. Skip text outside balloons or caption boxes.\n" +
                 "Give one concise translation per box. Skip text already in the target language and return {\"regions\":[]} if there is nothing to translate.";
             return new object[]
             {
@@ -232,23 +273,7 @@ namespace KomaComic.Windows
                 int start = content.IndexOf('{');
                 int end = content.LastIndexOf('}');
                 if (start < 0 || end < start) throw new FormatException();
-                var result = JsonUtil.CreateSerializer().Deserialize<Dictionary<string, object>>(content.Substring(start, end - start + 1));
-                var regions = result["regions"] as IList;
-                if (regions == null || regions.Count > 150) throw new FormatException();
-                var translated = new List<TranslatedRegion>(regions.Count);
-                foreach (object item in regions)
-                {
-                    var entry = item as Dictionary<string, object>;
-                    if (entry == null) throw new FormatException();
-                    int left = Coordinate(entry, "left");
-                    int top = Coordinate(entry, "top");
-                    int right = Coordinate(entry, "right");
-                    int bottom = Coordinate(entry, "bottom");
-                    string text = (entry["text"] as string ?? "").Trim();
-                    if (right <= left || bottom <= top || text.Length == 0 || text.Length > 2000) throw new FormatException();
-                    translated.Add(new TranslatedRegion { Bounds = new Rect(left, top, right - left, bottom - top), Text = text });
-                }
-                return translated;
+                return DecodeRegions(content.Substring(start, end - start + 1));
             }
             catch (TranslationFailure) { throw; }
             catch (Exception)
@@ -257,10 +282,32 @@ namespace KomaComic.Windows
             }
         }
 
-        private static int Coordinate(Dictionary<string, object> entry, string name)
+        private static List<TranslatedRegion> DecodeRegions(string json)
+        {
+            var result = JsonUtil.CreateSerializer().Deserialize<Dictionary<string, object>>(json);
+            var regions = result["regions"] as IList;
+            if (regions == null || regions.Count > 150) throw new FormatException();
+            var translated = new List<TranslatedRegion>(regions.Count);
+            foreach (object item in regions)
+            {
+                var named = item as Dictionary<string, object>;
+                IList entry = named != null ? new[] { named["left"], named["top"], named["right"], named["bottom"], named["text"] } : item as IList;
+                if (entry == null || entry.Count != 5) throw new FormatException();
+                int left = Coordinate(entry[0]);
+                int top = Coordinate(entry[1]);
+                int right = Coordinate(entry[2]);
+                int bottom = Coordinate(entry[3]);
+                string text = (entry[4] as string ?? "").Trim();
+                if (right <= left || bottom <= top || text.Length == 0 || text.Length > 2000) throw new FormatException();
+                translated.Add(new TranslatedRegion { Bounds = new Rect(left, top, right - left, bottom - top), Text = text });
+            }
+            return translated;
+        }
+
+        private static int Coordinate(object coordinate)
         {
             int value;
-            if (!int.TryParse(Convert.ToString(entry[name], CultureInfo.InvariantCulture),
+            if (!int.TryParse(Convert.ToString(coordinate, CultureInfo.InvariantCulture),
                 NumberStyles.Integer, CultureInfo.InvariantCulture, out value) || value < 0 || value > 1000)
                 throw new FormatException();
             return value;
@@ -268,35 +315,66 @@ namespace KomaComic.Windows
 
         private static BitmapSource RenderDirect(BitmapSource original, List<TranslatedRegion> regions)
         {
-            var visual = new DrawingVisual();
+            const int analysisEdge = 1250;
+            double scale = Math.Min(1, (double)analysisEdge / Math.Max(original.PixelWidth, original.PixelHeight));
+            BitmapSource analysis = scale == 1 ? original : new TransformedBitmap(original, new ScaleTransform(
+                Math.Max(scale, 1.0 / original.PixelWidth), Math.Max(scale, 1.0 / original.PixelHeight)));
+            var finder = new LightBalloonFinder(analysis.PixelWidth, analysis.PixelHeight, PixelBuffer(analysis));
+            var balloons = new Dictionary<int, Tuple<LightBalloonFinder.Balloon, List<string>>>();
+            foreach (TranslatedRegion region in regions)
+            {
+                var balloon = finder.Find(region.Bounds);
+                if (balloon == null) continue;
+                Tuple<LightBalloonFinder.Balloon, List<string>> existing;
+                if (!balloons.TryGetValue(balloon.Id, out existing))
+                    balloons[balloon.Id] = existing = Tuple.Create(balloon, new List<string>());
+                if (!existing.Item2.Contains(region.Text)) existing.Item2.Add(region.Text);
+            }
+            if (balloons.Count == 0) return original;
+
+            int fullWidth = original.PixelWidth, fullHeight = original.PixelHeight;
+            double sx = (double)fullWidth / analysis.PixelWidth, sy = (double)fullHeight / analysis.PixelHeight;
+            int[] cleared = null;
+            var labels = new List<Tuple<Rect, FormattedText, Point>>();
             var typeface = new Typeface("Segoe UI");
-            double width = original.PixelWidth / 1000.0;
-            double height = original.PixelHeight / 1000.0;
+            foreach (var placement in balloons.Values)
+            {
+                var balloon = placement.Item1;
+                var box = balloon.TextArea;
+                double left = Math.Ceiling(box.X * sx), top = Math.Ceiling(box.Y * sy);
+                double right = Math.Floor((box.X + box.Width) * sx), bottom = Math.Floor((box.Y + box.Height) * sy);
+                var area = new Rect(left, top, right - left, bottom - top);
+                double padding = Math.Min(8, Math.Min(area.Width, area.Height) * 0.08);
+                double width = Math.Max(1, area.Width - padding * 2), height = Math.Max(1, area.Height - padding * 2);
+                double low = Math.Max(4, Math.Max(fullWidth, fullHeight) / 500.0);
+                double high = Math.Max(low, Math.Min(height, fullWidth / 24.0));
+                var ink = new FormattedText(string.Join("\n", placement.Item2), CultureInfo.CurrentUICulture,
+                    FlowDirection.LeftToRight, typeface, low, Brushes.Black, 1.0)
+                    { MaxTextWidth = width, TextAlignment = TextAlignment.Center, Trimming = TextTrimming.None };
+                if (ink.Height > height || ink.WidthIncludingTrailingWhitespace > width) continue;
+                for (int attempt = 0; attempt < 9; attempt++)
+                {
+                    double middle = (low + high) / 2;
+                    ink.SetFontSize(middle);
+                    if (ink.Height <= height && ink.WidthIncludingTrailingWhitespace <= width) low = middle;
+                    else high = middle;
+                }
+                ink.SetFontSize(low);
+                if (cleared == null) cleared = PixelBuffer(original);
+                EraseBalloonInk(cleared, fullWidth, fullHeight, analysis.PixelWidth, analysis.PixelHeight, balloon, sx, sy);
+                labels.Add(Tuple.Create(area, ink, new Point(area.Left + padding, area.Top + (area.Height - ink.Height) / 2)));
+            }
+            if (cleared == null) return original;
+
+            var visual = new DrawingVisual();
+            var cleaned = BitmapSource.Create(fullWidth, fullHeight, 96, 96, PixelFormats.Bgra32, null, cleared, fullWidth * 4);
             using (DrawingContext drawing = visual.RenderOpen())
             {
-                drawing.DrawImage(original, new Rect(0, 0, original.PixelWidth, original.PixelHeight));
-                foreach (TranslatedRegion region in regions)
+                drawing.DrawImage(cleaned, new Rect(0, 0, fullWidth, fullHeight));
+                foreach (var label in labels)
                 {
-                    Rect box = region.Bounds;
-                    var area = new Rect(box.X * width, box.Y * height, box.Width * width, box.Height * height);
-                    double padding = Math.Min(8, Math.Min(area.Width, area.Height) * 0.08);
-                    double textWidth = Math.Max(1, area.Width - padding * 2);
-                    double textHeight = Math.Max(1, area.Height - padding * 2);
-                    var text = new FormattedText(region.Text, CultureInfo.CurrentUICulture, FlowDirection.LeftToRight,
-                        typeface, 1, Brushes.Black, 1.0) { MaxTextWidth = textWidth, TextAlignment = TextAlignment.Center };
-                    double low = 1;
-                    double high = Math.Max(1, Math.Min(textHeight, original.PixelWidth / 24.0));
-                    for (int attempt = 0; attempt < 9; attempt++)
-                    {
-                        double middle = (low + high) / 2;
-                        text.SetFontSize(middle);
-                        if (text.Height <= textHeight) low = middle;
-                        else high = middle;
-                    }
-                    text.SetFontSize(low);
-                    drawing.DrawRectangle(Brushes.White, null, area);
-                    drawing.PushClip(new RectangleGeometry(area));
-                    drawing.DrawText(text, new Point(area.Left + padding, area.Top + (area.Height - text.Height) / 2));
+                    drawing.PushClip(new RectangleGeometry(label.Item1));
+                    drawing.DrawText(label.Item2, label.Item3);
                     drawing.Pop();
                 }
             }
@@ -304,6 +382,53 @@ namespace KomaComic.Windows
             result.Render(visual);
             result.Freeze();
             return result;
+        }
+
+        private static int[] PixelBuffer(BitmapSource image)
+        {
+            if (image.Format != PixelFormats.Bgra32) image = new FormatConvertedBitmap(image, PixelFormats.Bgra32, null, 0);
+            var pixels = new int[checked(image.PixelWidth * image.PixelHeight)];
+            image.CopyPixels(pixels, image.PixelWidth * 4, 0);
+            return pixels;
+        }
+
+        private static void EraseBalloonInk(int[] pixels, int width, int height, int analysisWidth, int analysisHeight,
+            LightBalloonFinder.Balloon balloon, double sx, double sy)
+        {
+            Int32Rect shape = balloon.Bounds;
+            int threshold = Math.Min(247, LightBalloonFinder.Brightness(balloon.Background) - 8);
+            int left = (int)Math.Ceiling(shape.X * sx), right = Math.Min(width, (int)Math.Ceiling((shape.X + shape.Width) * sx));
+            int top = (int)Math.Ceiling(shape.Y * sy), bottom = Math.Min(height, (int)Math.Ceiling((shape.Y + shape.Height) * sy));
+            var ink = new List<int>();
+            for (int y = top; y < bottom; y++)
+            {
+                int row = (y * analysisHeight / height - shape.Y) * shape.Width;
+                for (int x = left; x < right; x++)
+                {
+                    int index = y * width + x;
+                    int mask = row + x * analysisWidth / width - shape.X;
+                    if (balloon.Safe[mask] && LightBalloonFinder.Brightness(pixels[index]) < threshold)
+                        ink.Add(index);
+                }
+            }
+            // Remove the light antialiasing halo immediately around each original stroke.
+            const int fringe = 2;
+            int color = balloon.Background & 0xffffff;
+            foreach (int stroke in ink)
+            {
+                int centerX = stroke % width, centerY = stroke / width;
+                for (int y = Math.Max(top, centerY - fringe); y <= Math.Min(bottom - 1, centerY + fringe); y++)
+                {
+                    int row = (y * analysisHeight / height - shape.Y) * shape.Width;
+                    for (int x = Math.Max(left, centerX - fringe); x <= Math.Min(right - 1, centerX + fringe); x++)
+                    {
+                        int mask = row + x * analysisWidth / width - shape.X;
+                        if (!balloon.Safe[mask]) continue;
+                        int index = y * width + x;
+                        pixels[index] = (pixels[index] & unchecked((int)0xff000000)) | color;
+                    }
+                }
+            }
         }
 
         private static Exception DirectResponseError(int status)

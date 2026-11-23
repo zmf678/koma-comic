@@ -32,6 +32,7 @@ namespace KomaComic.Windows
         private sealed class ReaderTranslationWork
         {
             public readonly CancellationTokenSource Cancellation = new CancellationTokenSource();
+            public TranslationRequestPriority Priority;
             public Task<ReaderTranslationResult> Task;
         }
 
@@ -180,7 +181,10 @@ namespace KomaComic.Windows
 
         private void PruneReaderTranslations(int first, int last)
         {
-            foreach (int page in _readerTranslationWork.Keys.Where(index => index < first || index > last).ToArray())
+            var remove = _readerTranslationWork.Where(entry =>
+                entry.Key > last || (entry.Key < first &&
+                    !(first <= last && entry.Key >= first - 2 && entry.Value.Task.Status == TaskStatus.RanToCompletion)));
+            foreach (int page in remove.Select(entry => entry.Key).ToArray())
                 RemoveReaderTranslation(page);
         }
 
@@ -197,17 +201,21 @@ namespace KomaComic.Windows
             ReaderTranslationWork work;
             if (_readerTranslationWork.TryGetValue(position, out work))
             {
-                if (!work.Task.IsCanceled && !work.Task.IsFaulted) return work;
+                if (!work.Task.IsCanceled && !work.Task.IsFaulted)
+                {
+                    if (original != null) work.Priority.Promote();
+                    return work;
+                }
                 RemoveReaderTranslation(position);
             }
-            work = new ReaderTranslationWork();
-            work.Task = TranslateReaderPage(position, original, _readerPages, work.Cancellation.Token);
+            work = new ReaderTranslationWork { Priority = new TranslationRequestPriority(original == null) };
+            work.Task = TranslateReaderPage(position, original, _readerPages, work.Cancellation.Token, work.Priority);
             _readerTranslationWork[position] = work;
             return work;
         }
 
         private async Task<ReaderTranslationResult> TranslateReaderPage(int position, BitmapImage original,
-            List<PageImageModel> pages, CancellationToken token)
+            List<PageImageModel> pages, CancellationToken token, TranslationRequestPriority priority)
         {
             BitmapImage bitmap = original ?? await LoadReaderBitmapAsync(pages[position], position, pages);
             token.ThrowIfCancellationRequested();
@@ -215,7 +223,7 @@ namespace KomaComic.Windows
             TranslationModel model = _services.TranslationModel;
             string session = model.UsesTranslationServer ? TranslationModel.DecryptSecret(_services.TranslationSession) : "";
             BitmapSource translated = await MangaTranslation.TranslateAsync(bitmap, _services.TranslationServer,
-                _services.TranslationConfig, model, session, Path.Combine(_services.DataDir, "cache", "translations"), token, _services.DataDir);
+                _services.TranslationConfig, model, session, Path.Combine(_services.DataDir, "cache", "translations"), token, _services.DataDir, priority);
             return new ReaderTranslationResult { Image = translated, Changed = !ReferenceEquals(translated, bitmap) };
         }
 
