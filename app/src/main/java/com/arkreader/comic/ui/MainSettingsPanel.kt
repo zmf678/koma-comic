@@ -200,8 +200,180 @@ class MainSettingsPanel(
             val versionName = runCatching {
                 activity.packageManager.getPackageInfo(activity.packageName, 0).versionName ?: "1.0"
             }.getOrDefault("1.0")
+            addActionRow(group, "检查并自动更新", "当前版本 v$versionName · 从 GitHub Releases 检测更新") {
+                checkAndRunAutoUpdate(versionName)
+            }
+            addDivider(group)
+
             addActionRow(group, "关于页光 Koma", "版本 v$versionName") {
                 Toast.makeText(activity, "页光 Koma v$versionName", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    private fun compareSemVer(remote: String, local: String): Int {
+        fun parse(raw: String) = raw.trim().removePrefix("v").removePrefix("V")
+            .substringBefore('-').split('.').map { it.toIntOrNull() ?: 0 }
+        val a = parse(remote)
+        val b = parse(local)
+        for (i in 0 until maxOf(a.size, b.size)) {
+            val va = a.getOrElse(i) { 0 }
+            val vb = b.getOrElse(i) { 0 }
+            if (va != vb) return va.compareTo(vb)
+        }
+        return 0
+    }
+
+    private fun checkAndRunAutoUpdate(currentVersion: String) {
+        val checking = MaterialAlertDialogBuilder(activity)
+            .setTitle("检查更新")
+            .setMessage("正在连接 GitHub 获取最新版本…")
+            .setNegativeButton("取消", null)
+            .show()
+        val job = activity.lifecycleScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                runCatching {
+                    val conn = (java.net.URL("https://api.github.com/repos/zmf678/koma-comic/releases/latest").openConnection() as java.net.HttpURLConnection).apply {
+                        connectTimeout = 15_000
+                        readTimeout = 15_000
+                        setRequestProperty("User-Agent", "KomaComic-Android/$currentVersion")
+                        setRequestProperty("Accept", "application/vnd.github+json")
+                    }
+                    try {
+                        check(conn.responseCode in 200..299) { "HTTP ${conn.responseCode}" }
+                        val body = conn.inputStream.bufferedReader().use { it.readText() }
+                        val json = org.json.JSONObject(body)
+                        val tag = json.optString("tag_name")
+                        val notes = json.optString("body")
+                        val htmlUrl = json.optString("html_url", "https://github.com/zmf678/koma-comic/releases")
+                        var apkUrl = ""
+                        var apkSize = 0L
+                        val assets = json.optJSONArray("assets")
+                        if (assets != null) {
+                            for (i in 0 until assets.length()) {
+                                val a = assets.optJSONObject(i) ?: continue
+                                val name = a.optString("name")
+                                if (name.endsWith(".apk", ignoreCase = true)) {
+                                    apkUrl = a.optString("browser_download_url")
+                                    apkSize = a.optLong("size", 0L)
+                                    break
+                                }
+                            }
+                        }
+                        arrayOf(tag, notes, htmlUrl, apkUrl, apkSize.toString())
+                    } finally {
+                        conn.disconnect()
+                    }
+                }
+            }
+            if (!checking.isShowing) return@launch
+            checking.dismiss()
+            result.onFailure { err ->
+                Toast.makeText(activity, "检查更新失败：${err.message ?: "网络异常"}", Toast.LENGTH_LONG).show()
+            }.onSuccess { info ->
+                val tag = info[0]
+                val ver = tag.trim().removePrefix("v").removePrefix("V")
+                val notes = info[1].ifBlank { "包含最新功能改进与问题修复。" }
+                val htmlUrl = info[2]
+                val apkUrl = info[3]
+                val apkSize = info[4].toLongOrNull() ?: 0L
+                if (ver.isBlank() || compareSemVer(ver, currentVersion) <= 0) {
+                    Toast.makeText(activity, "当前已是最新版本 (v$currentVersion)", Toast.LENGTH_SHORT).show()
+                    return@onSuccess
+                }
+                val sizeLabel = if (apkSize > 0) String.format(Locale.getDefault(), " (%.1f MB)", apkSize / (1024f * 1024f)) else ""
+                val builder = MaterialAlertDialogBuilder(activity)
+                    .setTitle("发现新版本 v$ver$sizeLabel")
+                    .setMessage(notes)
+                    .setNeutralButton("打开发布页") { _, _ ->
+                        runCatching { activity.startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(htmlUrl))) }
+                    }
+                    .setNegativeButton("稍后再说", null)
+                if (apkUrl.startsWith("https://")) {
+                    builder.setPositiveButton("一键下载并安装") { _, _ ->
+                        downloadAndInstallApk(tag, apkUrl, apkSize)
+                    }
+                }
+                builder.show()
+            }
+        }
+        checking.setOnCancelListener { job.cancel() }
+    }
+
+    private fun downloadAndInstallApk(tag: String, apkUrl: String, expectedSize: Long) {
+        val statusView = TextView(activity).apply {
+            text = "正在下载安装包…"
+            setPadding(dp(24), dp(14), dp(24), dp(8))
+        }
+        var downloadJob: kotlinx.coroutines.Job? = null
+        val dialog = MaterialAlertDialogBuilder(activity)
+            .setTitle("正在更新 $tag")
+            .setView(statusView)
+            .setNegativeButton("取消") { _, _ -> downloadJob?.cancel() }
+            .setCancelable(false)
+            .show()
+
+        downloadJob = activity.lifecycleScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                runCatching {
+                    val dir = java.io.File(activity.cacheDir, "updates").apply { mkdirs() }
+                    val safeTag = tag.replace(Regex("[^A-Za-z0-9._-]"), "_")
+                    val outFile = java.io.File(dir, "KomaComic-$safeTag.apk")
+                    val conn = (java.net.URL(apkUrl).openConnection() as java.net.HttpURLConnection).apply {
+                        connectTimeout = 20_000
+                        readTimeout = 60_000
+                        setRequestProperty("User-Agent", "KomaComic-Android")
+                    }
+                    try {
+                        check(conn.responseCode in 200..299) { "HTTP ${conn.responseCode}" }
+                        val total = if (conn.contentLengthLong > 0) conn.contentLengthLong else expectedSize
+                        conn.inputStream.use { input ->
+                            outFile.outputStream().use { output ->
+                                val buf = ByteArray(32768)
+                                var downloaded = 0L
+                                var lastUi = 0L
+                                while (true) {
+                                    val n = input.read(buf)
+                                    if (n <= 0) break
+                                    output.write(buf, 0, n)
+                                    downloaded += n
+                                    val now = android.os.SystemClock.uptimeMillis()
+                                    if (now - lastUi >= 120L) {
+                                        lastUi = now
+                                        val msg = if (total > 0) {
+                                            val pct = (downloaded * 100f / total).coerceIn(0f, 100f)
+                                            String.format(Locale.getDefault(), "正在下载… %.1f%% (%.1f / %.1f MB)", pct, downloaded / 1048576f, total / 1048576f)
+                                        } else {
+                                            String.format(Locale.getDefault(), "正在下载… %.1f MB", downloaded / 1048576f)
+                                        }
+                                        withContext(Dispatchers.Main) { statusView.text = msg }
+                                    }
+                                }
+                            }
+                        }
+                        outFile
+                    } finally {
+                        conn.disconnect()
+                    }
+                }
+            }
+            if (dialog.isShowing) dialog.dismiss()
+            result.onFailure { err ->
+                if (err !is kotlinx.coroutines.CancellationException) {
+                    Toast.makeText(activity, "下载失败：${err.message ?: "网络异常"}", Toast.LENGTH_LONG).show()
+                }
+            }.onSuccess { apkFile ->
+                val uri = androidx.core.content.FileProvider.getUriForFile(
+                    activity,
+                    "${activity.packageName}.fileprovider",
+                    apkFile
+                )
+                val installIntent = Intent(Intent.ACTION_VIEW).apply {
+                    setDataAndType(uri, "application/vnd.android.package-archive")
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                runCatching { activity.startActivity(installIntent) }
+                    .onFailure { Toast.makeText(activity, "无法调起安装器：${it.message}", Toast.LENGTH_LONG).show() }
             }
         }
     }

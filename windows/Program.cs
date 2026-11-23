@@ -91,7 +91,8 @@ namespace KomaComic.Windows
 
     internal static class Program
     {
-        internal const string AppVersion = "1.5.0";
+        internal const string AppVersion = "1.5.1";
+        internal const string GithubRepoSlug = "zmf678/koma-comic";
 
         [STAThread]
         private static int Main(string[] args)
@@ -6479,6 +6480,19 @@ namespace KomaComic.Windows
             rowCache.Children.Add(new TextBlock { Text = "本地封面与阅读缓存 (data/cache/images/)", VerticalAlignment = VerticalAlignment.Center, FontSize = 13.5 });
             sc.Children.Add(rowCache);
 
+            DockPanel rowUpdate = new DockPanel { Margin = new Thickness(0, 0, 0, 12) };
+            Button bCheckUpdate = UiTheme.MakeButton("检查并自动更新", true, false);
+            DockPanel.SetDock(bCheckUpdate, Dock.Right);
+            rowUpdate.Children.Add(bCheckUpdate);
+            StackPanel updTextStack = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
+            updTextStack.Children.Add(new TextBlock { Text = string.Format("应用更新（当前 v{0}）", Program.AppVersion), FontSize = 13.5 });
+            TextBlock updStatus = new TextBlock { Text = "从 GitHub Releases 自动检测并下载覆盖升级（保留 data 数据）", FontSize = 12, Margin = new Thickness(0, 2, 0, 0) };
+            updStatus.SetResourceReference(TextBlock.ForegroundProperty, "Brush.TextMuted");
+            updTextStack.Children.Add(updStatus);
+            rowUpdate.Children.Add(updTextStack);
+            bCheckUpdate.Click += delegate { CheckAndRunAutoUpdateAsync(bCheckUpdate, updStatus); };
+            sc.Children.Add(rowUpdate);
+
             TextBlock about = new TextBlock
             {
                 Text = string.Format("页光 Koma v{0} · Windows 原生 WPF DirectX 高清版 (Per-Monitor V2 DPI)", Program.AppVersion),
@@ -6492,6 +6506,349 @@ namespace KomaComic.Windows
             sv.Content = stack;
             g.Children.Add(sv);
             return g;
+        }
+
+        private sealed class AppReleaseInfo
+        {
+            public string TagName;
+            public string VersionText;
+            public string Title;
+            public string Notes;
+            public string HtmlUrl;
+            public string AssetName;
+            public string DownloadUrl;
+            public long AssetSize;
+        }
+
+        private static int CompareSemVer(string remoteVer, string localVer)
+        {
+            int[] a = ParseVersionParts(remoteVer);
+            int[] b = ParseVersionParts(localVer);
+            int len = Math.Max(a.Length, b.Length);
+            for (int i = 0; i < len; i++)
+            {
+                int va = i < a.Length ? a[i] : 0;
+                int vb = i < b.Length ? b[i] : 0;
+                if (va != vb) return va.CompareTo(vb);
+            }
+            return 0;
+        }
+
+        private static int[] ParseVersionParts(string raw)
+        {
+            string clean = (raw ?? "").Trim().TrimStart('v', 'V');
+            int dash = clean.IndexOf('-');
+            if (dash >= 0) clean = clean.Substring(0, dash);
+            string[] segs = clean.Split('.');
+            int[] nums = new int[segs.Length];
+            for (int i = 0; i < segs.Length; i++)
+            {
+                int v;
+                if (int.TryParse(segs[i], out v)) nums[i] = v;
+            }
+            return nums;
+        }
+
+        private static Task<AppReleaseInfo> FetchLatestReleaseAsync()
+        {
+            return Task.Run<AppReleaseInfo>(delegate ()
+            {
+                string apiUrl = "https://api.github.com/repos/" + Program.GithubRepoSlug + "/releases/latest";
+                HttpWebRequest req = (HttpWebRequest)WebRequest.Create(apiUrl);
+                req.Method = "GET";
+                req.UserAgent = "KomaComic-Windows/" + Program.AppVersion;
+                req.Accept = "application/vnd.github+json";
+                req.Timeout = 15000;
+                req.ReadWriteTimeout = 15000;
+                using (HttpWebResponse resp = (HttpWebResponse)req.GetResponse())
+                using (StreamReader sr = new StreamReader(resp.GetResponseStream(), Encoding.UTF8))
+                {
+                    string json = sr.ReadToEnd();
+                    Dictionary<string, object> root = JsonUtil.CreateSerializer().Deserialize<Dictionary<string, object>>(json);
+                    if (root == null) throw new InvalidOperationException("无法解析版本响应");
+                    AppReleaseInfo info = new AppReleaseInfo();
+                    info.TagName = JsonUtil.GetStr(root, "tag_name", "");
+                    info.VersionText = info.TagName.TrimStart('v', 'V');
+                    info.Title = JsonUtil.GetStr(root, "name", info.TagName);
+                    info.Notes = JsonUtil.GetStr(root, "body", "");
+                    info.HtmlUrl = JsonUtil.GetStr(root, "html_url", "https://github.com/" + Program.GithubRepoSlug + "/releases");
+                    object assetsObj;
+                    if (root.TryGetValue("assets", out assetsObj) && assetsObj is ArrayList)
+                    {
+                        foreach (object el in (ArrayList)assetsObj)
+                        {
+                            Dictionary<string, object> asset = el as Dictionary<string, object>;
+                            if (asset == null) continue;
+                            string name = JsonUtil.GetStr(asset, "name", "");
+                            string url = JsonUtil.GetStr(asset, "browser_download_url", "");
+                            if (string.IsNullOrEmpty(url)) continue;
+                            if (name.EndsWith(".zip", StringComparison.OrdinalIgnoreCase) &&
+                                (name.IndexOf("windows", StringComparison.OrdinalIgnoreCase) >= 0 || string.IsNullOrEmpty(info.DownloadUrl)))
+                            {
+                                info.AssetName = name;
+                                info.DownloadUrl = url;
+                                object szObj;
+                                if (asset.TryGetValue("size", out szObj) && szObj != null)
+                                {
+                                    long sz;
+                                    if (long.TryParse(Convert.ToString(szObj), out sz)) info.AssetSize = sz;
+                                }
+                                if (name.IndexOf("windows", StringComparison.OrdinalIgnoreCase) >= 0) break;
+                            }
+                        }
+                    }
+                    return info;
+                }
+            });
+        }
+
+        private async void CheckAndRunAutoUpdateAsync(Button triggerBtn, TextBlock statusLabel)
+        {
+            if (triggerBtn != null)
+            {
+                triggerBtn.IsEnabled = false;
+                triggerBtn.Content = "正在检查…";
+            }
+            if (statusLabel != null) statusLabel.Text = "正在连接 GitHub 检查最新版本…";
+            try
+            {
+                AppReleaseInfo latest = await FetchLatestReleaseAsync();
+                if (string.IsNullOrEmpty(latest.VersionText))
+                    throw new InvalidOperationException("未获取到有效版本号");
+
+                int cmp = CompareSemVer(latest.VersionText, Program.AppVersion);
+                if (cmp <= 0)
+                {
+                    if (statusLabel != null) statusLabel.Text = string.Format("当前已是最新版本 (v{0}) ✓", Program.AppVersion);
+                    ShowToast(string.Format("当前已是最新版本 (v{0})", Program.AppVersion));
+                    return;
+                }
+
+                if (statusLabel != null) statusLabel.Text = string.Format("发现新版本 v{0}（当前 v{1}）", latest.VersionText, Program.AppVersion);
+                ShowAutoUpdateDialog(latest);
+            }
+            catch (Exception ex)
+            {
+                string err = ex.Message.Split('\n')[0];
+                if (statusLabel != null) statusLabel.Text = "检查更新失败：" + err;
+                ShowToast("检查更新失败：" + err);
+            }
+            finally
+            {
+                if (triggerBtn != null)
+                {
+                    triggerBtn.IsEnabled = true;
+                    triggerBtn.Content = "检查并自动更新";
+                }
+            }
+        }
+
+        private void ShowAutoUpdateDialog(AppReleaseInfo info)
+        {
+            Window dlg = CreateStyledDialog("发现新版本 — " + info.Title, 540, 440);
+            DockPanel root = new DockPanel { Margin = new Thickness(20) };
+
+            StackPanel head = new StackPanel { Margin = new Thickness(0, 0, 0, 12) };
+            DockPanel.SetDock(head, Dock.Top);
+            string sizeStr = info.AssetSize > 0
+                ? string.Format("  ·  {0:F2} MB", info.AssetSize / (1024.0 * 1024.0))
+                : "";
+            head.Children.Add(new TextBlock
+            {
+                Text = string.Format("最新版本 v{0}（当前 v{1}）{2}", info.VersionText, Program.AppVersion, sizeStr),
+                FontSize = 16,
+                FontWeight = FontWeights.Bold
+            });
+            TextBlock hint = new TextBlock
+            {
+                Text = "自动更新仅替换程序与内置源，保留 data 目录中的所有收藏、历史和配置。",
+                FontSize = 12,
+                Margin = new Thickness(0, 4, 0, 0)
+            };
+            hint.SetResourceReference(TextBlock.ForegroundProperty, "Brush.TextMuted");
+            head.Children.Add(hint);
+            root.Children.Add(head);
+
+            StackPanel bottom = new StackPanel { Margin = new Thickness(0, 12, 0, 0) };
+            DockPanel.SetDock(bottom, Dock.Bottom);
+            ProgressBar bar = new ProgressBar { Height = 8, Minimum = 0, Maximum = 100, Value = 0, Visibility = Visibility.Collapsed, Margin = new Thickness(0, 0, 0, 6) };
+            TextBlock progressText = new TextBlock { FontSize = 12, Visibility = Visibility.Collapsed, Margin = new Thickness(0, 0, 0, 10) };
+            progressText.SetResourceReference(TextBlock.ForegroundProperty, "Brush.TextMuted");
+            bottom.Children.Add(bar);
+            bottom.Children.Add(progressText);
+
+            StackPanel btnRow = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
+            Button bOpenPage = UiTheme.MakeButton("打开发布页", false, false);
+            Button bCancel = UiTheme.MakeButton("稍后再说", false, false);
+            Button bUpdate = UiTheme.MakeButton("一键下载并自动更新", true, false);
+            bOpenPage.Margin = new Thickness(0, 0, 8, 0);
+            bCancel.Margin = new Thickness(0, 0, 8, 0);
+            bUpdate.IsEnabled = !string.IsNullOrEmpty(info.DownloadUrl);
+            btnRow.Children.Add(bOpenPage);
+            btnRow.Children.Add(bCancel);
+            btnRow.Children.Add(bUpdate);
+            bottom.Children.Add(btnRow);
+            root.Children.Add(bottom);
+
+            TextBox notesBox = MakeStyledTextBox();
+            notesBox.Text = string.IsNullOrWhiteSpace(info.Notes) ? "包含最新功能改进与问题修复。" : info.Notes.Trim();
+            notesBox.IsReadOnly = true;
+            notesBox.TextWrapping = TextWrapping.Wrap;
+            notesBox.VerticalScrollBarVisibility = ScrollBarVisibility.Auto;
+            root.Children.Add(notesBox);
+            dlg.Content = root;
+
+            CancellationTokenSource cts = null;
+            bOpenPage.Click += delegate { OpenComicWebsite(info.HtmlUrl); };
+            bCancel.Click += delegate
+            {
+                if (cts != null) cts.Cancel();
+                dlg.Close();
+            };
+            dlg.Closed += delegate { if (cts != null) cts.Cancel(); };
+
+            bUpdate.Click += async delegate
+            {
+                bUpdate.IsEnabled = false;
+                bOpenPage.IsEnabled = false;
+                bCancel.Content = "取消下载";
+                bar.Visibility = Visibility.Visible;
+                progressText.Visibility = Visibility.Visible;
+                progressText.Text = "正在连接下载服务器…";
+                cts = new CancellationTokenSource();
+                try
+                {
+                    await DownloadAndApplyWindowsUpdateAsync(info, cts.Token, delegate (double pct, string msg)
+                    {
+                        Dispatcher.InvokeAsync(delegate ()
+                        {
+                            bar.IsIndeterminate = pct < 0;
+                            if (pct >= 0) bar.Value = Math.Max(0, Math.Min(100, pct));
+                            progressText.Text = msg;
+                        });
+                    });
+                }
+                catch (OperationCanceledException)
+                {
+                    if (dlg.IsVisible)
+                    {
+                        progressText.Text = "已取消下载";
+                        bUpdate.IsEnabled = true;
+                        bOpenPage.IsEnabled = true;
+                        bCancel.Content = "关闭";
+                    }
+                }
+                catch (Exception ex)
+                {
+                    if (dlg.IsVisible)
+                    {
+                        progressText.Text = "更新失败：" + ex.Message.Split('\n')[0];
+                        bUpdate.IsEnabled = true;
+                        bOpenPage.IsEnabled = true;
+                        bCancel.Content = "关闭";
+                    }
+                }
+            };
+
+            dlg.ShowDialog();
+        }
+
+        private async Task DownloadAndApplyWindowsUpdateAsync(AppReleaseInfo info, CancellationToken token, Action<double, string> onProgress)
+        {
+            Uri uri;
+            if (!Uri.TryCreate(info.DownloadUrl, UriKind.Absolute, out uri) || uri.Scheme != "https")
+                throw new InvalidOperationException("无效的更新下载地址");
+
+            string tempRoot = Path.Combine(Path.GetTempPath(), "KomaComic_update_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            Directory.CreateDirectory(tempRoot);
+            string zipPath = Path.Combine(tempRoot, "update.zip");
+            string stageDir = Path.Combine(tempRoot, "stage");
+
+            await Task.Run(delegate ()
+            {
+                HttpWebRequest req = (HttpWebRequest)WebRequest.Create(uri);
+                req.Method = "GET";
+                req.UserAgent = "KomaComic-Windows/" + Program.AppVersion;
+                req.Timeout = 30000;
+                req.ReadWriteTimeout = 60000;
+                using (token.Register(delegate () { try { req.Abort(); } catch { } }))
+                using (HttpWebResponse resp = (HttpWebResponse)req.GetResponse())
+                using (Stream input = resp.GetResponseStream())
+                using (FileStream output = File.Create(zipPath))
+                {
+                    long totalBytes = resp.ContentLength > 0 ? resp.ContentLength : info.AssetSize;
+                    byte[] buffer = new byte[32768];
+                    long downloaded = 0;
+                    int read;
+                    long lastTick = 0;
+                    while ((read = input.Read(buffer, 0, buffer.Length)) > 0)
+                    {
+                        token.ThrowIfCancellationRequested();
+                        output.Write(buffer, 0, read);
+                        downloaded += read;
+                        long now = Environment.TickCount;
+                        if (now - lastTick >= 80)
+                        {
+                            lastTick = now;
+                            if (totalBytes > 0)
+                            {
+                                double pct = downloaded * 100.0 / totalBytes;
+                                onProgress(pct, string.Format("正在下载更新包… {0:F1}% ({1:F2} / {2:F2} MB)",
+                                    pct, downloaded / (1024.0 * 1024.0), totalBytes / (1024.0 * 1024.0)));
+                            }
+                            else
+                            {
+                                onProgress(-1, string.Format("正在下载更新包… {0:F2} MB", downloaded / (1024.0 * 1024.0)));
+                            }
+                        }
+                    }
+                }
+
+                token.ThrowIfCancellationRequested();
+                onProgress(100, "正在校验并解压更新包…");
+                Directory.CreateDirectory(stageDir);
+                ZipFile.ExtractToDirectory(zipPath, stageDir);
+
+                string stagedExe = Path.Combine(stageDir, "KomaComic.exe");
+                if (!File.Exists(stagedExe))
+                    throw new InvalidOperationException("更新包缺少 KomaComic.exe，已中止更新");
+            }, token);
+
+            onProgress(100, "正在准备重启并应用更新…");
+            _services.SaveState();
+
+            string installDir = _services.BaseDir.TrimEnd('\\', '/');
+            int currentPid = Process.GetCurrentProcess().Id;
+            string scriptPath = Path.Combine(tempRoot, "apply_update.ps1");
+            string escStage = stageDir.Replace("'", "''");
+            string escInstall = installDir.Replace("'", "''");
+            string escTemp = tempRoot.Replace("'", "''");
+            string psScript =
+                "$ErrorActionPreference = 'SilentlyContinue'\r\n" +
+                "$pidToWait = " + currentPid + "\r\n" +
+                "for ($i = 0; $i -lt 40; $i++) {\r\n" +
+                "  if (-not (Get-Process -Id $pidToWait -ErrorAction SilentlyContinue)) { break }\r\n" +
+                "  Start-Sleep -Milliseconds 300\r\n" +
+                "}\r\n" +
+                "$stage = '" + escStage + "'\r\n" +
+                "$dst = '" + escInstall + "'\r\n" +
+                "Get-ChildItem -Path $stage -Force | Where-Object { $_.Name -ne 'data' } | ForEach-Object {\r\n" +
+                "  Copy-Item -Path $_.FullName -Destination $dst -Recurse -Force\r\n" +
+                "}\r\n" +
+                "Start-Process -FilePath (Join-Path $dst 'KomaComic.exe') -WorkingDirectory $dst\r\n" +
+                "Start-Sleep -Seconds 2\r\n" +
+                "Remove-Item -Path '" + escTemp + "' -Recurse -Force -ErrorAction SilentlyContinue\r\n";
+            File.WriteAllText(scriptPath, psScript, new UTF8Encoding(true));
+
+            ProcessStartInfo psi = new ProcessStartInfo
+            {
+                FileName = "powershell.exe",
+                Arguments = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \"" + scriptPath + "\"",
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+            Process.Start(psi);
+            Application.Current.Shutdown();
         }
 
         private void ApplyLibraryMaterial()
