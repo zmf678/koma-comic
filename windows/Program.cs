@@ -91,7 +91,7 @@ namespace KomaComic.Windows
 
     internal static class Program
     {
-        internal const string AppVersion = "1.5.1";
+        internal const string AppVersion = "1.5.2";
         internal const string GithubRepoSlug = "zmf678/koma-comic";
 
         [STAThread]
@@ -3512,6 +3512,7 @@ namespace KomaComic.Windows
         private TranslateTransform _readerDrawerTranslate;
         private int _chromeAnimGen;
         private int _drawerAnimGen;
+        private int _pageAnimGen;
         private TextBlock _readerTranslationStatus;
         private Button _readerTranslationButton;
         private Button _readerFavButton;
@@ -3528,8 +3529,8 @@ namespace KomaComic.Windows
         private TextBlock _readerTitleText;
         private TextBlock _readerChapterText;
         private Button _btnSpreadPairShift;
-        private Button _btnTopSpreadMerge;
-        private Button _btnTopSpreadSplit;
+        private Button _btnDrawerSpreadEven;
+        private Button _btnDrawerSpreadOdd;
         private Border _readerBottomCapsule;
         private Slider _readerSeekSlider;
         private TextBlock _readerSeekText;
@@ -7380,35 +7381,14 @@ namespace KomaComic.Windows
             StackPanel topRight = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
             DockPanel.SetDock(topRight, Dock.Right);
 
-            _btnTopSpreadMerge = MakeReaderTopPillBtn("双页合并", "双页模式：将相邻两页拼合显示");
-            _btnTopSpreadMerge.Click += delegate
-            {
-                ReaderPrefModel curP = GetActiveReaderProfile();
-                string nextSpread = curP.Spread == "double" ? "single" : "double";
-                UpdateActiveReaderProfile(delegate (ReaderPrefModel p) { p.Spread = nextSpread; });
-                ShowToast(nextSpread == "double" ? "已切换：双页合并" : "已切换：单页模式");
-            };
-            _btnTopSpreadSplit = MakeReaderTopPillBtn("双页分割", "双页模式：将宽幅双页图裁切为左右半页阅读");
-            _btnTopSpreadSplit.Click += delegate
-            {
-                ReaderPrefModel curP = GetActiveReaderProfile();
-                string nextSpread = curP.Spread == "split" ? "single" : "split";
-                _splitHalf = 0;
-                UpdateActiveReaderProfile(delegate (ReaderPrefModel p) { p.Spread = nextSpread; });
-                ShowToast(nextSpread == "split" ? "已切换：双页分割" : "已切换：单页模式");
-            };
-            _btnSpreadPairShift = MakeReaderTopPillBtn("跨页偏移", "切换双页合并的奇偶页配对（首页单页/双页起）");
+            _btnSpreadPairShift = MakeReaderTopPillBtn("跨页偏移", "切换双页合并的奇偶页配对（首页单页/默认双页）");
             _btnSpreadPairShift.Click += delegate (object s, RoutedEventArgs e)
             {
-                _spreadShift = _spreadShift == 0 ? 1 : 0;
-                RenderCurrentReaderPagesAsync();
-                ShowToast(_spreadShift == 1 ? "跨页匹配：首页单页起" : "跨页匹配：默认双页起");
+                ToggleSpreadPairShift();
             };
             Button btnFull = MakeReaderTopPillBtn("⛶", "切换全屏 (F11)");
             btnFull.Width = 38; btnFull.Height = 36; btnFull.Padding = new Thickness(0); btnFull.Margin = new Thickness(0);
             btnFull.Click += delegate (object s, RoutedEventArgs e) { ToggleFullscreen(); };
-            topRight.Children.Add(_btnTopSpreadMerge);
-            topRight.Children.Add(_btnTopSpreadSplit);
             topRight.Children.Add(_btnSpreadPairShift);
             topRight.Children.Add(btnFull);
             topDock.Children.Add(topRight);
@@ -7728,6 +7708,19 @@ namespace KomaComic.Windows
             sGrid.Children.Add(_btnSpreadDouble);
             sGrid.Children.Add(_btnSpreadSplit);
             c3s.Children.Add(sGrid);
+
+            c3s.Children.Add(new TextBlock { Text = "双页跨页偏移", Foreground = new SolidColorBrush(Color.FromRgb(180, 192, 212)), FontSize = 13, Margin = new Thickness(0, 4, 0, 8) });
+            Grid shiftGrid = new Grid { Margin = new Thickness(0, 0, 0, 8) };
+            shiftGrid.ColumnDefinitions.Add(new ColumnDefinition());
+            shiftGrid.ColumnDefinitions.Add(new ColumnDefinition());
+            _btnDrawerSpreadEven = MakeDrawerOptBtn("默认双页起");
+            _btnDrawerSpreadOdd = MakeDrawerOptBtn("首页单页起");
+            Grid.SetColumn(_btnDrawerSpreadOdd, 1);
+            _btnDrawerSpreadEven.Click += delegate { if (_spreadShift != 0) ToggleSpreadPairShift(); };
+            _btnDrawerSpreadOdd.Click += delegate { if (_spreadShift != 1) ToggleSpreadPairShift(); };
+            shiftGrid.Children.Add(_btnDrawerSpreadEven);
+            shiftGrid.Children.Add(_btnDrawerSpreadOdd);
+            c3s.Children.Add(shiftGrid);
 
             _chkSpreadGap = AddDrawerToggle(c3s, "双页合并保留中缝间距", delegate (bool v) { UpdateActiveReaderProfile(delegate (ReaderPrefModel p) { p.SpreadGap = v; }); });
             _chkSplitAll = AddDrawerToggle(c3s, "双页分割强制裁切全部页", delegate (bool v) { _splitHalf = 0; UpdateActiveReaderProfile(delegate (ReaderPrefModel p) { p.SplitAllPages = v; }); });
@@ -8134,10 +8127,88 @@ namespace KomaComic.Windows
             _services.SaveState();
         }
 
+        private List<int[]> BuildDoublePageSpreads()
+        {
+            List<int[]> spreads = new List<int[]>();
+            int total = _readerPages != null ? _readerPages.Count : 0;
+            if (total <= 0) return spreads;
+            int i = 0;
+            if (_spreadShift == 1)
+            {
+                spreads.Add(new int[] { 0, -1 });
+                i = 1;
+            }
+            while (i < total)
+            {
+                bool curWide = false;
+                _widePageFlags.TryGetValue(i, out curWide);
+                if (curWide || i + 1 >= total)
+                {
+                    spreads.Add(new int[] { i, -1 });
+                    i += 1;
+                }
+                else
+                {
+                    bool nextWide = false;
+                    _widePageFlags.TryGetValue(i + 1, out nextWide);
+                    if (nextWide)
+                    {
+                        spreads.Add(new int[] { i, -1 });
+                        i += 1;
+                    }
+                    else
+                    {
+                        spreads.Add(new int[] { i, i + 1 });
+                        i += 2;
+                    }
+                }
+            }
+            return spreads;
+        }
+
+        private int FindSpreadIndexForPage(List<int[]> spreads, int pageIdx)
+        {
+            for (int s = 0; s < spreads.Count; s++)
+            {
+                if (spreads[s][0] == pageIdx || spreads[s][1] == pageIdx) return s;
+            }
+            for (int s = spreads.Count - 1; s >= 0; s--)
+            {
+                if (spreads[s][0] <= pageIdx) return s;
+            }
+            return 0;
+        }
+
+        private void ToggleSpreadPairShift()
+        {
+            if (_readerPages == null || _readerPages.Count == 0) return;
+            int oldPage = _readerPageIdx;
+            int nextShift = _spreadShift == 0 ? 1 : 0;
+            _spreadShift = nextShift;
+
+            List<int[]> spreads = BuildDoublePageSpreads();
+            if (spreads.Count > 0)
+            {
+                int anchor = oldPage;
+                if (nextShift == 0 && oldPage > 0 && (oldPage % 2 == 1) && oldPage + 1 < _readerPages.Count)
+                {
+                    anchor = oldPage + 1;
+                }
+                int sIdx = FindSpreadIndexForPage(spreads, anchor);
+                _readerPageIdx = spreads[sIdx][0];
+            }
+
+            _pendingAnimDir = 0;
+            SyncReaderDrawerState();
+            SaveReaderProgress();
+            RenderCurrentReaderPagesAsync();
+            ShowToast(_spreadShift == 1 ? "跨页偏移：首页单页起" : "跨页偏移：默认双页起");
+        }
+
         private void SyncReaderChromeVisibility(bool animate = true)
         {
             int gen = ++_chromeAnimGen;
-            bool smooth = animate && SystemParameters.ClientAreaAnimation;
+            bool smooth = animate;
             if (_chromeVisible)
             {
                 _readerTopBar.Visibility = Visibility.Visible;
@@ -8155,10 +8226,10 @@ namespace KomaComic.Windows
                     return;
                 }
                 CubicEase easeOut = new CubicEase { EasingMode = EasingMode.EaseOut };
-                _readerTopTranslate.BeginAnimation(TranslateTransform.YProperty, new DoubleAnimation(-64, 0, TimeSpan.FromMilliseconds(240)) { EasingFunction = easeOut });
-                _readerTopBar.BeginAnimation(UIElement.OpacityProperty, new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(220)) { EasingFunction = easeOut });
-                _readerBottomTranslate.BeginAnimation(TranslateTransform.YProperty, new DoubleAnimation(96, 0, TimeSpan.FromMilliseconds(280)) { EasingFunction = easeOut });
-                _readerBottomCapsule.BeginAnimation(UIElement.OpacityProperty, new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(240)) { EasingFunction = easeOut });
+                _readerTopTranslate.BeginAnimation(TranslateTransform.YProperty, new DoubleAnimation(-72, 0, TimeSpan.FromMilliseconds(260)) { EasingFunction = easeOut });
+                _readerTopBar.BeginAnimation(UIElement.OpacityProperty, new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(240)) { EasingFunction = easeOut });
+                _readerBottomTranslate.BeginAnimation(TranslateTransform.YProperty, new DoubleAnimation(124, 0, TimeSpan.FromMilliseconds(320)) { EasingFunction = easeOut });
+                _readerBottomCapsule.BeginAnimation(UIElement.OpacityProperty, new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(260)) { EasingFunction = easeOut });
             }
             else
             {
@@ -8168,8 +8239,8 @@ namespace KomaComic.Windows
                     _readerBottomTranslate.BeginAnimation(TranslateTransform.YProperty, null);
                     _readerTopBar.BeginAnimation(UIElement.OpacityProperty, null);
                     _readerBottomCapsule.BeginAnimation(UIElement.OpacityProperty, null);
-                    _readerTopTranslate.Y = -68;
-                    _readerBottomTranslate.Y = 96;
+                    _readerTopTranslate.Y = -72;
+                    _readerBottomTranslate.Y = 124;
                     _readerTopBar.Opacity = 0;
                     _readerBottomCapsule.Opacity = 0;
                     _readerTopBar.Visibility = Visibility.Collapsed;
@@ -8177,8 +8248,8 @@ namespace KomaComic.Windows
                     return;
                 }
                 CubicEase easeIn = new CubicEase { EasingMode = EasingMode.EaseIn };
-                DoubleAnimation topOut = new DoubleAnimation(_readerTopTranslate.Y, -68, TimeSpan.FromMilliseconds(190)) { EasingFunction = easeIn };
-                DoubleAnimation botOut = new DoubleAnimation(_readerBottomTranslate.Y, 96, TimeSpan.FromMilliseconds(210)) { EasingFunction = easeIn };
+                DoubleAnimation topOut = new DoubleAnimation(_readerTopTranslate.Y, -72, TimeSpan.FromMilliseconds(200)) { EasingFunction = easeIn };
+                DoubleAnimation botOut = new DoubleAnimation(_readerBottomTranslate.Y, 124, TimeSpan.FromMilliseconds(230)) { EasingFunction = easeIn };
                 botOut.Completed += delegate
                 {
                     if (gen == _chromeAnimGen && !_chromeVisible)
@@ -8197,7 +8268,7 @@ namespace KomaComic.Windows
         private void SetReaderDrawerVisible(bool visible, bool animate = true)
         {
             int gen = ++_drawerAnimGen;
-            bool smooth = animate && SystemParameters.ClientAreaAnimation;
+            bool smooth = animate;
             if (visible)
             {
                 _readerDrawer.Visibility = Visibility.Visible;
@@ -8256,6 +8327,8 @@ namespace KomaComic.Windows
             StyleDrawerOpt(_btnSpreadSingle, prof.Spread == "single");
             StyleDrawerOpt(_btnSpreadDouble, prof.Spread == "double");
             StyleDrawerOpt(_btnSpreadSplit, prof.Spread == "split");
+            StyleDrawerOpt(_btnDrawerSpreadEven, _spreadShift == 0);
+            StyleDrawerOpt(_btnDrawerSpreadOdd, _spreadShift == 1);
 
             string activeAnim = string.IsNullOrEmpty(prof.PageTurnAnim) ? "slide" : prof.PageTurnAnim;
             foreach (KeyValuePair<string, Button> kv in _animButtons)
@@ -8277,10 +8350,8 @@ namespace KomaComic.Windows
                 _readerSpreadGapCol.Width = new GridLength(prof.SpreadGap ? 6 : 0);
 
             bool paged = prof.Mode != "scroll";
-            _btnTopSpreadMerge.Visibility = paged ? Visibility.Visible : Visibility.Collapsed;
-            _btnTopSpreadSplit.Visibility = paged ? Visibility.Visible : Visibility.Collapsed;
-            StyleTopTogglePill(_btnTopSpreadMerge, prof.Spread == "double");
-            StyleTopTogglePill(_btnTopSpreadSplit, prof.Spread == "split");
+            _btnSpreadPairShift.Content = _spreadShift == 1 ? "跨页偏移 · 首页单页" : "跨页偏移 · 默认双页";
+            StyleTopTogglePill(_btnSpreadPairShift, _spreadShift == 1);
             _btnSpreadPairShift.Visibility = (paged && prof.Spread == "double") ? Visibility.Visible : Visibility.Collapsed;
             _readerPageBadge.Visibility = prof.ShowPageNumber ? Visibility.Visible : Visibility.Collapsed;
             SyncReaderFavoriteButton();
@@ -8322,6 +8393,11 @@ namespace KomaComic.Windows
 
         private void CaptureGhostSpread()
         {
+            _readerGhostGrid.BeginAnimation(UIElement.OpacityProperty, null);
+            _readerGhostSlideTransform.BeginAnimation(TranslateTransform.XProperty, null);
+            _readerGhostAnimScale.BeginAnimation(ScaleTransform.ScaleXProperty, null);
+            _readerGhostAnimScale.BeginAnimation(ScaleTransform.ScaleYProperty, null);
+
             if (_readerSingleImg.Visibility == Visibility.Visible && _readerSingleImg.Source != null)
             {
                 _readerGhostSingleImg.Source = _readerSingleImg.Source;
@@ -8342,9 +8418,6 @@ namespace KomaComic.Windows
                 return;
             }
             _readerGhostGrid.Opacity = 1;
-            _readerGhostSlideTransform.BeginAnimation(TranslateTransform.XProperty, null);
-            _readerGhostAnimScale.BeginAnimation(ScaleTransform.ScaleXProperty, null);
-            _readerGhostAnimScale.BeginAnimation(ScaleTransform.ScaleYProperty, null);
             _readerGhostSlideTransform.X = 0;
             _readerGhostAnimScale.ScaleX = 1;
             _readerGhostAnimScale.ScaleY = 1;
@@ -8352,7 +8425,7 @@ namespace KomaComic.Windows
             _readerGhostGrid.Visibility = Visibility.Visible;
         }
 
-        private void ResetReaderPageAnimations()
+        private void ClearSpreadAnimationClocks(bool hideGhost)
         {
             _readerSpreadGrid.BeginAnimation(UIElement.OpacityProperty, null);
             _readerSpreadSlideTransform.BeginAnimation(TranslateTransform.XProperty, null);
@@ -8368,19 +8441,36 @@ namespace KomaComic.Windows
             _readerGhostSlideTransform.BeginAnimation(TranslateTransform.XProperty, null);
             _readerGhostAnimScale.BeginAnimation(ScaleTransform.ScaleXProperty, null);
             _readerGhostAnimScale.BeginAnimation(ScaleTransform.ScaleYProperty, null);
-            _readerGhostGrid.Visibility = Visibility.Collapsed;
+            _readerGhostGrid.Opacity = 1;
+            _readerGhostGrid.RenderTransformOrigin = new Point(0.5, 0.5);
+            _readerGhostSlideTransform.X = 0;
+            _readerGhostAnimScale.ScaleX = 1;
+            _readerGhostAnimScale.ScaleY = 1;
+            if (hideGhost) _readerGhostGrid.Visibility = Visibility.Collapsed;
+
             _readerAnimShadow.BeginAnimation(FrameworkElement.MarginProperty, null);
             _readerAnimShadow.Visibility = Visibility.Collapsed;
         }
 
+        private void ResetReaderPageAnimations()
+        {
+            _pageAnimGen++;
+            ClearSpreadAnimationClocks(true);
+        }
+
         private void PlayPageTurnAnimation(int visualDir, string animMode)
         {
-            if (visualDir == 0 || string.IsNullOrEmpty(animMode) || animMode == "none" || !SystemParameters.ClientAreaAnimation)
+            int gen = ++_pageAnimGen;
+            if (visualDir == 0 || string.IsNullOrEmpty(animMode) || animMode == "none")
             {
-                ResetReaderPageAnimations();
+                ClearSpreadAnimationClocks(true);
                 return;
             }
-            double w = Math.Max(320, _readerViewport.ActualWidth);
+            bool hasGhost = _readerGhostGrid.Visibility == Visibility.Visible;
+            ClearSpreadAnimationClocks(false);
+            if (!hasGhost) _readerGhostGrid.Visibility = Visibility.Collapsed;
+
+            double w = Math.Max(480, _readerViewport.ActualWidth);
             Panel.SetZIndex(_readerGhostGrid, 1);
             Panel.SetZIndex(_readerSpreadGrid, 2);
             Panel.SetZIndex(_readerAnimShadow, 3);
@@ -8390,37 +8480,40 @@ namespace KomaComic.Windows
 
             Action cleanup = delegate
             {
-                _readerGhostGrid.Visibility = Visibility.Collapsed;
-                _readerAnimShadow.Visibility = Visibility.Collapsed;
-                _readerSpreadGrid.RenderTransformOrigin = new Point(0.5, 0.5);
-                _readerGhostGrid.RenderTransformOrigin = new Point(0.5, 0.5);
+                if (gen != _pageAnimGen) return;
+                ClearSpreadAnimationClocks(true);
             };
 
             if (animMode == "fade")
             {
-                TimeSpan dur = TimeSpan.FromMilliseconds(220);
+                TimeSpan dur = TimeSpan.FromMilliseconds(240);
                 DoubleAnimation fadeIn = new DoubleAnimation(0, 1, dur) { EasingFunction = easeOut };
                 fadeIn.Completed += delegate { cleanup(); };
                 _readerSpreadGrid.BeginAnimation(UIElement.OpacityProperty, fadeIn);
-                _readerGhostGrid.BeginAnimation(UIElement.OpacityProperty, new DoubleAnimation(1, 0, dur) { EasingFunction = easeOut });
+                if (hasGhost)
+                    _readerGhostGrid.BeginAnimation(UIElement.OpacityProperty, new DoubleAnimation(1, 0, dur) { EasingFunction = easeOut });
             }
             else if (animMode == "slide")
-            {
-                TimeSpan dur = TimeSpan.FromMilliseconds(260);
-                DoubleAnimation inX = new DoubleAnimation(visualDir * w, 0, dur) { EasingFunction = easeOut };
-                inX.Completed += delegate { cleanup(); };
-                _readerSpreadSlideTransform.BeginAnimation(TranslateTransform.XProperty, inX);
-                _readerGhostSlideTransform.BeginAnimation(TranslateTransform.XProperty, new DoubleAnimation(0, -visualDir * w, dur) { EasingFunction = easeOut });
-            }
-            else if (animMode == "cover")
             {
                 TimeSpan dur = TimeSpan.FromMilliseconds(280);
                 DoubleAnimation inX = new DoubleAnimation(visualDir * w, 0, dur) { EasingFunction = easeOut };
                 inX.Completed += delegate { cleanup(); };
                 _readerSpreadSlideTransform.BeginAnimation(TranslateTransform.XProperty, inX);
-                _readerGhostGrid.BeginAnimation(UIElement.OpacityProperty, new DoubleAnimation(1, 0.62, dur) { EasingFunction = easeOut });
-                _readerGhostAnimScale.BeginAnimation(ScaleTransform.ScaleXProperty, new DoubleAnimation(1.0, 0.96, dur) { EasingFunction = easeOut });
-                _readerGhostAnimScale.BeginAnimation(ScaleTransform.ScaleYProperty, new DoubleAnimation(1.0, 0.96, dur) { EasingFunction = easeOut });
+                if (hasGhost)
+                    _readerGhostSlideTransform.BeginAnimation(TranslateTransform.XProperty, new DoubleAnimation(0, -visualDir * w, dur) { EasingFunction = easeOut });
+            }
+            else if (animMode == "cover")
+            {
+                TimeSpan dur = TimeSpan.FromMilliseconds(300);
+                DoubleAnimation inX = new DoubleAnimation(visualDir * w, 0, dur) { EasingFunction = easeOut };
+                inX.Completed += delegate { cleanup(); };
+                _readerSpreadSlideTransform.BeginAnimation(TranslateTransform.XProperty, inX);
+                if (hasGhost)
+                {
+                    _readerGhostGrid.BeginAnimation(UIElement.OpacityProperty, new DoubleAnimation(1, 0.55, dur) { EasingFunction = easeOut });
+                    _readerGhostAnimScale.BeginAnimation(ScaleTransform.ScaleXProperty, new DoubleAnimation(1.0, 0.94, dur) { EasingFunction = easeOut });
+                    _readerGhostAnimScale.BeginAnimation(ScaleTransform.ScaleYProperty, new DoubleAnimation(1.0, 0.94, dur) { EasingFunction = easeOut });
+                }
                 _readerAnimShadow.Visibility = Visibility.Visible;
                 Thickness fromM = new Thickness(visualDir > 0 ? w - 24 : -24, 0, 0, 0);
                 Thickness toM = new Thickness(visualDir > 0 ? -24 : w - 24, 0, 0, 0);
@@ -8428,15 +8521,25 @@ namespace KomaComic.Windows
             }
             else if (animMode == "curl")
             {
-                TimeSpan dur = TimeSpan.FromMilliseconds(320);
-                Panel.SetZIndex(_readerSpreadGrid, 1);
-                Panel.SetZIndex(_readerGhostGrid, 2);
-                _readerGhostGrid.RenderTransformOrigin = new Point(visualDir > 0 ? 0.0 : 1.0, 0.5);
-                DoubleAnimation foldX = new DoubleAnimation(1.0, 0.0, dur) { EasingFunction = easeInOut };
-                foldX.Completed += delegate { cleanup(); };
-                _readerGhostAnimScale.BeginAnimation(ScaleTransform.ScaleXProperty, foldX);
-                _readerGhostGrid.BeginAnimation(UIElement.OpacityProperty, new DoubleAnimation(1.0, 0.35, dur) { EasingFunction = easeInOut });
-                _readerSpreadGrid.BeginAnimation(UIElement.OpacityProperty, new DoubleAnimation(0.75, 1.0, dur) { EasingFunction = easeOut });
+                TimeSpan dur = TimeSpan.FromMilliseconds(340);
+                if (hasGhost)
+                {
+                    Panel.SetZIndex(_readerSpreadGrid, 1);
+                    Panel.SetZIndex(_readerGhostGrid, 2);
+                    _readerGhostGrid.RenderTransformOrigin = new Point(visualDir > 0 ? 0.0 : 1.0, 0.5);
+                    DoubleAnimation foldX = new DoubleAnimation(1.0, 0.0, dur) { EasingFunction = easeInOut };
+                    foldX.Completed += delegate { cleanup(); };
+                    _readerGhostAnimScale.BeginAnimation(ScaleTransform.ScaleXProperty, foldX);
+                    _readerGhostGrid.BeginAnimation(UIElement.OpacityProperty, new DoubleAnimation(1.0, 0.25, dur) { EasingFunction = easeInOut });
+                    _readerSpreadGrid.BeginAnimation(UIElement.OpacityProperty, new DoubleAnimation(0.7, 1.0, dur) { EasingFunction = easeOut });
+                }
+                else
+                {
+                    _readerSpreadGrid.RenderTransformOrigin = new Point(visualDir > 0 ? 1.0 : 0.0, 0.5);
+                    DoubleAnimation unfoldX = new DoubleAnimation(0.15, 1.0, dur) { EasingFunction = easeOut };
+                    unfoldX.Completed += delegate { cleanup(); };
+                    _readerSpreadAnimScale.BeginAnimation(ScaleTransform.ScaleXProperty, unfoldX);
+                }
                 _readerAnimShadow.Visibility = Visibility.Visible;
                 Thickness fromM = new Thickness(visualDir > 0 ? w - 24 : 0, 0, 0, 0);
                 Thickness toM = new Thickness(visualDir > 0 ? 0 : w - 24, 0, 0, 0);
@@ -8444,15 +8547,18 @@ namespace KomaComic.Windows
             }
             else if (animMode == "depth")
             {
-                TimeSpan dur = TimeSpan.FromMilliseconds(280);
-                DoubleAnimation inScale = new DoubleAnimation(1.06, 1.0, dur) { EasingFunction = easeOut };
+                TimeSpan dur = TimeSpan.FromMilliseconds(300);
+                DoubleAnimation inScale = new DoubleAnimation(1.08, 1.0, dur) { EasingFunction = easeOut };
                 inScale.Completed += delegate { cleanup(); };
                 _readerSpreadAnimScale.BeginAnimation(ScaleTransform.ScaleXProperty, inScale);
-                _readerSpreadAnimScale.BeginAnimation(ScaleTransform.ScaleYProperty, new DoubleAnimation(1.06, 1.0, dur) { EasingFunction = easeOut });
+                _readerSpreadAnimScale.BeginAnimation(ScaleTransform.ScaleYProperty, new DoubleAnimation(1.08, 1.0, dur) { EasingFunction = easeOut });
                 _readerSpreadGrid.BeginAnimation(UIElement.OpacityProperty, new DoubleAnimation(0, 1, dur) { EasingFunction = easeOut });
-                _readerGhostAnimScale.BeginAnimation(ScaleTransform.ScaleXProperty, new DoubleAnimation(1.0, 0.90, dur) { EasingFunction = easeOut });
-                _readerGhostAnimScale.BeginAnimation(ScaleTransform.ScaleYProperty, new DoubleAnimation(1.0, 0.90, dur) { EasingFunction = easeOut });
-                _readerGhostGrid.BeginAnimation(UIElement.OpacityProperty, new DoubleAnimation(1, 0, dur) { EasingFunction = easeOut });
+                if (hasGhost)
+                {
+                    _readerGhostAnimScale.BeginAnimation(ScaleTransform.ScaleXProperty, new DoubleAnimation(1.0, 0.88, dur) { EasingFunction = easeOut });
+                    _readerGhostAnimScale.BeginAnimation(ScaleTransform.ScaleYProperty, new DoubleAnimation(1.0, 0.88, dur) { EasingFunction = easeOut });
+                    _readerGhostGrid.BeginAnimation(UIElement.OpacityProperty, new DoubleAnimation(1, 0, dur) { EasingFunction = easeOut });
+                }
             }
             else
             {
@@ -8559,22 +8665,34 @@ namespace KomaComic.Windows
             _currentPageIsSplit = false;
             _splitHalf = 0;
             bool isDouble = prof.Spread == "double";
-            bool curWide = false;
-            bool nextWide = false;
-            _widePageFlags.TryGetValue(cur, out curWide);
-            _widePageFlags.TryGetValue(cur + 1, out nextWide);
+            int firstIdx = cur;
+            int secondIdx = -1;
+            if (isDouble)
+            {
+                List<int[]> spreads = BuildDoublePageSpreads();
+                if (spreads.Count > 0)
+                {
+                    int sIdx = FindSpreadIndexForPage(spreads, cur);
+                    firstIdx = spreads[sIdx][0];
+                    secondIdx = spreads[sIdx][1];
+                    _readerPageIdx = firstIdx;
+                }
+            }
 
-            bool forceSingle = !isDouble || (cur == 0 && _spreadShift == 1) || curWide || (cur + 1 >= total) || nextWide;
-            if (forceSingle)
+            if (secondIdx < 0)
             {
                 _readerLeftImg.Source = null;
                 _readerRightImg.Source = null;
                 _readerSingleImg.Visibility = Visibility.Visible;
-                await LoadFullPageIntoImageAsync(_readerPages[cur], cur, _readerSingleImg, true, request);
+                await LoadFullPageIntoImageAsync(_readerPages[firstIdx], firstIdx, _readerSingleImg, true, request);
                 if (request == _readerRenderRequest && _readerOpen)
                 {
+                    _readerSeekSlider.Value = Math.Min(Math.Max(1, firstIdx + 1), Math.Max(1, total));
+                    string singleTxt = string.Format("{0}/{1}", firstIdx + 1, total);
+                    _readerSeekText.Text = singleTxt;
+                    _readerPageBadgeText.Text = singleTxt;
                     PlayPageTurnAnimation(animDir, prof.PageTurnAnim);
-                    PrefetchNextReaderPages(cur, chapterReq);
+                    PrefetchNextReaderPages(firstIdx, chapterReq);
                 }
             }
             else
@@ -8584,14 +8702,17 @@ namespace KomaComic.Windows
                 Image firstTarget = prof.Mode == "rtl" ? _readerRightImg : _readerLeftImg;
                 Image secondTarget = prof.Mode == "rtl" ? _readerLeftImg : _readerRightImg;
                 await Task.WhenAll(
-                    LoadFullPageIntoImageAsync(_readerPages[cur], cur, firstTarget, true, request),
-                    LoadFullPageIntoImageAsync(_readerPages[cur + 1], cur + 1, secondTarget, true, request)
+                    LoadFullPageIntoImageAsync(_readerPages[firstIdx], firstIdx, firstTarget, true, request),
+                    LoadFullPageIntoImageAsync(_readerPages[secondIdx], secondIdx, secondTarget, true, request)
                 );
                 if (request == _readerRenderRequest && _readerOpen)
                 {
-                    _readerPageBadgeText.Text = string.Format("{0}-{1}/{2}", cur + 1, Math.Min(cur + 2, total), total);
+                    _readerSeekSlider.Value = Math.Min(Math.Max(1, firstIdx + 1), Math.Max(1, total));
+                    string spreadTxt = string.Format("{0}-{1}/{2}", firstIdx + 1, secondIdx + 1, total);
+                    _readerSeekText.Text = spreadTxt;
+                    _readerPageBadgeText.Text = spreadTxt;
                     PlayPageTurnAnimation(animDir, prof.PageTurnAnim);
-                    PrefetchNextReaderPages(cur + 1, chapterReq);
+                    PrefetchNextReaderPages(secondIdx, chapterReq);
                 }
             }
         }
@@ -8878,35 +8999,41 @@ namespace KomaComic.Windows
                 return;
             }
 
-            bool curWide = false;
-            bool nextWide = false;
-            _widePageFlags.TryGetValue(_readerPageIdx, out curWide);
-            _widePageFlags.TryGetValue(_readerPageIdx + 1, out nextWide);
-            int step = (prof.Spread == "double" && !curWide && !nextWide && !(_readerPageIdx == 0 && _spreadShift == 1)) ? 2 : 1;
-            if (delta < 0 && prof.Spread == "double")
+            int next;
+            if (prof.Spread == "double")
             {
-                bool prevWide = false;
-                bool prev2Wide = false;
-                _widePageFlags.TryGetValue(_readerPageIdx - 1, out prevWide);
-                _widePageFlags.TryGetValue(_readerPageIdx - 2, out prev2Wide);
-                step = (!prevWide && !prev2Wide && _readerPageIdx >= 2) ? 2 : 1;
+                List<int[]> spreads = BuildDoublePageSpreads();
+                int curSpreadIdx = FindSpreadIndexForPage(spreads, _readerPageIdx);
+                int nextSpreadIdx = curSpreadIdx + (delta > 0 ? 1 : -1);
+                if (nextSpreadIdx < 0)
+                {
+                    if (_readerChapterIdx > 0) LoadOnlineChapterAsync(_readerChapterIdx - 1, 0);
+                    else ShowToast("已经是第一页");
+                    return;
+                }
+                if (nextSpreadIdx >= spreads.Count)
+                {
+                    if (_readerChapterIdx + 1 < _readerChapters.Count) LoadOnlineChapterAsync(_readerChapterIdx + 1, 0);
+                    else ShowToast("已是最后一页");
+                    return;
+                }
+                next = spreads[nextSpreadIdx][0];
             }
-
-            int next = _readerPageIdx + (delta > 0 ? step : -step);
-            if (delta < 0 && prof.Spread == "double" && _readerPageIdx == 1 && _spreadShift == 1) next = 0;
-            if (delta < 0 && next < 0 && _readerPageIdx > 0) next = 0;
-
-            if (next < 0)
+            else
             {
-                if (_readerChapterIdx > 0) LoadOnlineChapterAsync(_readerChapterIdx - 1, 0);
-                else ShowToast("已经是第一页");
-                return;
-            }
-            if (next >= total)
-            {
-                if (_readerChapterIdx + 1 < _readerChapters.Count) LoadOnlineChapterAsync(_readerChapterIdx + 1, 0);
-                else ShowToast("已是最后一页");
-                return;
+                next = _readerPageIdx + (delta > 0 ? 1 : -1);
+                if (next < 0)
+                {
+                    if (_readerChapterIdx > 0) LoadOnlineChapterAsync(_readerChapterIdx - 1, 0);
+                    else ShowToast("已经是第一页");
+                    return;
+                }
+                if (next >= total)
+                {
+                    if (_readerChapterIdx + 1 < _readerChapters.Count) LoadOnlineChapterAsync(_readerChapterIdx + 1, 0);
+                    else ShowToast("已是最后一页");
+                    return;
+                }
             }
 
             CaptureGhostSpread();
