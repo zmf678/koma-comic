@@ -91,7 +91,7 @@ namespace KomaComic.Windows
 
     internal static class Program
     {
-        internal const string AppVersion = "1.5.2";
+        internal const string AppVersion = "1.5.3";
         internal const string GithubRepoSlug = "zmf678/koma-comic";
 
         [STAThread]
@@ -8158,34 +8158,43 @@ namespace KomaComic.Windows
             int total = _readerPages != null ? _readerPages.Count : 0;
             if (total <= 0) return spreads;
             int i = 0;
-            if (_spreadShift == 1)
-            {
-                spreads.Add(new int[] { 0, -1 });
-                i = 1;
-            }
+            bool runStart = true;
             while (i < total)
             {
                 bool curWide = false;
                 _widePageFlags.TryGetValue(i, out curWide);
-                if (curWide || i + 1 >= total)
+                if (curWide)
+                {
+                    spreads.Add(new int[] { i, -1 });
+                    i += 1;
+                    runStart = true;
+                    continue;
+                }
+                if (runStart && _spreadShift == 1)
+                {
+                    spreads.Add(new int[] { i, -1 });
+                    i += 1;
+                    runStart = false;
+                    continue;
+                }
+                runStart = false;
+                if (i + 1 >= total)
+                {
+                    spreads.Add(new int[] { i, -1 });
+                    i += 1;
+                    continue;
+                }
+                bool nextWide = false;
+                _widePageFlags.TryGetValue(i + 1, out nextWide);
+                if (nextWide)
                 {
                     spreads.Add(new int[] { i, -1 });
                     i += 1;
                 }
                 else
                 {
-                    bool nextWide = false;
-                    _widePageFlags.TryGetValue(i + 1, out nextWide);
-                    if (nextWide)
-                    {
-                        spreads.Add(new int[] { i, -1 });
-                        i += 1;
-                    }
-                    else
-                    {
-                        spreads.Add(new int[] { i, i + 1 });
-                        i += 2;
-                    }
+                    spreads.Add(new int[] { i, i + 1 });
+                    i += 2;
                 }
             }
             return spreads;
@@ -8207,27 +8216,44 @@ namespace KomaComic.Windows
         private void ToggleSpreadPairShift()
         {
             if (_readerPages == null || _readerPages.Count == 0) return;
-            int oldPage = _readerPageIdx;
+            List<int[]> oldSpreads = BuildDoublePageSpreads();
+            int oldIdx = oldSpreads.Count > 0 ? FindSpreadIndexForPage(oldSpreads, _readerPageIdx) : 0;
+            int oldFirst = oldSpreads.Count > 0 ? oldSpreads[oldIdx][0] : _readerPageIdx;
+            int oldSecond = oldSpreads.Count > 0 ? oldSpreads[oldIdx][1] : -1;
+
             int nextShift = _spreadShift == 0 ? 1 : 0;
             _spreadShift = nextShift;
 
-            List<int[]> spreads = BuildDoublePageSpreads();
-            if (spreads.Count > 0)
+            List<int[]> newSpreads = BuildDoublePageSpreads();
+            int newFirst = oldFirst;
+            int newSecond = -1;
+            if (newSpreads.Count > 0)
             {
-                int anchor = oldPage;
-                if (nextShift == 0 && oldPage > 0 && (oldPage % 2 == 1) && oldPage + 1 < _readerPages.Count)
-                {
-                    anchor = oldPage + 1;
-                }
-                int sIdx = FindSpreadIndexForPage(spreads, anchor);
-                _readerPageIdx = spreads[sIdx][0];
+                int anchor = (nextShift == 0 && oldSecond >= 0) ? oldSecond : oldFirst;
+                int sIdx = FindSpreadIndexForPage(newSpreads, anchor);
+                newFirst = newSpreads[sIdx][0];
+                newSecond = newSpreads[sIdx][1];
+                _readerPageIdx = newFirst;
             }
 
             _pendingAnimDir = 0;
             SyncReaderDrawerState();
             SaveReaderProgress();
             RenderCurrentReaderPagesAsync();
-            ShowToast(_spreadShift == 1 ? "跨页偏移：首页单页起" : "跨页偏移：默认双页起");
+
+            bool curWide = false;
+            _widePageFlags.TryGetValue(oldFirst, out curWide);
+            if (curWide && newFirst == oldFirst && newSecond == oldSecond)
+            {
+                ShowToast(_spreadShift == 1 ? "已切换首页单页起（当前页为宽图，翻页后生效）" : "已切换默认双页起（当前页为宽图，翻页后生效）");
+            }
+            else
+            {
+                string range = newSecond >= 0
+                    ? string.Format("第 {0}-{1} 页", newFirst + 1, newSecond + 1)
+                    : string.Format("第 {0} 页（单页）", newFirst + 1);
+                ShowToast((_spreadShift == 1 ? "跨页偏移：首页单页起 · " : "跨页偏移：默认双页起 · ") + range);
+            }
         }
 
         private void SyncReaderChromeVisibility(bool animate = true)
