@@ -10,12 +10,28 @@ import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
 enum class TranslationMode(val label: String, val translator: String?) {
+    DIRECT("API 直连", null),
     SERVER("服务端默认", null),
     TEXT("自定义文本模型", "openai"),
-    VISION("自定义视觉模型", "openai_hq")
+    VISION("自定义视觉模型", "openai_hq");
+
+    val usesCustomModel: Boolean get() = this != SERVER
+    val usesTranslationServer: Boolean get() = this != DIRECT
 }
 
-data class TranslationModel(val mode: TranslationMode, val apiBase: String, val modelId: String)
+data class TranslationModel(
+    val mode: TranslationMode,
+    val apiBase: String,
+    val modelId: String,
+    val reasoningEffort: String = "",
+    val sendImage: Boolean = true
+) {
+    val acceptsPageImage get() = mode != TranslationMode.DIRECT || sendImage
+
+    companion object {
+        val reasoningLevels = linkedMapOf("" to "服务商默认", "none" to "关闭", "low" to "低", "medium" to "中", "high" to "高")
+    }
+}
 
 internal object TranslationKeyStore {
     private const val ALIAS = "koma_translation_api"

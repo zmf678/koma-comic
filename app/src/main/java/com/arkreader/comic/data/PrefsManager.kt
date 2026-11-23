@@ -27,17 +27,19 @@ class PrefsManager(context: Context) {
         set(value) = sp.edit().putString("translation_config", value).apply()
 
     fun translationModel() = TranslationModel(
-        TranslationMode.entries.find { it.name == sp.getString("translation_mode", "") } ?: TranslationMode.SERVER,
+        TranslationMode.entries.find { it.name == sp.getString("translation_mode", "") }
+            ?: if (translationServer.isBlank() || sp.getString("translation_mode", "") == "LOCAL") TranslationMode.DIRECT else TranslationMode.SERVER,
         sp.getString("translation_api_base", "").orEmpty(),
-        sp.getString("translation_model_id", "").orEmpty()
+        sp.getString("translation_model_id", "").orEmpty(),
+        sp.getString("translation_reasoning_effort", "").orEmpty(),
+        sp.getBoolean("translation_send_image", true)
     )
 
     val hasTranslationKey: Boolean get() = !sp.getString("translation_api_key", "").isNullOrEmpty()
 
     fun translationApiKey(): String {
-        if (translationModel().mode == TranslationMode.SERVER) return ""
         return runCatching { TranslationKeyStore.decrypt(sp.getString("translation_api_key", "").orEmpty()) }
-            .getOrElse { error("请在漫画翻译设置中重新填写模型密钥") }
+            .getOrElse { throw IllegalArgumentException("请在漫画翻译设置中重新填写模型密钥") }
     }
 
     val hasTranslationSession: Boolean get() = !sp.getString("translation_session", "").isNullOrEmpty()
@@ -48,8 +50,9 @@ class PrefsManager(context: Context) {
 
     fun saveTranslationSettings(server: String, config: String, model: TranslationModel, apiKey: String, clearKey: Boolean, session: String?) {
         val encrypted = when {
-            model.mode != TranslationMode.SERVER && apiKey.isNotBlank() -> TranslationKeyStore.encrypt(apiKey.trim())
-            clearKey || model.apiBase != translationModel().apiBase || server != translationServer -> ""
+            model.mode.usesCustomModel && apiKey.isNotBlank() -> TranslationKeyStore.encrypt(apiKey.trim())
+            clearKey || model.apiBase != translationModel().apiBase ||
+                (model.mode.usesTranslationServer && server != translationServer) -> ""
             else -> sp.getString("translation_api_key", "").orEmpty()
         }
         val sessionValue = when {
@@ -63,9 +66,25 @@ class PrefsManager(context: Context) {
             .putString("translation_mode", model.mode.name)
             .putString("translation_api_base", model.apiBase)
             .putString("translation_model_id", model.modelId)
+            .putString("translation_reasoning_effort", model.reasoningEffort)
+            .putBoolean("translation_send_image", model.sendImage)
             .putString("translation_api_key", encrypted)
             .putString("translation_session", sessionValue)
             .apply()
+    }
+
+    var translationPrefetchPages: Int
+        get() = sp.getInt("translation_prefetch_pages", 0).coerceIn(0, 5)
+        set(value) = sp.edit().putInt("translation_prefetch_pages", value.coerceIn(0, 5)).apply()
+
+    val hasFeedbackToken: Boolean get() = !sp.getString("feedback_github_token", "").isNullOrEmpty()
+
+    fun feedbackToken(): String = runCatching {
+        TranslationKeyStore.decrypt(sp.getString("feedback_github_token", "").orEmpty())
+    }.getOrDefault("")
+
+    fun saveFeedbackToken(token: String) {
+        sp.edit().putString("feedback_github_token", TranslationKeyStore.encrypt(token)).apply()
     }
 
     var themeMode: Int

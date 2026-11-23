@@ -50,9 +50,12 @@ import com.arkreader.comic.engine.PageSourceFactory
 import com.arkreader.comic.engine.SpreadSlotBuilder
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -80,6 +83,12 @@ class ComicReaderActivity : AppCompatActivity() {
     private var readerForeground = false
     private var translationEnabled = false
     private var translationJob: Job? = null
+    private var translationPrefetch: Job? = null
+    private data class PageTranslation(val image: Bitmap, val changed: Boolean)
+    private val translationTasks = mutableMapOf<Int, Deferred<Result<PageTranslation>>>()
+    private val translatedPages = object : LruCache<Int, PageTranslation>(24 * 1024 * 1024) {
+        override fun sizeOf(key: Int, value: PageTranslation) = value.image.byteCount
+    }
     private var translationRequest = 0
     private var translatingView: View? = null
     private var toolbarVisible = false
@@ -188,6 +197,7 @@ class ComicReaderActivity : AppCompatActivity() {
             }
         }
         applySystemBarsForToolbarState(toolbarVisible)
+        if (translationEnabled) binding.root.post { translateCurrentPage() }
     }
 
     override fun onConfigurationChanged(newConfig: Configuration) {
@@ -202,6 +212,7 @@ class ComicReaderActivity : AppCompatActivity() {
 
     override fun onPause() {
         readerForeground = false
+        resetTranslations()
         stopReadingClock()
         super.onPause()
         saveCurrentProgress()
@@ -259,21 +270,18 @@ class ComicReaderActivity : AppCompatActivity() {
         }
         binding.btnBack.setOnClickListener { finish() }
         binding.btnReaderMore.setOnClickListener { openReaderSettingsPanel() }
-        binding.btnTranslate.setOnClickListener {
-            if (app.prefs.translationServer.isBlank()) {
-                Toast.makeText(this, "请先在设置中填写漫画翻译服务", Toast.LENGTH_LONG).show()
-                return@setOnClickListener
-            }
-            translationEnabled = !translationEnabled
-            translationJob?.cancel()
-            translatingView = null
-            translationRequest++
-            binding.btnTranslate.text = if (translationEnabled) "原文" else "翻译"
-            binding.tvTranslationState.visibility = if (translationEnabled) View.VISIBLE else View.GONE
-            if (translationEnabled) binding.tvTranslationState.text = "等待页面…"
-            val recycler = activePageRecycler()
-            if (translationEnabled) translateCurrentPage()
-            else recycler?.adapter?.notifyDataSetChanged()
+        binding.btnTranslate.setOnClickListener { toggleTranslation() }
+        binding.translationBall.setOnClickListener {
+            val textOnly = !app.prefs.translationModel().acceptsPageImage
+            val choices = arrayOf(if (textOnly) "输入原文" else "翻译当前页", "显示原文", "翻译设置", "查看 Token 用量")
+            MaterialAlertDialogBuilder(this).setTitle("漫画翻译").setItems(choices) { _, index ->
+                when (index) {
+                    0 -> if (textOnly) showTextTranslation() else translateCurrentPage()
+                    1 -> toggleTranslation()
+                    2 -> showReaderTranslationSettings()
+                    3 -> showTranslationUsage(this)
+                }
+            }.show()
         }
         binding.btnBookmark.setOnClickListener { showBookmarkDialog() }
         binding.btnReaderSettings.setOnClickListener { openReaderSettingsPanel() }
@@ -297,6 +305,27 @@ class ComicReaderActivity : AppCompatActivity() {
                 jumpToSlot(target)
             }
         })
+    }
+
+    private fun toggleTranslation() {
+        val prefs = app.prefs
+        val model = prefs.translationModel()
+        val setupRequired = if (model.mode.usesTranslationServer) prefs.translationServer.isBlank()
+            else model.apiBase.isBlank() || model.modelId.isBlank() || !prefs.hasTranslationKey
+        if (!translationEnabled && setupRequired) {
+            Toast.makeText(this, "请先在设置中完成漫画翻译配置", Toast.LENGTH_LONG).show()
+            return
+        }
+        translationEnabled = !translationEnabled
+        resetTranslations()
+        binding.btnTranslate.text = if (translationEnabled) "原文" else "翻译"
+        binding.tvTranslationState.visibility = if (translationEnabled) View.VISIBLE else View.GONE
+        binding.translationBall.visibility = if (translationEnabled && binding.readerSettingsOverlay.visibility != View.VISIBLE) View.VISIBLE else View.GONE
+        binding.tvTranslationState.setOnClickListener(null)
+        if (translationEnabled) {
+            binding.tvTranslationState.text = if (model.acceptsPageImage) "等待页面…" else "点击译球输入原文"
+            if (model.acceptsPageImage) translateCurrentPage() else showTextTranslation()
+        } else activePageRecycler()?.adapter?.notifyDataSetChanged()
     }
 
     private fun toggleCrossPageMatch() {
@@ -395,9 +424,7 @@ class ComicReaderActivity : AppCompatActivity() {
         val wh = currentComic?.let { app.db.getWarehouse(it.warehouseId) }
         binding.progressBar.visibility = View.VISIBLE
         chapterLoad?.cancel()
-        translationJob?.cancel()
-        translatingView = null
-        translationRequest++
+        resetTranslations()
         pageErrorShown = false
         pageSource?.close()
         pageSource = null
@@ -453,6 +480,7 @@ class ComicReaderActivity : AppCompatActivity() {
     private fun rebuildSlotsAndRender(targetRawPage: Int) {
         val count = pageSource?.pageCount ?: 0
         if (count <= 0) return
+        resetTranslations()
 
         val effectiveMode = effectiveDoublePageMode()
         slots = SpreadSlotBuilder.buildSlots(
@@ -532,6 +560,12 @@ class ComicReaderActivity : AppCompatActivity() {
         val nextSlot = slotIndex.coerceIn(0, slots.size - 1)
         if (nextSlot != currentSlotIndex) {
             translationJob?.cancel()
+            translationPrefetch?.cancel()
+            val keep = nextSlot..(nextSlot + app.prefs.translationPrefetchPages)
+            translationTasks.filterKeys { it !in keep }.forEach { (position, task) ->
+                translationTasks.remove(position)
+                task.cancel()
+            }
             translatingView = null
             translationRequest++
         }
@@ -549,33 +583,132 @@ class ComicReaderActivity : AppCompatActivity() {
         else binding.vpHorizontal.getChildAt(0) as? RecyclerView
 
     private fun translateCurrentPage() {
+        if (!readerForeground || !app.prefs.translationModel().acceptsPageImage) return
         val view = activePageRecycler()?.findViewHolderForAdapterPosition(currentSlotIndex)?.itemView as? ZoomableImageView ?: return
         val original = bitmapCache.get(currentSlotIndex) ?: return
         translateVisiblePage(view, original, currentSlotIndex)
     }
 
     private fun translateVisiblePage(view: ZoomableImageView, original: Bitmap, position: Int) {
-        if (!translationEnabled || position != currentSlotIndex || translatingView === view) return
+        if (!translationEnabled || !readerForeground || !app.prefs.translationModel().acceptsPageImage ||
+            position != currentSlotIndex || translatingView === view) return
         translatingView = view
         val request = ++translationRequest
         translationJob?.cancel()
         binding.tvTranslationState.text = "翻译中…"
+        binding.tvTranslationState.setOnClickListener(null)
         translationJob = lifecycleScope.launch {
-            val result = withContext(Dispatchers.IO) {
-                runCatching {
-                    val prefs = app.prefs
-                    MangaTranslation.translate(this@ComicReaderActivity, original, prefs.translationServer,
-                        prefs.translationConfig, prefs.translationModel(), prefs.translationApiKey(), prefs.translationSession())
-                }
-            }
+            val result = translatedPages.get(position)?.let { Result.success(it) } ?: requestPageTranslation(position, original).await()
             if (request != translationRequest || view.tag != position || !translationEnabled) return@launch
             result.onSuccess {
-                view.setImageBitmap(it)
-                binding.tvTranslationState.text = "已显示译文"
+                view.setImageBitmap(it.image)
+                binding.tvTranslationState.text = if (it.changed) "已显示译文" else "未找到需要翻译的文字"
+                prefetchTranslations()
             }.onFailure { error ->
                 translatingView = null
-                binding.tvTranslationState.text = if (error is MangaTranslation.LoginRequired) "请先登录翻译服务" else "翻译失败 · 点击重试"
+                binding.tvTranslationState.text = "${MangaTranslation.describe(error)} · 点击重试"
                 binding.tvTranslationState.setOnClickListener { translateCurrentPage() }
+            }
+        }
+    }
+
+    private fun requestPageTranslation(position: Int, loaded: Bitmap? = null): Deferred<Result<PageTranslation>> {
+        translationTasks[position]?.let { return it }
+        val prefs = app.prefs
+        val model = prefs.translationModel()
+        val server = prefs.translationServer
+        val config = prefs.translationConfig
+        lateinit var task: Deferred<Result<PageTranslation>>
+        task = lifecycleScope.async(start = CoroutineStart.LAZY) {
+            try {
+                val outcome = withContext(Dispatchers.IO) { runCatching {
+                    val bitmap = loaded ?: renderSlotBitmap(position) ?: error("无法加载漫画页")
+                    val translated = MangaTranslation.translate(this@ComicReaderActivity, bitmap, server, config, model,
+                        if (model.mode.usesCustomModel) prefs.translationApiKey() else "",
+                        if (model.mode.usesTranslationServer) prefs.translationSession() else "")
+                    PageTranslation(translated, translated !== bitmap)
+                } }
+                if (translationTasks[position] === task) outcome.onSuccess { translatedPages.put(position, it) }
+                outcome
+            } finally {
+                if (translationTasks[position] === task) translationTasks.remove(position)
+            }
+        }
+        translationTasks[position] = task
+        task.start()
+        return task
+    }
+
+    private fun prefetchTranslations() {
+        translationPrefetch?.cancel()
+        val count = app.prefs.translationPrefetchPages
+        if (!translationEnabled || !readerForeground || count == 0 || !app.prefs.translationModel().acceptsPageImage) return
+        val next = currentSlotIndex + 1
+        translationPrefetch = lifecycleScope.launch {
+            for (position in next..(next + count - 1).coerceAtMost(slots.lastIndex)) {
+                if (translatedPages.get(position) != null) continue
+                if (requestPageTranslation(position).await().isFailure) break
+            }
+        }
+    }
+
+    private fun resetTranslations() {
+        translationJob?.cancel()
+        translationPrefetch?.cancel()
+        translationTasks.values.toList().forEach { it.cancel() }
+        translationTasks.clear()
+        translatedPages.evictAll()
+        translatingView = null
+        translationRequest++
+    }
+
+    private fun showReaderTranslationSettings() {
+        val settings = arrayOf("关闭", "后续 1 页", "后续 2 页", "后续 3 页", "后续 4 页", "后续 5 页")
+        MaterialAlertDialogBuilder(this).setTitle("预翻译")
+            .setSingleChoiceItems(settings, app.prefs.translationPrefetchPages) { dialog, index ->
+                app.prefs.translationPrefetchPages = index
+                translationPrefetch?.cancel()
+                translationTasks.filterKeys { it < currentSlotIndex || it > currentSlotIndex + index }.forEach { (position, task) ->
+                    translationTasks.remove(position)
+                    task.cancel()
+                }
+                if (translatedPages.get(currentSlotIndex) != null) prefetchTranslations()
+                dialog.dismiss()
+            }.setNegativeButton("取消", null).show()
+    }
+
+    private fun showTextTranslation() {
+        val source = android.widget.EditText(this).apply {
+            hint = "输入或粘贴原文"
+            minLines = 3
+            filters = arrayOf(android.text.InputFilter.LengthFilter(8000))
+        }
+        val resultView = TextView(this).apply { setTextIsSelectable(true) }
+        val body = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+            val padding = this@ComicReaderActivity.statDp(20)
+            setPadding(padding, 0, padding, 0)
+            addView(source)
+            addView(resultView)
+        }
+        val dialog = MaterialAlertDialogBuilder(this).setTitle("文字翻译")
+            .setView(android.widget.ScrollView(this).apply { addView(body) })
+            .setNegativeButton("关闭", null).setPositiveButton("翻译", null).show()
+        var job: Job? = null
+        dialog.setOnDismissListener { job?.cancel() }
+        val button = dialog.getButton(android.content.DialogInterface.BUTTON_POSITIVE)
+        button.setOnClickListener {
+            val text = source.text.toString().trim()
+            if (text.isEmpty()) { source.error = "请输入原文"; return@setOnClickListener }
+            button.isEnabled = false
+            resultView.text = "正在翻译…"
+            job = lifecycleScope.launch {
+                val outcome = withContext(Dispatchers.IO) { runCatching {
+                    val prefs = app.prefs
+                    MangaTranslation.translateText(this@ComicReaderActivity, prefs.translationConfig, prefs.translationModel(), prefs.translationApiKey(), text)
+                } }
+                resultView.text = outcome.fold({ it }, MangaTranslation::describe)
+                button.isEnabled = true
             }
         }
     }
@@ -860,6 +993,7 @@ class ComicReaderActivity : AppCompatActivity() {
         setToolbarVisible(false)
         syncReaderSettingsPanelState()
         binding.readerSettingsOverlay.visibility = View.VISIBLE
+        binding.translationBall.visibility = View.GONE
         binding.readerSettingsPanel.translationX = 80f
         binding.readerSettingsPanel.alpha = 0f
         binding.readerSettingsPanel.animate()
@@ -871,6 +1005,7 @@ class ComicReaderActivity : AppCompatActivity() {
 
     private fun closeReaderSettingsPanel() {
         binding.readerSettingsOverlay.visibility = View.GONE
+        if (translationEnabled) binding.translationBall.visibility = View.VISIBLE
     }
 
     private fun setupReaderSettingsDrawer() {
@@ -996,6 +1131,7 @@ class ComicReaderActivity : AppCompatActivity() {
             closeReaderSettingsPanel()
             startActivity(Intent(this, ReaderConfigActivity::class.java))
         }
+        binding.btnReaderTranslationSettings.setOnClickListener { showReaderTranslationSettings() }
     }
 
     private fun syncBrightnessBadge() {

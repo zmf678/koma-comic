@@ -42,9 +42,12 @@
 
 Choose a local wallpaper and optionally enable the translucent glass material in Settings.
 
-In Settings → Manga Translation, use the server default with [manga-image-translator](https://github.com/zyddnys/manga-image-translator), or sign in to a [manga-translator-ui](https://github.com/hgmzhn/manga-translator-ui) server with support for per-request model settings. Select a custom text or vision model and enter its API base URL, model ID, and API key when required. The configured translation server handles OCR and rendering. Translate in the reader sends the current page to that server. The Original toggle restores the source image.
+- **Direct API.** On Windows or Android, enter the provider's OpenAI-compatible API address and API key, then fetch the model list or enter a model ID. Enable image input to translate pages with a vision model and render the result on the device. With image input disabled, paste or type the source text in the reader. Reasoning effort defaults to the provider's setting.
+- **Existing translation server.** The server-default option still accepts [manga-image-translator](https://github.com/zyddnys/manga-image-translator) services. Custom text and vision modes still support [manga-translator-ui](https://github.com/hgmzhn/manga-translator-ui) services with per-request model settings.
 
-The profile button opens local reading statistics, avatar selection, and issue feedback. Feedback opens a prefilled GitHub issue after review and confirmation. Browsing state is restored when returning to a source in the same session.
+Test the configuration before saving. The reader's Translate button opens a floating translation control with a seven-day token chart and pretranslation settings. Pretranslation is off by default and can cover the next 1–5 pages in the current chapter. The chart uses token counts reported by the API and includes reasoning tokens within output tokens.
+
+The profile shows the last seven days of reading. Select a date to see the works read that day, or switch to all-time totals. Feedback creates a GitHub issue in the app and shows its number. It requires a GitHub token with permission to create issues for this repository, which can be saved locally in encrypted form. Browsing state is restored when returning to a source in the same session.
 
 
 ---
@@ -93,7 +96,7 @@ powershell -ExecutionPolicy Bypass -File windows/build-windows.ps1
 gradle assembleWindows
 ```
 Portable output: `build/windows/KomaComic-windows-x64/KomaComic.exe`  
-Release archive: `build/release/KomaComic-v1.4.1-windows-x64.zip`
+Release archive: `build/release/KomaComic-v1.4.2-windows-x64.zip`
 
 ---
 

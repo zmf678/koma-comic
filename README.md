@@ -41,11 +41,12 @@
 
 在设置中选择本地背景壁纸，或启用带高光、半透明边缘和背景柔化的液态玻璃材质。
 
-1. 在「设置 → 漫画翻译」填写漫画翻译服务地址。「服务端默认」沿用 [manga-image-translator](https://github.com/zyddnys/manga-image-translator) 的图片接口。
-2. 使用自定义模型时，部署支持流式用户模型参数的 [manga-translator-ui](https://github.com/hgmzhn/manga-translator-ui)，在应用内登录翻译服务，再选择「自定义文本模型」或「自定义视觉模型」。填入模型 API 地址、模型 ID 和需要的 API 密钥。文本模型翻译 OCR 提取的文字，视觉模型需要支持图片输入。
-3. 阅读时轻点画面中央显示工具栏，选择「翻译」后，当前页才会发送至所填的漫画翻译服务。由该服务调度模型并输出译图，选择「原文」可恢复原图。
+- **API 直连**：Windows 和 Android 均可在「设置 → 漫画翻译」选择「API 直连」。填入 OpenAI 兼容的 API 地址和 Key，可从服务商获取模型列表或手动填写模型 ID。开启「发送漫画页图片」时，请选支持图片输入的模型，应用在本机覆盖排版。关闭图片输入后，通过阅读器输入原文进行文字翻译。思考强度默认由服务商决定，其他档位需模型支持。
+- **已有翻译服务**：选择「服务端默认」，填入 [manga-image-translator](https://github.com/zyddnys/manga-image-translator) 等服务的地址。支持用户模型参数的 [manga-translator-ui](https://github.com/hgmzhn/manga-translator-ui) 也可通过「自定义文本模型」或「自定义视觉模型」继续使用。
 
-左上角头像打开个人页，可更换本地头像、查看今日、本周和各作品的阅读时长。问题反馈先在应用内预览，经确认后打开 GitHub Issues，由用户登录并提交。切换界面或切回漫画源时，浏览列表及位置保存在会话中。
+点击「测试翻译」验证配置，再点击「保存」。在阅读器选择「翻译」会显示悬浮译球。它可打开翻译菜单、查看最近 7 天的 Token 用量，或进入「翻译设置」。预翻译默认关闭，启用后可提前处理本章后续 1–5 页。Token 统计使用 API 响应里的实际用量，思考 Token 计在输出内。
+
+左上角头像打开个人页，可查看近七天、当日和累计阅读时长，并按日期筛选作品明细。问题反馈在应用内提交到 GitHub Issues，首次需填写可向本仓库创建 Issue 的 GitHub Token，可选在本机加密保存。提交成功后显示 Issue 编号。切回漫画源时，浏览列表及位置保存在会话中。
 
 
 ---
@@ -94,7 +95,7 @@ powershell -ExecutionPolicy Bypass -File windows/build-windows.ps1
 gradle assembleWindows
 ```
 输出目录：`build/windows/KomaComic-windows-x64/KomaComic.exe`  
-发布压缩包：`build/release/KomaComic-v1.4.1-windows-x64.zip`
+发布压缩包：`build/release/KomaComic-v1.4.2-windows-x64.zip`
 
 ---
 

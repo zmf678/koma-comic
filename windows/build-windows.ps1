@@ -1,5 +1,5 @@
 ﻿param(
-    [string]$Version = "1.4.1",
+    [string]$Version = "1.4.2",
     [switch]$SkipArchive
 )
 
@@ -91,7 +91,12 @@ $cscArgs = @(
     "/r:$WpfDir\WindowsFormsIntegration.dll",
     "/r:$($CoreDll.FullName)",
     "/r:$($WinFormsDll.FullName)",
-    $ProgramCs
+    $ProgramCs,
+    (Join-Path $ScriptDir "DirectMangaTranslation.cs"),
+    (Join-Path $ScriptDir "TranslationUsage.cs"),
+    (Join-Path $ScriptDir "ReadingProfile.cs"),
+    (Join-Path $ScriptDir "ReaderTranslationControls.cs"),
+    (Join-Path $ScriptDir "GithubFeedback.cs")
 )
 
 & $CscExe @cscArgs

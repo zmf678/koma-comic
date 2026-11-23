@@ -21,6 +21,7 @@ import androidx.lifecycle.lifecycleScope
 import com.arkreader.comic.ArkReaderApp
 import com.arkreader.comic.R
 import com.arkreader.comic.data.ReadingTime
+import com.arkreader.comic.engine.GithubFeedback
 import com.google.android.material.appbar.MaterialToolbar
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
@@ -78,21 +79,25 @@ class ProfileActivity : AppCompatActivity() {
         }
         root.addView(toolbar, LinearLayout.LayoutParams(-1, dp(56)))
         val content = column().apply { setPadding(dp(22), dp(8), dp(22), dp(24)) }
-        root.addView(ScrollView(this).apply { addView(content) }, LinearLayout.LayoutParams(-1, 0, 1f))
+        root.addView(ScrollView(this).apply {
+            addView(content, android.widget.FrameLayout.LayoutParams(
+                resources.displayMetrics.widthPixels.coerceAtMost(dp(720)), -2, Gravity.TOP or Gravity.CENTER_HORIZONTAL))
+        }, LinearLayout.LayoutParams(-1, 0, 1f))
         val account = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
         avatar = ImageView(this).apply {
             contentDescription = "头像"
             showProfileAvatar()
         }
-        account.addView(avatar, LinearLayout.LayoutParams(dp(64), dp(64)).apply { marginEnd = dp(14) })
-        account.addView(MaterialButton(this).apply {
+        account.addView(avatar, LinearLayout.LayoutParams(dp(48), dp(48)).apply { marginEnd = dp(14) })
+        account.addView(statText("我的阅读", 23f, bold = true), LinearLayout.LayoutParams(0, -2, 1f))
+        account.addView(MaterialButton(this, null, com.google.android.material.R.attr.borderlessButtonStyle).apply {
             text = "更换头像"
             setOnClickListener { pickPhoto.launch(arrayOf("image/*")) }
         })
         content.addView(account)
         val stats = column()
         content.addView(stats)
-        content.addView(MaterialButton(this).apply {
+        content.addView(MaterialButton(this, null, com.google.android.material.R.attr.borderlessButtonStyle).apply {
             text = "问题反馈"
             setOnClickListener { showFeedback() }
         })
@@ -103,41 +108,73 @@ class ProfileActivity : AppCompatActivity() {
         }
     }
 
-    private fun renderStats(group: LinearLayout, data: List<ReadingTime>) {
+    private fun renderStats(group: LinearLayout, data: List<ReadingTime>, selected: LocalDate? = null, all: Boolean = false) {
+        group.removeAllViews()
         val today = LocalDate.now()
-        val monday = today.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY)).toString()
-        val week = data.filter { it.day in monday..today.toString() }
+        val monday = today.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY))
+        val dates = (6 downTo 0).map { today.minusDays(it.toLong()) }
+        val week = data.filter { it.day in dates.first().toString()..today.toString() }
+        val calendarWeek = week.filter { it.day >= monday.toString() }.sumOf { it.millis }
         val daily = week.groupingBy { it.day }.fold(0L) { total, row -> total + row.millis }
-        heading(group, "阅读时长")
-        group.addView(label("今日  ${duration(daily[today.toString()] ?: 0)}     本周  ${duration(week.sumOf { it.millis })}", 16f))
-        val maxDay = (daily.values.maxOrNull() ?: 0L).coerceAtLeast(1)
-        repeat(7) { offset ->
-            val day = LocalDate.parse(monday).plusDays(offset.toLong())
-            val millis = daily[day.toString()] ?: 0
-            val row = LinearLayout(this).apply {
-                gravity = Gravity.CENTER_VERTICAL
-                setPadding(0, dp(3), 0, dp(3))
-            }
-            row.addView(label("${day.monthValue}/${day.dayOfMonth}"), LinearLayout.LayoutParams(dp(48), -2))
-            row.addView(android.widget.ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
-                max = 1000
-                progress = (1000 * millis / maxDay).toInt()
-                contentDescription = "${day.monthValue}月${day.dayOfMonth}日，${duration(millis)}"
-            }, LinearLayout.LayoutParams(0, dp(8), 1f))
-            row.addView(label(duration(millis)).apply { gravity = Gravity.END }, LinearLayout.LayoutParams(dp(92), -2))
-            group.addView(row)
+        val scope = when {
+            all -> data
+            selected != null -> week.filter { it.day == selected.toString() }
+            else -> week
         }
-        heading(group, "作品阅读时长")
-        val works = data.groupBy { it.comicId }.values.sortedByDescending { rows -> rows.sumOf { it.millis } }
-        if (works.isEmpty()) group.addView(label("打开作品阅读后，这里会显示时长。"))
+        val chart = column().apply {
+            background = statSurface(getColor(R.color.surface_card), 16)
+            setPadding(dp(18), dp(16), dp(18), dp(12))
+        }
+        group.addView(chart, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(18) })
+        chart.addView(statText("阅读时长", 17f, bold = true).apply { isAccessibilityHeading = true })
+        val summary = LinearLayout(this).apply { gravity = Gravity.BOTTOM; setPadding(0, dp(8), 0, dp(8)) }
+        val main = column().apply {
+            addView(statText(when {
+                all -> "累计"
+                selected != null -> "${selected.monthValue} 月 ${selected.dayOfMonth} 日"
+                else -> "近 7 天"
+            }, 13f, muted = true))
+            addView(statText(duration(scope.sumOf { it.millis }), 31f, bold = true))
+        }
+        summary.addView(main, LinearLayout.LayoutParams(0, -2, 1f))
+        summary.addView(column().apply {
+            addView(statText("今日 ${duration(daily[today.toString()] ?: 0L)}", 12f, muted = true))
+            addView(statText("本周 ${duration(calendarWeek)}", 12f, muted = true))
+        })
+        chart.addView(summary)
+        chart.addView(weekChart(dates, dates.map { daily[it.toString()] ?: 0L }, selected, ::duration) { date ->
+            if (date <= today) renderStats(group, data, if (date == selected) null else date)
+        })
+        val controls = LinearLayout(this).apply { gravity = Gravity.END }
+        listOf(false to "近 7 天", true to "全部").forEach { (showAll, title) ->
+            val active = selected == null && showAll == all
+            val style = if (active) com.google.android.material.R.attr.materialButtonStyle
+                else com.google.android.material.R.attr.borderlessButtonStyle
+            controls.addView(MaterialButton(this, null, style).apply {
+                text = title
+                isSelected = active
+                setOnClickListener { if (!active) renderStats(group, data, all = showAll) }
+            })
+        }
+        group.addView(controls)
+        heading(group, "作品明细")
+        val works = scope.groupBy { it.comicId }.values.sortedByDescending { rows -> rows.sumOf { it.millis } }
+        if (works.isEmpty()) group.addView(statText("这段时间没有阅读记录。", 14f, muted = true))
         works.forEach { rows ->
-            val recent = rows.filter { it.day in monday..today.toString() }
-            group.addView(label(rows.first().title, 16f).apply { setPadding(0, dp(8), 0, 0) })
-            group.addView(label("本周 ${duration(recent.sumOf { it.millis })} · 总计 ${duration(rows.sumOf { it.millis })}"))
+            val workTime = rows.sumOf { it.millis }
+            val line = LinearLayout(this).apply {
+                gravity = Gravity.CENTER_VERTICAL
+                minimumHeight = dp(48)
+                addView(statText(rows.maxBy { it.day }.title, 15f, bold = true), LinearLayout.LayoutParams(0, -2, 1f))
+                addView(statText(duration(workTime), 14f, muted = true).apply { setPadding(dp(12), 0, 0, 0) })
+            }
+            group.addView(line)
+            group.addView(android.view.View(this).apply { setBackgroundColor(getColor(R.color.surface_card)) }, LinearLayout.LayoutParams(-1, dp(1)))
         }
     }
 
     private fun showFeedback() {
+        val prefs = ArkReaderApp.instance.prefs
         val fields = column().apply { setPadding(dp(20), 0, dp(20), 0) }
         val title = EditText(this).apply {
             hint = "问题标题"
@@ -151,41 +188,68 @@ class ProfileActivity : AppCompatActivity() {
             filters = arrayOf(InputFilter.LengthFilter(600))
         }
         val details = CheckBox(this).apply { text = "附上应用版本和 Android 版本" }
+        val token = EditText(this).apply {
+            hint = if (prefs.hasFeedbackToken) "GitHub Token 已保存，留空继续使用" else "GitHub Token（可创建 Issue）"
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
+            isSingleLine = true
+            importantForAutofill = android.view.View.IMPORTANT_FOR_AUTOFILL_NO
+        }
+        val remember = CheckBox(this).apply { text = "在本机加密保存 Token"; isChecked = prefs.hasFeedbackToken }
+        val status = statText("", 14f, muted = true)
+        fields.addView(statText("提交后将公开发布到 zmf678/koma-comic。", 13f, muted = true))
         fields.addView(title)
         fields.addView(body)
         fields.addView(details)
+        fields.addView(token)
+        fields.addView(remember)
+        fields.addView(status)
         val dialog = MaterialAlertDialogBuilder(this).setTitle("问题反馈")
             .setView(ScrollView(this).apply { addView(fields) })
-            .setNegativeButton("取消", null).setPositiveButton("预览", null).show()
-        dialog.getButton(android.content.DialogInterface.BUTTON_POSITIVE).setOnClickListener {
+            .setNegativeButton("关闭", null).setPositiveButton("提交 Issue", null).show()
+        val confirm = dialog.getButton(android.content.DialogInterface.BUTTON_POSITIVE)
+        val close = dialog.getButton(android.content.DialogInterface.BUTTON_NEGATIVE)
+        confirm.setOnClickListener {
             val subject = title.text.toString().trim()
             if (subject.isEmpty()) { title.error = "请输入问题标题"; return@setOnClickListener }
             val text = body.text.toString().trim()
             if (text.isEmpty()) { body.error = "请输入问题说明"; return@setOnClickListener }
             val version = packageManager.getPackageInfo(packageName, 0).versionName.orEmpty()
-            val submission = if (details.isChecked) "$text\n\n环境：页光 Koma $version · Android ${android.os.Build.VERSION.RELEASE}" else text
-            MaterialAlertDialogBuilder(this).setTitle("将提交到公开的 GitHub Issues")
-                .setMessage("$subject\n\n$submission")
-                .setNegativeButton("返回修改", null)
-                .setPositiveButton("同意并打开 GitHub") { _, _ ->
-                    val issue = Uri.parse("https://github.com/zmf678/koma-comic/issues/new").buildUpon()
-                        .appendQueryParameter("title", subject).appendQueryParameter("body", submission).build()
-                    openComicWebsite(issue.toString())
-                }.show()
+            val submission = if (details.isChecked) "$text\n\n环境 · 页光 Koma $version · Android ${android.os.Build.VERSION.RELEASE}" else text
+            val typedToken = token.text.toString().trim()
+            val save = remember.isChecked
+            confirm.isEnabled = false
+            close.isEnabled = false
+            dialog.setCancelable(false)
+            status.text = "正在提交…"
+            lifecycleScope.launch {
+                val result = withContext(Dispatchers.IO) { runCatching {
+                    val secret = typedToken.ifBlank { prefs.feedbackToken() }
+                    val number = GithubFeedback.submit(subject, submission, secret)
+                    val saved = runCatching { prefs.saveFeedbackToken(if (save) secret else "") }.isSuccess
+                    number to saved
+                } }
+                dialog.setCancelable(true)
+                close.isEnabled = true
+                result.onSuccess { (number, saved) ->
+                    status.text = (if (number > 0) "已提交 Issue #$number" else "GitHub 已接收反馈") +
+                        if (saved) "" else "。Token 设置未保存"
+                    confirm.visibility = android.view.View.GONE
+                    token.text?.clear()
+                    listOf(title, body, details, token, remember).forEach { it.isEnabled = false }
+                }.onFailure {
+                    confirm.isEnabled = true
+                    status.text = GithubFeedback.describe(it)
+                }
+            }
         }
     }
 
     private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
     private fun column() = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-    private fun label(value: String, size: Float = 14f) = TextView(this).apply {
-        text = value
-        textSize = size
-        setTextColor(getColor(R.color.text_primary))
-    }
     private fun heading(group: LinearLayout, value: String) {
-        group.addView(label(value, 19f).apply {
+        group.addView(statText(value, 19f, bold = true).apply {
             isAccessibilityHeading = true
-            setPadding(0, dp(22), 0, dp(8))
+            setPadding(0, dp(8), 0, dp(6))
         }, ViewGroup.LayoutParams(-1, -2))
     }
     private fun duration(millis: Long): String {

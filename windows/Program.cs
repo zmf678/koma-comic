@@ -90,7 +90,7 @@ namespace KomaComic.Windows
 
     internal static class Program
     {
-        internal const string AppVersion = "1.4.1";
+        internal const string AppVersion = "1.4.2";
 
         [STAThread]
         private static int Main(string[] args)
@@ -674,6 +674,8 @@ namespace KomaComic.Windows
         public string TranslationConfig { get; set; }
         public TranslationModel TranslationModel { get; set; }
         public string TranslationSession { get; set; }
+        public int TranslationPrefetchPages { get; set; }
+        public string FeedbackProtectedToken { get; set; }
         public List<SourceItem> Sources { get; private set; }
         public List<ComicCardModel> Favorites { get; private set; }
         public List<ComicCardModel> History { get; private set; }
@@ -718,7 +720,7 @@ namespace KomaComic.Windows
             LastSource = "zaimanhua";
             TranslationServer = "";
             TranslationConfig = "{\"translator\":{\"target_lang\":\"CHS\"}}";
-            TranslationModel = new TranslationModel();
+            TranslationModel = new TranslationModel { Mode = TranslationMode.Direct };
             ReaderDefaults = new ReaderPrefModel
             {
                 Mode = "rtl",
@@ -1751,13 +1753,17 @@ namespace KomaComic.Windows
                         TranslationServer = JsonUtil.GetStr(st, "translationServer", "");
                         TranslationConfig = JsonUtil.GetStr(st, "translationConfig", TranslationConfig);
                         TranslationSession = JsonUtil.GetStr(st, "translationSession", "");
-                        int modelMode = JsonUtil.GetInt(st, "translationModelMode", 0);
+                        TranslationPrefetchPages = Math.Max(0, Math.Min(5, JsonUtil.GetInt(st, "translationPrefetchPages", 0)));
+                        FeedbackProtectedToken = JsonUtil.GetStr(st, "feedbackGithubToken", "");
+                        int modelMode = JsonUtil.GetInt(st, "translationModelMode", string.IsNullOrWhiteSpace(TranslationServer) ? (int)TranslationMode.Direct : 0);
                         TranslationModel = new TranslationModel
                         {
-                            Mode = (TranslationMode)Math.Max(0, Math.Min(2, modelMode)),
+                            Mode = Enum.IsDefined(typeof(TranslationMode), modelMode) ? (TranslationMode)modelMode : TranslationMode.Direct,
                             ApiBase = JsonUtil.GetStr(st, "translationApiBase", ""),
                             ModelId = JsonUtil.GetStr(st, "translationModelId", ""),
-                            ProtectedKey = JsonUtil.GetStr(st, "translationProtectedKey", "")
+                            ProtectedKey = JsonUtil.GetStr(st, "translationProtectedKey", ""),
+                            ReasoningEffort = JsonUtil.GetStr(st, "translationReasoningEffort", ""),
+                            SendImage = JsonUtil.GetBool(st, "translationSendImage", true)
                         };
                         ActiveCollectionId = JsonUtil.GetStr(st, "activeCollectionId", "col_default");
 
@@ -1896,6 +1902,10 @@ namespace KomaComic.Windows
                     root["translationApiBase"] = TranslationModel.ApiBase ?? "";
                     root["translationModelId"] = TranslationModel.ModelId ?? "";
                     root["translationProtectedKey"] = TranslationModel.ProtectedKey ?? "";
+                    root["translationReasoningEffort"] = TranslationModel.ReasoningEffort ?? "";
+                    root["translationSendImage"] = TranslationModel.SendImage;
+                    root["translationPrefetchPages"] = TranslationPrefetchPages;
+                    root["feedbackGithubToken"] = FeedbackProtectedToken ?? "";
                     root["activeCollectionId"] = ActiveCollectionId;
                     root["webdav"] = new Dictionary<string, object> { { "url", WebDavUrl ?? "" }, { "username", WebDavUser ?? "" }, { "password", WebDavPass ?? "" } };
                     root["readerDefaults"] = SerializePref(ReaderDefaults);
@@ -2179,7 +2189,7 @@ namespace KomaComic.Windows
         public string NextCursor { get; set; }
     }
 
-    internal enum TranslationMode { Server, Text, Vision }
+    internal enum TranslationMode { Server, Text, Vision, Direct = 4 }
 
     internal sealed class TranslationModel
     {
@@ -2187,6 +2197,13 @@ namespace KomaComic.Windows
         public string ApiBase { get; set; }
         public string ModelId { get; set; }
         public string ProtectedKey { get; set; }
+        public string ReasoningEffort { get; set; }
+        public bool SendImage { get; set; }
+        public TranslationModel() { SendImage = true; }
+        public static readonly string[] ReasoningLevels = { "", "none", "low", "medium", "high" };
+        public bool AcceptsPageImage { get { return UsesTranslationServer || SendImage; } }
+        public bool UsesCustomModel { get { return Mode != TranslationMode.Server; } }
+        public bool UsesTranslationServer { get { return Mode != TranslationMode.Direct; } }
 
         public static string EncryptKey(string key)
         {
@@ -2203,7 +2220,7 @@ namespace KomaComic.Windows
         public string DecryptKey()
         {
             try { return DecryptSecret(ProtectedKey); }
-            catch (Exception) { throw new InvalidOperationException("请在漫画翻译设置中重新填写模型密钥"); }
+            catch (Exception) { throw new ArgumentException("请在漫画翻译设置中重新填写模型密钥"); }
         }
     }
 
@@ -2268,20 +2285,32 @@ namespace KomaComic.Windows
         }
     }
 
-    internal static class MangaTranslation
+    internal static partial class MangaTranslation
     {
         private const string ApiPath = "/translate/with-form/image";
+        private const string StreamPath = ApiPath + "/stream";
         private const int Limit = 32 * 1024 * 1024;
         private static readonly SemaphoreSlim Queue = new SemaphoreSlim(1);
 
-        public static Uri Endpoint(string baseUrl)
+        private static string ServiceRoot(string baseUrl)
         {
             Uri uri;
             if (!Uri.TryCreate(baseUrl.Trim(), UriKind.Absolute, out uri) || (uri.Scheme != "https" && uri.Scheme != "http") ||
                 string.IsNullOrEmpty(uri.Host) || !string.IsNullOrEmpty(uri.UserInfo) || !string.IsNullOrEmpty(uri.Query) || !string.IsNullOrEmpty(uri.Fragment))
                 throw new ArgumentException("请输入有效的 HTTP(S) 服务地址");
             string address = uri.AbsoluteUri.TrimEnd('/');
-            return new Uri(address.EndsWith(ApiPath, StringComparison.Ordinal) ? address : address + ApiPath);
+            if (address.EndsWith(StreamPath + "/web", StringComparison.Ordinal)) return address.Substring(0, address.Length - StreamPath.Length - 4);
+            if (address.EndsWith(StreamPath, StringComparison.Ordinal)) return address.Substring(0, address.Length - StreamPath.Length);
+            if (address.EndsWith(ApiPath, StringComparison.Ordinal)) return address.Substring(0, address.Length - ApiPath.Length);
+            return address;
+        }
+
+        public static Uri Endpoint(string baseUrl, TranslationMode mode = TranslationMode.Server)
+        {
+            string address = baseUrl.Trim().TrimEnd('/');
+            bool streaming = mode != TranslationMode.Server || address.EndsWith(StreamPath, StringComparison.Ordinal) ||
+                address.EndsWith(StreamPath + "/web", StringComparison.Ordinal);
+            return new Uri(ServiceRoot(baseUrl) + (streaming ? StreamPath : ApiPath));
         }
 
         public static void ValidateConfig(string config)
@@ -2299,12 +2328,16 @@ namespace KomaComic.Windows
             public LoginRequired() : base("请在漫画翻译设置中登录翻译服务") { }
         }
 
+        private sealed class TranslationFailure : InvalidOperationException
+        {
+            public TranslationFailure(string message) : base(message) { }
+        }
+
         public static Task<string> LoginAsync(string server, string username, string password)
         {
             return Task.Run(delegate
             {
-                string normalized = Endpoint(server).AbsoluteUri;
-                Uri uri = new Uri(normalized.Substring(0, normalized.Length - ApiPath.Length) + "/auth/login");
+                Uri uri = new Uri(ServiceRoot(server) + "/auth/login");
                 byte[] body = Encoding.UTF8.GetBytes(JsonUtil.CreateSerializer().Serialize(new Dictionary<string, string>
                     { { "username", username }, { "password", password } }));
                 var request = (HttpWebRequest)WebRequest.Create(uri);
@@ -2331,74 +2364,128 @@ namespace KomaComic.Windows
 
         public static void ValidateModel(TranslationModel model)
         {
-            if (model.Mode == TranslationMode.Server) return;
-            Uri api;
-            if (!Uri.TryCreate(model.ApiBase, UriKind.Absolute, out api) || (api.Scheme != "http" && api.Scheme != "https") ||
-                string.IsNullOrEmpty(api.Host) || !string.IsNullOrEmpty(api.Query) || !string.IsNullOrEmpty(api.Fragment) ||
-                !string.IsNullOrEmpty(api.UserInfo)) throw new ArgumentException("请输入有效的模型 API 地址");
+            if (!model.UsesCustomModel) return;
+            ValidateModelAddress(model.ApiBase);
             if (string.IsNullOrWhiteSpace(model.ModelId)) throw new ArgumentException("请输入模型 ID");
+            if (!TranslationModel.ReasoningLevels.Contains(model.ReasoningEffort ?? ""))
+                throw new ArgumentException("请选择有效的思考强度");
         }
 
-        public static async Task<BitmapImage> TranslateAsync(BitmapSource original, string server, string config,
-            TranslationModel model, string session, string directory, CancellationToken token)
+        private static Uri ValidateModelAddress(string address)
         {
-            Uri uri = Endpoint(server);
+            Uri api;
+            if (!Uri.TryCreate(address, UriKind.Absolute, out api) || (api.Scheme != "http" && api.Scheme != "https") ||
+                string.IsNullOrEmpty(api.Host) || !string.IsNullOrEmpty(api.Query) || !string.IsNullOrEmpty(api.Fragment) ||
+                !string.IsNullOrEmpty(api.UserInfo)) throw new ArgumentException("请输入有效的模型 API 地址");
+            return api;
+        }
+
+        public static async Task<BitmapSource> TranslateAsync(BitmapSource original, string server, string config,
+            TranslationModel model, string session, string directory, CancellationToken token, string usageDirectory = null)
+        {
             ValidateConfig(config);
             ValidateModel(model);
+            if (!model.AcceptsPageImage) throw new TranslationFailure("图片输入已关闭，请输入原文");
+            bool direct = !model.UsesTranslationServer;
+            Uri uri = direct ? DirectEndpoint(new Uri(model.ApiBase)) : Endpoint(server, model.Mode);
+            config = TranslationConfig(config, model.Mode);
             string environment = "";
-            if (model.Mode != TranslationMode.Server)
+            if (!direct && model.UsesCustomModel)
             {
-                JavaScriptSerializer serializer = JsonUtil.CreateSerializer();
-                var settings = serializer.Deserialize<Dictionary<string, object>>(config);
-                object field;
-                var translator = settings.TryGetValue("translator", out field) ? field as Dictionary<string, object> : null;
-                if (translator == null) translator = new Dictionary<string, object>();
-                translator["translator"] = model.Mode == TranslationMode.Vision ? "openai_hq" : "openai";
-                translator.Remove("translator_chain");
-                translator.Remove("selective_translation");
-                settings["translator"] = translator;
-                config = serializer.Serialize(settings);
                 string key = model.DecryptKey();
-                environment = serializer.Serialize(new Dictionary<string, string> {
+                environment = JsonUtil.CreateSerializer().Serialize(new Dictionary<string, string> {
                     { "OPENAI_API_BASE", model.ApiBase }, { "OPENAI_MODEL", model.ModelId },
                     { "OPENAI_API_KEY", string.IsNullOrEmpty(key) ? "ollama" : key }
                 });
-                uri = new Uri(uri.AbsoluteUri + "/stream");
             }
             await Queue.WaitAsync(token);
             try
             {
-                return await Task.Run(() => Translate(original, uri, config, environment, session, directory, token), token);
+                return await Task.Run(() => direct
+                    ? TranslateDirect(original, uri, config, model, directory, token, usageDirectory)
+                    : Translate(original, uri, config, environment, session, directory, token), token);
             }
             finally { Queue.Release(); }
         }
 
-        private static BitmapImage Translate(BitmapSource original, Uri uri, string config, string environment, string session, string directory, CancellationToken token)
+        private static string TranslationConfig(string config, TranslationMode mode)
         {
-            JpegBitmapEncoder encoder = new JpegBitmapEncoder { QualityLevel = 92 };
-            encoder.Frames.Add(BitmapFrame.Create(original));
-            byte[] image;
+            if (mode == TranslationMode.Server || mode == TranslationMode.Direct) return config;
+            JavaScriptSerializer serializer = JsonUtil.CreateSerializer();
+            var settings = serializer.Deserialize<Dictionary<string, object>>(config);
+            object field;
+            var translator = settings.TryGetValue("translator", out field) ? field as Dictionary<string, object> : null;
+            if (translator == null) translator = new Dictionary<string, object>();
+            translator["translator"] = mode == TranslationMode.Vision ? "openai_hq" : "openai";
+            if (string.IsNullOrWhiteSpace(JsonUtil.GetStr(translator, "target_lang", ""))) translator["target_lang"] = "CHS";
+            translator.Remove("translator_chain");
+            translator.Remove("selective_translation");
+            settings["translator"] = translator;
+            return serializer.Serialize(settings);
+        }
+
+        public static async Task<BitmapSource> TestAsync(string server, string config, TranslationModel model, string session, CancellationToken token,
+            string usageDirectory = null)
+        {
+            if (!model.AcceptsPageImage)
+            {
+                await TranslateTextAsync(config, model, "Good morning! 今日はいい天気です。", usageDirectory, token);
+                return null;
+            }
+            var visual = new DrawingVisual();
+            var typeface = new Typeface("Segoe UI");
+            using (DrawingContext drawing = visual.RenderOpen())
+            {
+                drawing.DrawRectangle(Brushes.White, null, new Rect(0, 0, 600, 220));
+                drawing.DrawText(new FormattedText("Good morning!", CultureInfo.InvariantCulture, FlowDirection.LeftToRight,
+                    typeface, 46, Brushes.Black, 1.0), new Point(55, 48));
+                drawing.DrawText(new FormattedText("今日はいい天気です。", CultureInfo.InvariantCulture, FlowDirection.LeftToRight,
+                    typeface, 46, Brushes.Black, 1.0), new Point(55, 106));
+            }
+            var sample = new RenderTargetBitmap(600, 220, 96, 96, PixelFormats.Pbgra32);
+            sample.Render(visual);
+            sample.Freeze();
+            BitmapSource translated = await TranslateAsync(sample, server, config, model, session, null, token, usageDirectory);
+            if (ReferenceEquals(sample, translated)) throw new TranslationFailure("API 未在测试图中返回可排版的译文");
+            return translated;
+        }
+
+        private static byte[] EncodeBitmap(BitmapSource source, BitmapEncoder encoder)
+        {
+            encoder.Frames.Add(BitmapFrame.Create(source));
             using (MemoryStream output = new MemoryStream())
             {
                 encoder.Save(output);
-                image = output.ToArray();
+                return output.ToArray();
             }
-            if (image.Length > Limit) throw new InvalidOperationException("此页图片过大");
-            string key;
+        }
+
+        private static string CachePath(string directory, Uri uri, string config, string profile, byte[] image)
+        {
+            if (directory == null) return null;
             using (SHA256 hash = SHA256.Create())
             {
-                byte[] prefix = Encoding.UTF8.GetBytes(uri.AbsoluteUri + "\n" + config + "\n" + environment + "\n");
+                byte[] prefix = Encoding.UTF8.GetBytes(uri.AbsoluteUri + "\n" + config + "\n" + profile + "\n");
                 hash.TransformBlock(prefix, 0, prefix.Length, prefix, 0);
                 hash.TransformFinalBlock(image, 0, image.Length);
-                key = BitConverter.ToString(hash.Hash).Replace("-", "");
+                return Path.Combine(directory, BitConverter.ToString(hash.Hash).Replace("-", "") + ".image");
             }
-            Directory.CreateDirectory(directory);
-            string cache = Path.Combine(directory, key + ".image");
-            if (File.Exists(cache))
-            {
-                try { return Decode(File.ReadAllBytes(cache)); }
-                catch { }
-            }
+        }
+
+        private static BitmapImage LoadCache(string cache)
+        {
+            if (!File.Exists(cache)) return null;
+            try { return Decode(File.ReadAllBytes(cache)); }
+            catch { return null; }
+        }
+
+        private static BitmapImage Translate(BitmapSource original, Uri uri, string config, string environment, string session, string directory, CancellationToken token)
+        {
+            byte[] image = EncodeBitmap(original, new JpegBitmapEncoder { QualityLevel = 92 });
+            if (image.Length > Limit) throw new TranslationFailure("此页图片过大");
+            string cache = CachePath(directory, uri, config, environment, image);
+            BitmapImage cached = LoadCache(cache);
+            if (cached != null) return cached;
 
             if (environment.Length > 0 && string.IsNullOrEmpty(session)) throw new LoginRequired();
             string boundary = "Koma" + Guid.NewGuid().ToString("N");
@@ -2410,24 +2497,28 @@ namespace KomaComic.Windows
             HttpWebRequest request = (HttpWebRequest)WebRequest.Create(uri);
             request.Method = "POST";
             request.AllowAutoRedirect = false;
-            request.Timeout = request.ReadWriteTimeout = 120000;
+            request.Timeout = request.ReadWriteTimeout = 300000;
             request.ContentType = "multipart/form-data; boundary=" + boundary;
             request.ContentLength = head.Length + image.Length + end.Length;
             if (!string.IsNullOrEmpty(session)) request.Headers["X-Session-Token"] = session;
             token.ThrowIfCancellationRequested();
             using (token.Register(request.Abort))
             {
-                using (Stream stream = request.GetRequestStream())
+                try
                 {
-                    stream.Write(head, 0, head.Length);
-                    stream.Write(image, 0, image.Length);
-                    stream.Write(end, 0, end.Length);
+                    using (Stream stream = request.GetRequestStream())
+                    {
+                        stream.Write(head, 0, head.Length);
+                        stream.Write(image, 0, image.Length);
+                        stream.Write(end, 0, end.Length);
+                    }
+                    return ReadTranslatedImage(request, cache, uri.AbsolutePath.EndsWith(StreamPath, StringComparison.Ordinal));
                 }
-                try { return ReadTranslatedImage(request, cache, environment.Length > 0); }
                 catch (WebException error)
                 {
+                    token.ThrowIfCancellationRequested();
                     using (HttpWebResponse response = error.Response as HttpWebResponse)
-                        if (response != null && response.StatusCode == HttpStatusCode.Unauthorized) throw new LoginRequired();
+                        if (response != null) throw ResponseError((int)response.StatusCode);
                     throw;
                 }
             }
@@ -2438,20 +2529,61 @@ namespace KomaComic.Windows
             using (HttpWebResponse response = (HttpWebResponse)request.GetResponse())
             using (Stream input = response.GetResponseStream())
             {
-                if ((int)response.StatusCode >= 300) throw new InvalidOperationException("翻译服务地址返回了重定向");
+                if ((int)response.StatusCode >= 300) throw ResponseError((int)response.StatusCode);
                 byte[] data = streaming ? ReadTranslatedFrame(input) : ReadBounded(input, Limit);
-                BitmapImage translated = Decode(data);
-                string temporary = cache + ".tmp";
+                BitmapImage translated;
+                try { translated = Decode(data); }
+                catch (IOException) { throw new TranslationFailure("服务未返回可读的译图"); }
+                catch (NotSupportedException) { throw new TranslationFailure("服务未返回可读的译图"); }
+                catch (ArgumentException) { throw new TranslationFailure("服务未返回可读的译图"); }
+                if (cache != null) SaveCache(cache, data);
+                return translated;
+            }
+        }
+
+        private static void SaveCache(string cache, byte[] data)
+        {
+            string temporary = cache + "." + Guid.NewGuid().ToString("N") + ".tmp";
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(cache));
                 try
                 {
                     File.WriteAllBytes(temporary, data);
                     if (File.Exists(cache)) File.Replace(temporary, cache, null);
                     else File.Move(temporary, cache);
                 }
-                catch (IOException) { }
                 finally { if (File.Exists(temporary)) File.Delete(temporary); }
-                return translated;
             }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+        }
+
+        private static Exception ResponseError(int status)
+        {
+            switch (status)
+            {
+                case 401: return new LoginRequired();
+                case 403: return new TranslationFailure("服务拒绝翻译（HTTP 403），请检查账户权限和模型密钥");
+                case 404:
+                case 405: return new TranslationFailure("找不到漫画翻译接口（HTTP " + status + "），请检查服务类型和地址");
+                case 413: return new TranslationFailure("服务拒绝了过大的漫画页（HTTP 413）");
+                case 422: return new TranslationFailure("服务无法接受此翻译配置或图片（HTTP 422）");
+                case 429: return new TranslationFailure("翻译服务请求过多或额度已用完（HTTP 429）");
+            }
+            return new TranslationFailure(status >= 300 && status < 400
+                ? "翻译服务要求重定向，请填写最终服务地址（HTTP " + status + "）"
+                : "翻译服务返回 HTTP " + status + "，请检查服务日志");
+        }
+
+        public static string Describe(Exception error)
+        {
+            if (error is LoginRequired || error is TranslationFailure || error is ArgumentException) return error.Message;
+            var network = error as WebException ?? error.InnerException as WebException;
+            if (network != null && network.Status == WebExceptionStatus.Timeout) return "翻译请求超时，请检查网络和 API 状态";
+            if (error is EndOfStreamException) return "翻译服务在返回译图前中断了连接";
+            if (network != null || error is IOException) return "无法连接翻译服务，请检查地址、网络和服务状态";
+            return "翻译失败，请检查漫画翻译设置";
         }
 
         private static byte[] ReadBounded(Stream stream, int limit)
@@ -2462,7 +2594,7 @@ namespace KomaComic.Windows
                 int count;
                 while ((count = stream.Read(buffer, 0, buffer.Length)) > 0)
                 {
-                    if (output.Length + count > limit) throw new InvalidOperationException("翻译服务响应超过大小限制");
+                    if (output.Length + count > limit) throw new TranslationFailure("翻译服务响应超过大小限制");
                     output.Write(buffer, 0, count);
                 }
                 return output.ToArray();
@@ -2478,14 +2610,14 @@ namespace KomaComic.Windows
                     int status = reader.ReadByte();
                     int length = System.Net.IPAddress.NetworkToHostOrder(reader.ReadInt32());
                     if (status > 4 || length < 0 || length > Limit || (status != 0 && length > 256 * 1024))
-                        throw new InvalidOperationException("翻译服务的响应格式不正确");
-                    if (status == 2) throw new InvalidOperationException("翻译服务未能使用自定义模型，请检查接口地址、模型和密钥");
+                        throw new TranslationFailure("翻译服务的响应格式不正确");
+                    if (status == 2) throw new TranslationFailure("后端处理失败，请检查翻译模型、权限和服务日志");
                     byte[] data = reader.ReadBytes(length);
                     if (data.Length != length) throw new EndOfStreamException();
                     if (status == 0) return data;
                 }
             }
-            throw new InvalidOperationException("翻译服务返回了过多进度消息");
+            throw new TranslationFailure("翻译服务返回了过多进度消息");
         }
 
         private static BitmapImage Decode(byte[] bytes)
@@ -2996,7 +3128,7 @@ namespace KomaComic.Windows
         }
     }
 
-    internal sealed class KomaMainWindow : Window
+    internal sealed partial class KomaMainWindow : Window
     {
         private readonly AppServices _services;
         private readonly VeneraJsRunner _jsRunner;
@@ -3102,11 +3234,11 @@ namespace KomaComic.Windows
         private bool _readerTranslationEnabled;
         private int _readerTranslationEpoch;
         private bool _translationDispatchPending;
-        private CancellationTokenSource _readerTranslationCancellation = new CancellationTokenSource();
 
         private sealed class ReaderImageState
         {
             public BitmapImage Original;
+            public int PageIndex;
             public int TranslationEpoch = -1;
         }
         private TextBlock _readerTitleText;
@@ -5440,8 +5572,8 @@ namespace KomaComic.Windows
         private Grid BuildReadingProfile()
         {
             Grid view = new Grid { Margin = new Thickness(24, 18, 24, 18), Visibility = Visibility.Collapsed };
-            _profileBody = new StackPanel { MaxWidth = 780, HorizontalAlignment = HorizontalAlignment.Left };
-            view.Children.Add(new ScrollViewer { Content = _profileBody, VerticalScrollBarVisibility = ScrollBarVisibility.Auto });
+            _profileBody = new StackPanel { MaxWidth = 840 };
+            view.Children.Add(new ScrollViewer { Content = _profileBody, VerticalScrollBarVisibility = ScrollBarVisibility.Hidden });
             return view;
         }
 
@@ -5455,58 +5587,9 @@ namespace KomaComic.Windows
 
         private void RefreshReadingProfile()
         {
-            _profileBody.Children.Clear();
-            _profileBody.Children.Add(new TextBlock { Text = "个人", FontSize = 22, FontWeight = FontWeights.Bold });
-            StackPanel account = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 13, 0, 0) };
-            Border avatar = new Border { Width = 64, Height = 64, CornerRadius = new CornerRadius(32), Child = BuildAvatar(64), Margin = new Thickness(0, 0, 14, 0) };
-            avatar.SetResourceReference(Border.BackgroundProperty, "Brush.NavGlass");
-            account.Children.Add(avatar);
-            Button choose = AddBrowseButton(account, "更换头像", ChooseProfileAvatar);
-            choose.VerticalAlignment = VerticalAlignment.Center;
-            _profileBody.Children.Add(account);
-            DateTime today = DateTime.Today;
-            DateTime monday = today.AddDays(-(((int)today.DayOfWeek + 6) % 7));
-            string weekStart = monday.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
-            string date = today.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
             var total = _services.ReadingActivity.Entries.Select(row => IsPrivateReadingWork(row.ComicId)
                 ? new ReadingEntry { Day = row.Day, ComicId = "", Title = "私人作品", Milliseconds = row.Milliseconds } : row).ToList();
-            var weekly = total.Where(row => string.CompareOrdinal(row.Day, weekStart) >= 0 && string.CompareOrdinal(row.Day, date) <= 0).ToList();
-            var days = weekly.GroupBy(row => row.Day).ToDictionary(group => group.Key, group => group.Sum(row => row.Milliseconds));
-            long todayTime;
-            days.TryGetValue(date, out todayTime);
-            _profileBody.Children.Add(new TextBlock { Text = "阅读时长", FontSize = 18, FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 20, 0, 7) });
-            _profileBody.Children.Add(new TextBlock { Text = "今日  " + FormatDuration(todayTime) + "     本周  " + FormatDuration(weekly.Sum(row => row.Milliseconds)), FontSize = 15,
-                Margin = new Thickness(0, 0, 0, 9) });
-            long highest = days.Values.DefaultIfEmpty(1).Max();
-            for (int index = 0; index < 7; index++)
-            {
-                DateTime day = monday.AddDays(index);
-                long time;
-                days.TryGetValue(day.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), out time);
-                var line = new DockPanel { Margin = new Thickness(0, 3, 0, 3) };
-                var name = new TextBlock { Text = day.ToString("M/d"), Width = 46 };
-                var duration = new TextBlock { Text = FormatDuration(time), Width = 98, TextAlignment = TextAlignment.Right };
-                DockPanel.SetDock(duration, Dock.Right);
-                line.Children.Add(name);
-                line.Children.Add(duration);
-                var bar = new ProgressBar { Height = 7, Width = 218, Minimum = 0, Maximum = Math.Max(1, highest), Value = time, VerticalAlignment = VerticalAlignment.Center };
-                bar.SetResourceReference(Control.ForegroundProperty, "Brush.Accent");
-                line.Children.Add(bar);
-                _profileBody.Children.Add(line);
-            }
-            _profileBody.Children.Add(new TextBlock { Text = "作品阅读时长", FontSize = 18, FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 20, 0, 7) });
-            if (total.Count == 0)
-                _profileBody.Children.Add(new TextBlock { Text = "打开作品阅读后，这里会显示时长。" });
-            foreach (var work in total.GroupBy(row => row.ComicId).OrderByDescending(group => group.Sum(row => row.Milliseconds)))
-            {
-                long workWeek = weekly.Where(row => row.ComicId == work.Key).Sum(row => row.Milliseconds);
-                _profileBody.Children.Add(new TextBlock { Text = work.OrderByDescending(row => row.Day).First().Title, FontSize = 15,
-                    TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 8, 0, 2) });
-                _profileBody.Children.Add(new TextBlock { Text = "本周 " + FormatDuration(workWeek) + " · 总计 " + FormatDuration(work.Sum(row => row.Milliseconds)) });
-            }
-            Button feedback = AddBrowseButton(_profileBody, "问题反馈", OpenIssueFeedback);
-            feedback.HorizontalAlignment = HorizontalAlignment.Left;
-            feedback.Margin = new Thickness(0, 18, 0, 0);
+            RenderReadingProfile(total, null, false);
         }
 
         private bool IsPrivateReadingWork(string uid)
@@ -5542,8 +5625,9 @@ namespace KomaComic.Windows
 
         private void OpenIssueFeedback()
         {
-            Window dialog = CreateStyledDialog("问题反馈", 520, 380);
+            Window dialog = CreateStyledDialog("问题反馈", 540, 535);
             StackPanel fields = new StackPanel { Margin = new Thickness(20) };
+            fields.Children.Add(StatText("提交后将公开发布到 zmf678/koma-comic。", 13, true));
             TextBox title = MakeStyledTextBox();
             title.MaxLength = 100;
             TextBox body = MakeStyledTextBox();
@@ -5559,10 +5643,28 @@ namespace KomaComic.Windows
             CheckBox include = new CheckBox { Content = "附上应用版本和 Windows 版本", Margin = new Thickness(0, 10, 0, 5) };
             include.SetResourceReference(Control.ForegroundProperty, "Brush.Text");
             fields.Children.Add(include);
-            TextBlock message = new TextBlock { Margin = new Thickness(0, 4, 0, 6) };
+            bool hasToken = !string.IsNullOrWhiteSpace(_services.FeedbackProtectedToken);
+            var token = new PasswordBox { MinHeight = 33, MaxLength = 400 };
+            var caption = StatText(hasToken ? "GitHub Token 已保存，留空继续使用" : "GitHub Token（可创建 Issue）", 14);
+            caption.Margin = new Thickness(0, 8, 0, 5);
+            fields.Children.Add(caption);
+            fields.Children.Add(token);
+            var remember = new CheckBox { Content = "在本机加密保存 Token", IsChecked = hasToken, Margin = new Thickness(0, 8, 0, 7) };
+            remember.SetResourceReference(Control.ForegroundProperty, "Brush.Text");
+            fields.Children.Add(remember);
+            TextBlock message = StatText("", 14, true);
+            message.Margin = new Thickness(0, 4, 0, 8);
             fields.Children.Add(message);
             WrapPanel actions = new WrapPanel();
-            AddBrowseButton(actions, "预览", delegate
+            var submit = UiTheme.MakeButton("提交 Issue", true, false);
+            actions.Children.Add(submit);
+            var close = AddBrowseButton(actions, "关闭", dialog.Close);
+            bool sending = false;
+            dialog.Closing += delegate (object sender, System.ComponentModel.CancelEventArgs args)
+            {
+                if (sending) args.Cancel = true;
+            };
+            submit.Click += async delegate
             {
                 string subject = title.Text.Trim();
                 string text = body.Text.Trim();
@@ -5571,27 +5673,44 @@ namespace KomaComic.Windows
                     message.Text = "请填写标题和说明";
                     return;
                 }
-                if (include.IsChecked == true) text += "\n\n环境：页光 Koma " + Program.AppVersion + " · Windows " + Environment.OSVersion.Version;
-                Window preview = CreateStyledDialog("将提交到公开的 GitHub Issues", 500, 370);
-                preview.Owner = dialog;
-                DockPanel pane = new DockPanel { Margin = new Thickness(20) };
-                WrapPanel review = new WrapPanel { Margin = new Thickness(0, 14, 0, 0) };
-                DockPanel.SetDock(review, Dock.Bottom);
-                pane.Children.Add(review);
-                AddBrowseButton(review, "同意并打开 GitHub", delegate
+                string secret = token.Password.Trim();
+                if (secret.Length == 0 && hasToken)
                 {
-                    OpenComicWebsite("https://github.com/zmf678/koma-comic/issues/new?title=" +
-                        Uri.EscapeDataString(subject) + "&body=" + Uri.EscapeDataString(text));
-                    preview.Close();
-                });
-                AddBrowseButton(review, "返回修改", preview.Close);
-                pane.Children.Add(new ScrollViewer { Content = new TextBlock { Text = subject + "\n\n" + text, TextWrapping = TextWrapping.Wrap } });
-                preview.Content = pane;
-                preview.ShowDialog();
-            });
-            AddBrowseButton(actions, "取消", dialog.Close);
+                    try { secret = TranslationModel.DecryptSecret(_services.FeedbackProtectedToken); }
+                    catch (Exception) { message.Text = "请重新填写 GitHub Token"; return; }
+                }
+                if (include.IsChecked == true) text += "\n\n环境 · 页光 Koma " + Program.AppVersion + " · Windows " + Environment.OSVersion.Version;
+                bool save = remember.IsChecked == true;
+                sending = true;
+                submit.IsEnabled = close.IsEnabled = false;
+                message.Text = "正在提交…";
+                try
+                {
+                    int number = await GithubFeedback.SubmitAsync(subject, text, secret);
+                    message.Text = number > 0 ? "已提交 Issue #" + number : "GitHub 已接收反馈";
+                    submit.Visibility = Visibility.Collapsed;
+                    token.Password = "";
+                    foreach (Control field in new Control[] { title, body, token, remember, include }) field.IsEnabled = false;
+                    try
+                    {
+                        _services.FeedbackProtectedToken = save ? TranslationModel.EncryptKey(secret) : "";
+                        _services.SaveState();
+                    }
+                    catch (Exception) { message.Text += "。Token 设置未保存"; }
+                }
+                catch (Exception error)
+                {
+                    message.Text = error is InvalidOperationException || error is ArgumentException ? error.Message : "提交失败，请检查 GitHub 授权";
+                    submit.IsEnabled = true;
+                }
+                finally
+                {
+                    sending = false;
+                    close.IsEnabled = true;
+                }
+            };
             fields.Children.Add(actions);
-            dialog.Content = fields;
+            dialog.Content = new ScrollViewer { Content = fields, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
             dialog.ShowDialog();
         }
 
@@ -5783,9 +5902,10 @@ namespace KomaComic.Windows
                 panel.Children.Add(field);
             };
             TranslationModel saved = _services.TranslationModel;
+            StackPanel serverFields = new StackPanel();
             TextBox endpoint = MakeStyledTextBox();
             endpoint.Text = _services.TranslationServer;
-            addField(fields, "漫画翻译服务地址", endpoint);
+            addField(serverFields, "漫画翻译服务地址", endpoint);
             string newSession = null;
             string sessionServer = "";
             TextBlock loginStatus = new TextBlock
@@ -5793,8 +5913,8 @@ namespace KomaComic.Windows
                 Text = string.IsNullOrEmpty(_services.TranslationSession) ? "自定义模型需登录漫画翻译服务" : "已保存翻译服务会话",
                 Margin = new Thickness(0, 7, 0, 5)
             };
-            fields.Children.Add(loginStatus);
-            Button login = AddBrowseButton(fields, "登录翻译服务", delegate
+            serverFields.Children.Add(loginStatus);
+            Button login = AddBrowseButton(serverFields, "登录翻译服务", delegate
             {
                 string server = endpoint.Text.Trim();
                 try { MangaTranslation.Endpoint(server); }
@@ -5840,9 +5960,11 @@ namespace KomaComic.Windows
                 auth.ShowDialog();
             });
             login.HorizontalAlignment = HorizontalAlignment.Left;
-            ComboBox mode = new ComboBox { ItemsSource = new[] { "服务端默认", "自定义文本模型", "自定义视觉模型" },
-                SelectedIndex = (int)saved.Mode, MinHeight = 34 };
+            var modes = new[] { TranslationMode.Direct, TranslationMode.Server, TranslationMode.Text, TranslationMode.Vision };
+            ComboBox mode = new ComboBox { ItemsSource = new[] { "API 直连", "服务端默认", "自定义文本模型", "自定义视觉模型" },
+                SelectedIndex = Math.Max(0, Array.IndexOf(modes, saved.Mode)), MinHeight = 34 };
             addField(fields, "模型来源", mode);
+            fields.Children.Add(serverFields);
             StackPanel custom = new StackPanel();
             TextBox apiBase = MakeStyledTextBox();
             apiBase.Text = saved.ApiBase ?? "";
@@ -5850,17 +5972,46 @@ namespace KomaComic.Windows
             TextBox model = MakeStyledTextBox();
             model.Text = saved.ModelId ?? "";
             addField(custom, "模型 ID", model);
+            Button getModels = UiTheme.MakeButton("获取模型列表", false, false);
+            getModels.HorizontalAlignment = HorizontalAlignment.Left;
+            custom.Children.Add(getModels);
             PasswordBox key = new PasswordBox { MinHeight = 33 };
-            addField(custom, string.IsNullOrEmpty(saved.ProtectedKey) ? "模型 API 密钥（本地模型可留空）" : "模型 API 密钥（已保存，留空保留）", key);
+            addField(custom, string.IsNullOrEmpty(saved.ProtectedKey) ? "模型 API 密钥" : "模型 API 密钥（已保存，地址不变时留空保留）", key);
             CheckBox clear = new CheckBox { Content = "清除已保存的密钥", Margin = new Thickness(0, 8, 0, 0),
                 Visibility = string.IsNullOrEmpty(saved.ProtectedKey) ? Visibility.Collapsed : Visibility.Visible };
             clear.SetResourceReference(Control.ForegroundProperty, "Brush.Text");
             custom.Children.Add(clear);
-            custom.Children.Add(new TextBlock { Text = "自定义模式需要支持用户模型参数的 manga-translator-ui。翻译时，模型地址和密钥会发送至所填的翻译服务。",
-                TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 10, 0, 5) });
-            custom.Visibility = saved.Mode == TranslationMode.Server ? Visibility.Collapsed : Visibility.Visible;
-            mode.SelectionChanged += delegate { custom.Visibility = mode.SelectedIndex == 0 ? Visibility.Collapsed : Visibility.Visible; };
+            var modelHelp = new TextBlock { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 10, 0, 5) };
+            custom.Children.Add(modelHelp);
+            var directOptions = new StackPanel();
+            var sendImage = new CheckBox { Content = "发送漫画页图片", Margin = new Thickness(0, 8, 0, 4) };
+            sendImage.SetResourceReference(Control.ForegroundProperty, "Brush.Text");
+            sendImage.IsChecked = saved.SendImage;
+            directOptions.Children.Add(sendImage);
+            var reasoning = new ComboBox
+            {
+                ItemsSource = new[] { "服务商默认", "关闭", "低", "中", "高" },
+                SelectedIndex = Math.Max(0, Array.IndexOf(TranslationModel.ReasoningLevels, saved.ReasoningEffort ?? "")),
+                MinHeight = 34
+            };
+            addField(directOptions, "模型思考强度", reasoning);
+            Button usage = AddBrowseButton(directOptions, "查看 Token 用量", OpenTranslationUsage);
+            usage.HorizontalAlignment = HorizontalAlignment.Left;
+            custom.Children.Add(directOptions);
             fields.Children.Add(custom);
+            Action showMode = delegate
+            {
+                var selected = modes[mode.SelectedIndex];
+                custom.Visibility = selected == TranslationMode.Server ? Visibility.Collapsed : Visibility.Visible;
+                serverFields.Visibility = selected == TranslationMode.Direct ? Visibility.Collapsed : Visibility.Visible;
+                directOptions.Visibility = selected == TranslationMode.Direct ? Visibility.Visible : Visibility.Collapsed;
+                modelHelp.Text = selected == TranslationMode.Direct
+                    ? (sendImage.IsChecked == true ? "漫画页直接发送到支持图片输入的模型，译文在本机排版。" : "阅读时手动输入原文，API 只接收文字。")
+                    : "自定义模式需要支持用户模型参数的 manga-translator-ui，模型地址和密钥会发送到翻译服务。";
+            };
+            mode.SelectionChanged += delegate { showMode(); };
+            sendImage.Click += delegate { showMode(); };
+            showMode();
             TextBox config = MakeStyledTextBox();
             config.AcceptsReturn = true;
             config.TextWrapping = TextWrapping.Wrap;
@@ -5869,21 +6020,28 @@ namespace KomaComic.Windows
             addField(fields, "高级翻译配置 JSON", config);
             TextBlock status = new TextBlock { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 10, 0, 8) };
             fields.Children.Add(status);
+            Func<string, TranslationModel> readModel = server =>
+            {
+                var selected = new TranslationModel { Mode = modes[mode.SelectedIndex],
+                    ApiBase = apiBase.Text.Trim(), ModelId = model.Text.Trim(), ProtectedKey = saved.ProtectedKey,
+                    ReasoningEffort = TranslationModel.ReasoningLevels[Math.Max(0, reasoning.SelectedIndex)], SendImage = sendImage.IsChecked == true };
+                if (selected.UsesCustomModel && !string.IsNullOrWhiteSpace(key.Password))
+                    selected.ProtectedKey = TranslationModel.EncryptKey(key.Password);
+                else if ((selected.UsesTranslationServer && server != _services.TranslationServer) || clear.IsChecked == true ||
+                    selected.ApiBase != (saved.ApiBase ?? "")) selected.ProtectedKey = "";
+                return selected;
+            };
             WrapPanel actions = new WrapPanel();
             AddBrowseButton(actions, "保存", delegate
             {
                 try
                 {
                     string server = endpoint.Text.Trim();
-                    var selected = new TranslationModel { Mode = (TranslationMode)mode.SelectedIndex,
-                        ApiBase = apiBase.Text.Trim(), ModelId = model.Text.Trim(), ProtectedKey = saved.ProtectedKey };
-                    if (server.Length > 0 || selected.Mode != TranslationMode.Server) MangaTranslation.Endpoint(server);
+                    TranslationModel selected = readModel(server);
+                    if (selected.UsesTranslationServer && (server.Length > 0 || selected.Mode != TranslationMode.Server))
+                        MangaTranslation.Endpoint(server, selected.Mode);
                     MangaTranslation.ValidateModel(selected);
                     MangaTranslation.ValidateConfig(config.Text);
-                    if (selected.Mode != TranslationMode.Server && !string.IsNullOrWhiteSpace(key.Password))
-                        selected.ProtectedKey = TranslationModel.EncryptKey(key.Password);
-                    else if (server != _services.TranslationServer || clear.IsChecked == true ||
-                        selected.ApiBase != (saved.ApiBase ?? "")) selected.ProtectedKey = "";
                     if (newSession != null && sessionServer == server) _services.TranslationSession = TranslationModel.EncryptKey(newSession);
                     else if (server != _services.TranslationServer) _services.TranslationSession = "";
                     _services.TranslationServer = server;
@@ -5894,10 +6052,86 @@ namespace KomaComic.Windows
                 }
                 catch (Exception ex) { status.Text = ex.Message; }
             });
+            var testButton = UiTheme.MakeButton("测试翻译", false, false);
+            actions.Children.Add(testButton);
+            var testCancellation = new CancellationTokenSource();
+            dialog.Closed += delegate { testCancellation.Cancel(); };
+            getModels.Click += async delegate
+            {
+                string address = apiBase.Text.Trim();
+                getModels.IsEnabled = false;
+                status.Text = "正在获取模型列表…";
+                try
+                {
+                    string entered = key.Password.Trim();
+                    string secret = entered.Length == 0 && clear.IsChecked != true && address == saved.ApiBase ? saved.DecryptKey() : entered;
+                    string[] models = await MangaTranslation.ListModelsAsync(address, secret, testCancellation.Token);
+                    if (!dialog.IsVisible) return;
+                    if (address != apiBase.Text.Trim()) { status.Text = ""; return; }
+                    status.Text = models.Length == 0 ? "API 未列出模型，可手动填写模型 ID" : models.Length + " 个可选模型";
+                    if (models.Length > 0)
+                    {
+                        string picked = PickTranslationModel(dialog, models);
+                        if (picked != null) model.Text = picked;
+                    }
+                }
+                catch (Exception error)
+                {
+                    if (dialog.IsVisible) status.Text = "获取模型失败 · " + MangaTranslation.Describe(error);
+                }
+                finally { getModels.IsEnabled = true; }
+            };
+            testButton.Click += async delegate
+            {
+                testButton.IsEnabled = false;
+                status.Text = "正在测试翻译…";
+                try
+                {
+                    string server = endpoint.Text.Trim();
+                    TranslationModel selected = readModel(server);
+                    string session = !selected.UsesTranslationServer ? "" : sessionServer == server && newSession != null
+                        ? newSession : server == _services.TranslationServer ? TranslationModel.DecryptSecret(_services.TranslationSession) : "";
+                    await MangaTranslation.TestAsync(server, config.Text, selected, session, testCancellation.Token, _services.DataDir);
+                    if (dialog.IsVisible) status.Text = selected.AcceptsPageImage ? "测试成功，已生成测试译图" : "测试成功，已收到文字译文";
+                }
+                catch (Exception error)
+                {
+                    if (dialog.IsVisible) status.Text = MangaTranslation.Describe(error);
+                }
+                finally { testButton.IsEnabled = true; }
+            };
             AddBrowseButton(actions, "取消", dialog.Close);
             fields.Children.Add(actions);
             dialog.Content = new ScrollViewer { Content = fields, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
             dialog.ShowDialog();
+            testCancellation.Dispose();
+        }
+
+        private string PickTranslationModel(Window owner, string[] models)
+        {
+            Window picker = CreateStyledDialog("选择模型", 475, 475);
+            picker.Owner = owner;
+            var content = new DockPanel { Margin = new Thickness(17) };
+            TextBox filter = MakeStyledTextBox();
+            System.Windows.Automation.AutomationProperties.SetName(filter, "搜索模型 ID");
+            DockPanel.SetDock(filter, Dock.Top);
+            content.Children.Add(filter);
+            var footer = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 8, 0, 0) };
+            DockPanel.SetDock(footer, Dock.Bottom);
+            content.Children.Add(footer);
+            var list = new ListBox { ItemsSource = models, Margin = new Thickness(0, 8, 0, 0) };
+            list.SetResourceReference(Control.BackgroundProperty, "Brush.Surface");
+            list.SetResourceReference(Control.ForegroundProperty, "Brush.Text");
+            content.Children.Add(list);
+            string selected = null;
+            Action accept = delegate { selected = list.SelectedItem as string; if (selected != null) picker.Close(); };
+            AddBrowseButton(footer, "选择", accept);
+            AddBrowseButton(footer, "取消", picker.Close);
+            filter.TextChanged += delegate { list.ItemsSource = models.Where(id => id.IndexOf(filter.Text.Trim(), StringComparison.OrdinalIgnoreCase) >= 0).ToArray(); };
+            list.MouseDoubleClick += delegate { accept(); };
+            picker.Content = content;
+            picker.ShowDialog();
+            return selected;
         }
 
         private void SwitchTheme(string mode)
@@ -5998,10 +6232,12 @@ namespace KomaComic.Windows
                 HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Top,
                 Margin = new Thickness(0, 62, 18, 0), Padding = new Thickness(10, 5, 10, 5),
                 Background = new SolidColorBrush(Color.FromArgb(225, 21, 32, 52)), Foreground = Brushes.White,
-                Visibility = Visibility.Collapsed, Cursor = Cursors.Hand
+                Visibility = Visibility.Collapsed, Cursor = Cursors.Hand, TextWrapping = TextWrapping.Wrap
             };
             _readerTranslationStatus.MouseLeftButtonUp += delegate { _readerTranslationEpoch++; QueueVisibleTranslation(); };
             overlay.Children.Add(_readerTranslationStatus);
+            _readerTranslationBall = MakeTranslationBall();
+            overlay.Children.Add(_readerTranslationBall);
 
             // Loading Box
             _readerLoadingBox = new Border
@@ -6308,6 +6544,12 @@ namespace KomaComic.Windows
             _chkShowPageNum = AddDrawerToggle(c4s, "展示页码", delegate (bool v) { UpdateActiveReaderProfile(delegate (ReaderPrefModel p) { p.ShowPageNumber = v; }); });
             c4.Child = c4s;
             stack.Children.Add(c4);
+            var translationCard = MakeDrawerCard();
+            var translationPanel = new StackPanel();
+            var translationSettings = AddBrowseButton(translationPanel, "翻译设置", OpenReaderTranslationSettings);
+            translationSettings.HorizontalAlignment = HorizontalAlignment.Left;
+            translationCard.Child = translationPanel;
+            stack.Children.Add(translationCard);
 
             sv.Content = stack;
             dp.Children.Add(sv);
@@ -6421,6 +6663,7 @@ namespace KomaComic.Windows
             _chromeVisible = false;
 
             int count = _services.GetLocalPageCount(card.Id);
+            CancelReaderTranslation();
             _readerPages = new List<PageImageModel>();
             for (int i = 0; i < count; i++)
             {
@@ -6494,6 +6737,7 @@ namespace KomaComic.Windows
             int request = ++_readerChapterRequest;
             ++_readerRenderRequest;
             _readerChapterIdx = chIdx;
+            CancelReaderTranslation();
             _readerPages = new List<PageImageModel>();
             _widePageFlags.Clear();
             _readerPageIdx = targetPage;
@@ -6598,7 +6842,7 @@ namespace KomaComic.Windows
         private async void RenderCurrentReaderPagesAsync()
         {
             int request = ++_readerRenderRequest;
-            if (_readerTranslationEnabled) CancelReaderTranslation();
+            _readerSingleImg.Tag = _readerLeftImg.Tag = _readerRightImg.Tag = null;
             ReaderPrefModel prof = GetActiveReaderProfile();
             int total = _readerPages.Count;
             _readerSeekSlider.Maximum = Math.Max(1, total);
@@ -6669,33 +6913,34 @@ namespace KomaComic.Windows
             }
         }
 
+        private async Task<BitmapImage> LoadReaderBitmapAsync(PageImageModel page, int pageIdx, List<PageImageModel> pages)
+        {
+            if (page.IsLocal)
+                return await _services.LoadLocalPageBitmapAsync(page.LocalComicId, page.LocalPageIndex, 0);
+            BitmapImage bitmap = null;
+            Uri pageUri;
+            bool browserFormat = Uri.TryCreate(page.Url, UriKind.Absolute, out pageUri) &&
+                (pageUri.AbsolutePath.EndsWith(".webp", StringComparison.OrdinalIgnoreCase) ||
+                 pageUri.AbsolutePath.EndsWith(".avif", StringComparison.OrdinalIgnoreCase));
+            if (!page.UseSourceLoader && !browserFormat)
+                bitmap = await _services.LoadComicImageAsync(page.Url, page.Headers, 0);
+            if (bitmap == null && ReferenceEquals(pages, _readerPages) && _readerOpen)
+            {
+                ComicCardModel comic = _readerComic;
+                ChapterItem chapter = _readerChapters[_readerChapterIdx];
+                SourceItem source = _services.Sources.Find(item => item.Key == comic.SourceKey);
+                string cacheKey = JsonUtil.CreateSerializer().Serialize(new object[] { comic.Uid, chapter.Id, pageIdx, page.Url, page.Headers });
+                bitmap = await _services.LoadSourcePageBitmapAsync(cacheKey,
+                    () => _jsRunner.LoadPageBytesAsync(source, comic.Id, chapter.Id, page));
+            }
+            return bitmap;
+        }
+
         private async Task LoadFullPageIntoImageAsync(PageImageModel page, int pageIdx, Image target, bool detectWide, int request)
         {
             BitmapImage bitmap = null;
             string failure = "";
-            try
-            {
-                if (page.IsLocal)
-                    bitmap = await _services.LoadLocalPageBitmapAsync(page.LocalComicId, page.LocalPageIndex, 0);
-                else
-                {
-                    Uri pageUri;
-                    bool browserFormat = Uri.TryCreate(page.Url, UriKind.Absolute, out pageUri) &&
-                        (pageUri.AbsolutePath.EndsWith(".webp", StringComparison.OrdinalIgnoreCase) ||
-                         pageUri.AbsolutePath.EndsWith(".avif", StringComparison.OrdinalIgnoreCase));
-                    if (!page.UseSourceLoader && !browserFormat)
-                        bitmap = await _services.LoadComicImageAsync(page.Url, page.Headers, 0);
-                    if (bitmap == null && request == _readerRenderRequest && _readerOpen)
-                    {
-                        ComicCardModel comic = _readerComic;
-                        ChapterItem chapter = _readerChapters[_readerChapterIdx];
-                        SourceItem source = _services.Sources.Find(item => item.Key == comic.SourceKey);
-                        string cacheKey = JsonUtil.CreateSerializer().Serialize(new object[] { comic.Uid, chapter.Id, pageIdx, page.Url, page.Headers });
-                        bitmap = await _services.LoadSourcePageBitmapAsync(cacheKey,
-                            () => _jsRunner.LoadPageBytesAsync(source, comic.Id, chapter.Id, page));
-                    }
-                }
-            }
+            try { bitmap = await LoadReaderBitmapAsync(page, pageIdx, _readerPages); }
             catch (Exception error) { failure = "：" + error.Message.Split('\n')[0]; }
 
             if (request != _readerRenderRequest || !_readerOpen) return;
@@ -6711,7 +6956,7 @@ namespace KomaComic.Windows
                 _readerPageReady = true;
                 StartReadingClock();
             }
-            target.Tag = new ReaderImageState { Original = bitmap };
+            target.Tag = new ReaderImageState { Original = bitmap, PageIndex = pageIdx };
             QueueVisibleTranslation();
             if (detectWide && bitmap.PixelWidth > bitmap.PixelHeight * 1.15 && !_widePageFlags.ContainsKey(pageIdx))
             {
@@ -6741,16 +6986,19 @@ namespace KomaComic.Windows
 
         private void CancelReaderTranslation()
         {
-            _readerTranslationCancellation.Cancel();
-            _readerTranslationCancellation.Dispose();
-            _readerTranslationCancellation = new CancellationTokenSource();
+            _translationPrefetchVersion++;
+            _translationVisibleFirst = _translationVisibleLast = _translationPrefetchAnchor = -1;
+            PruneReaderTranslations(1, 0);
         }
 
         private void ToggleReaderTranslation()
         {
-            if (string.IsNullOrWhiteSpace(_services.TranslationServer))
+            TranslationModel model = _services.TranslationModel;
+            bool setupRequired = model.UsesTranslationServer ? string.IsNullOrWhiteSpace(_services.TranslationServer) :
+                string.IsNullOrWhiteSpace(model.ApiBase) || string.IsNullOrWhiteSpace(model.ModelId) || string.IsNullOrWhiteSpace(model.ProtectedKey);
+            if (!_readerTranslationEnabled && setupRequired)
             {
-                ShowToast("请先在设置中填写漫画翻译服务");
+                ShowToast("请先在设置中完成漫画翻译配置");
                 return;
             }
             _readerTranslationEnabled = !_readerTranslationEnabled;
@@ -6758,8 +7006,10 @@ namespace KomaComic.Windows
             _readerTranslationEpoch++;
             _readerTranslationButton.Content = _readerTranslationEnabled ? "原文" : "翻译";
             _readerTranslationStatus.Visibility = _readerTranslationEnabled ? Visibility.Visible : Visibility.Collapsed;
-            _readerTranslationStatus.Text = "等待页面…";
-            if (_readerTranslationEnabled) QueueVisibleTranslation();
+            _readerTranslationBall.Visibility = _readerTranslationStatus.Visibility;
+            _readerTranslationStatus.Text = model.AcceptsPageImage ? "等待页面…" : "点击译球输入原文";
+            if (_readerTranslationEnabled && model.AcceptsPageImage) QueueVisibleTranslation();
+            else if (_readerTranslationEnabled) OpenTextTranslation();
             else foreach (Image view in CurrentReaderImages())
             {
                 ReaderImageState state = view.Tag as ReaderImageState;
@@ -6769,15 +7019,16 @@ namespace KomaComic.Windows
 
         private void QueueVisibleTranslation()
         {
-            if (!_readerOpen || !_readerTranslationEnabled || _translationDispatchPending) return;
+            if (!_readerOpen || !_readerTranslationEnabled || !_services.TranslationModel.AcceptsPageImage || _translationDispatchPending) return;
             _translationDispatchPending = true;
             Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(delegate
             {
                 _translationDispatchPending = false;
                 if (!_readerOpen || !_readerTranslationEnabled) return;
+                var visible = new List<Image>();
                 foreach (Image view in CurrentReaderImages())
                 {
-                    if (view.Source == null) continue;
+                    if (view.Source == null || !(view.Tag is ReaderImageState)) continue;
                     if (_readerScrollViewer.Visibility == Visibility.Visible)
                     {
                         Point corner;
@@ -6785,8 +7036,13 @@ namespace KomaComic.Windows
                         catch (InvalidOperationException) { continue; }
                         if (corner.Y >= _readerScrollViewer.ViewportHeight || corner.Y + view.ActualHeight <= 0) continue;
                     }
-                    StartReaderTranslation(view);
+                    visible.Add(view);
                 }
+                if (visible.Count == 0) return;
+                int first = visible.Min(view => ((ReaderImageState)view.Tag).PageIndex);
+                int last = visible.Max(view => ((ReaderImageState)view.Tag).PageIndex);
+                UpdateTranslationWindow(first, last);
+                foreach (Image view in visible) StartReaderTranslation(view);
             }));
         }
 
@@ -6800,16 +7056,17 @@ namespace KomaComic.Windows
             _readerTranslationStatus.Text = "翻译中…";
             try
             {
-                BitmapImage translated = await MangaTranslation.TranslateAsync(state.Original, _services.TranslationServer,
-                    _services.TranslationConfig, _services.TranslationModel, TranslationModel.DecryptSecret(_services.TranslationSession), Path.Combine(_services.DataDir, "cache", "translations"), _readerTranslationCancellation.Token);
+                ReaderTranslationResult translated = await GetReaderTranslation(state.PageIndex, state.Original).Task;
                 if (epoch != _readerTranslationEpoch || request != _readerRenderRequest || !_readerTranslationEnabled || view.Tag != state) return;
-                view.Source = translated;
-                _readerTranslationStatus.Text = "已显示译文";
+                view.Source = translated.Image;
+                _readerTranslationStatus.Text = translated.Changed ? "已显示译文" : "未找到需要翻译的文字";
+                PrefetchReaderTranslations();
             }
+            catch (OperationCanceledException) { }
             catch (Exception error)
             {
                 if (epoch == _readerTranslationEpoch && request == _readerRenderRequest && _readerTranslationEnabled && view.Tag == state)
-                    _readerTranslationStatus.Text = error is MangaTranslation.LoginRequired ? "请先登录翻译服务" : "翻译失败 · 点击重试";
+                    _readerTranslationStatus.Text = MangaTranslation.Describe(error) + " · 点击重试";
             }
         }
 
@@ -6886,6 +7143,7 @@ namespace KomaComic.Windows
             _readerTranslationEpoch++;
             _readerTranslationButton.Content = "翻译";
             _readerTranslationStatus.Visibility = Visibility.Collapsed;
+            _readerTranslationBall.Visibility = Visibility.Collapsed;
             ++_readerChapterRequest;
             ++_readerRenderRequest;
             _readerLoadingBox.Visibility = Visibility.Collapsed;
