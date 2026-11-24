@@ -1,6 +1,12 @@
 package com.arkreader.comic.ui
 
 import android.content.Intent
+import android.content.res.ColorStateList
+import android.content.res.Configuration
+import android.graphics.Bitmap
+import android.graphics.RenderEffect
+import android.graphics.Shader
+import android.os.Build
 import android.os.Bundle
 import android.view.LayoutInflater
 import android.view.View
@@ -10,6 +16,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
+import androidx.recyclerview.widget.SimpleItemAnimator
 import com.arkreader.comic.ArkReaderApp
 import com.arkreader.comic.R
 import com.arkreader.comic.data.Chapter
@@ -18,6 +25,7 @@ import com.arkreader.comic.data.ComicFormat
 import com.arkreader.comic.databinding.ActivityComicDetailBinding
 import com.arkreader.comic.databinding.ItemChapterBinding
 import com.arkreader.comic.engine.VeneraScriptParser
+import com.google.android.material.chip.Chip
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -65,10 +73,20 @@ class ComicDetailActivity : AppCompatActivity() {
         binding.toolbar.setNavigationOnClickListener { finish() }
         binding.rvChapters.layoutManager = LinearLayoutManager(this)
         binding.rvChapters.adapter = chapterAdapter
+        (binding.rvChapters.itemAnimator as? SimpleItemAnimator)?.supportsChangeAnimations = false
+        binding.rvChapters.attachLiquidGlassScrollbar()
+
         applyLibraryMaterial(binding.root, binding.detailBackdrop, binding.detailContentRoot)
         if (app.prefs.glassMaterial) {
+            val density = resources.displayMetrics.density
+            val dark = (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
+            binding.coverCard.strokeColor = if (dark) 0x62FFFFFF else 0xECFFFFFF.toInt()
+            binding.coverCard.strokeWidth = (1.1f * density).toInt().coerceAtLeast(1)
             binding.detailHeroCard.applyLiquidGlass(binding.detailBackdrop, LiquidGlassPreset.FROSTED_BAR, 20f, elevationDp = 5f)
             binding.detailChapterCard.applyLiquidGlass(binding.detailBackdrop, LiquidGlassPreset.FROSTED_BAR, 18f, elevationDp = 4f)
+        } else {
+            binding.detailHeroCard.applyGlassPanelSurface(18f)
+            binding.detailChapterCard.applyGlassPanelSurface(18f)
         }
 
         binding.btnRead.setOnClickListener {
@@ -113,6 +131,33 @@ class ComicDetailActivity : AppCompatActivity() {
         loadDetail()
     }
 
+    private fun applyCoverAtmosphere(bitmap: Bitmap?) {
+        if (!app.prefs.glassMaterial || app.prefs.wallpaperEnabled || bitmap == null || bitmap.isRecycled) {
+            binding.detailCoverAtmosphere.visibility = View.GONE
+            return
+        }
+        val dark = (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
+        binding.detailCoverAtmosphere.visibility = View.VISIBLE
+        binding.detailCoverAtmosphere.alpha = if (dark) 0.34f else 0.28f
+        if (Build.VERSION.SDK_INT >= 31) {
+            binding.detailCoverAtmosphere.setImageBitmap(bitmap)
+            binding.detailCoverAtmosphere.setRenderEffect(
+                RenderEffect.createBlurEffect(48f, 48f, Shader.TileMode.CLAMP)
+            )
+        } else {
+            lifecycleScope.launch(Dispatchers.Default) {
+                val small = runCatching {
+                    val s = Bitmap.createScaledBitmap(bitmap, 72, 104, true)
+                    LiquidGlassBinder.blurBitmapInPlace(s, 6)
+                    s
+                }.getOrNull() ?: return@launch
+                withContext(Dispatchers.Main) {
+                    if (!isDestroyed) binding.detailCoverAtmosphere.setImageBitmap(small)
+                }
+            }
+        }
+    }
+
     private fun loadDetail() {
         if (comicId <= 0L && remoteSourceKey.isNotEmpty() && remoteComicId.isNotEmpty()) {
             val coverKey = if (remotePreviewCover.isBlank()) "" else app.coverCache.makeKey("url:$remotePreviewCover")
@@ -134,6 +179,50 @@ class ComicDetailActivity : AppCompatActivity() {
 
         Toast.makeText(this, "未找到漫画信息", Toast.LENGTH_SHORT).show()
         finish()
+    }
+
+    private fun renderTagPills(tags: List<String>) {
+        val group = binding.chipGroupTags
+        group.removeAllViews()
+        if (tags.isEmpty()) {
+            group.visibility = View.GONE
+            return
+        }
+        group.visibility = View.VISIBLE
+        val density = resources.displayMetrics.density
+        val shown = tags.take(12)
+        shown.forEach { tag ->
+            val chip = Chip(this, null, com.google.android.material.R.attr.chipStyle).apply {
+                text = tag
+                textSize = 11.5f
+                isCheckable = false
+                isClickable = false
+                chipMinHeight = 28f * density
+                chipCornerRadius = 8f * density
+                setEnsureMinTouchTargetSize(false)
+                applyGlassChip()
+            }
+            group.addView(chip)
+        }
+        if (tags.size > 12) {
+            val moreChip = Chip(this, null, com.google.android.material.R.attr.chipStyle).apply {
+                text = "全部标签 (${tags.size})"
+                textSize = 11.5f
+                isCheckable = false
+                chipMinHeight = 28f * density
+                chipCornerRadius = 8f * density
+                setEnsureMinTouchTargetSize(false)
+                applyGlassChip()
+                setOnClickListener {
+                    MaterialAlertDialogBuilder(this@ComicDetailActivity)
+                        .setTitle("作品标签 (${tags.size})")
+                        .setMessage(tags.joinToString(" · "))
+                        .setPositiveButton("关闭", null)
+                        .show()
+                }
+            }
+            group.addView(moreChip)
+        }
     }
 
     private fun bindLocalComicUi(loaded: Comic) {
@@ -163,12 +252,7 @@ class ComicDetailActivity : AppCompatActivity() {
         binding.btnBookshelf.text = if (shelfCount > 0) "书架 ($shelfCount)" else "加入本地书架"
         if (loaded.format == ComicFormat.ONLINE) {
             val (description, url, tags) = app.db.getOnlineMetadata(loaded.id)
-            binding.tvTags.visibility = if (tags.isEmpty()) View.GONE else View.VISIBLE
-            binding.tvTags.text = tags.joinToString(" · ")
-            binding.tvTags.setOnClickListener {
-                MaterialAlertDialogBuilder(this).setTitle("作品标签").setMessage(tags.joinToString(" · "))
-                    .setPositiveButton("关闭", null).show()
-            }
+            renderTagPills(tags)
             binding.tvDescription.visibility = if (description.isBlank()) View.GONE else View.VISIBLE
             binding.tvDescription.text = description
             binding.tvDescription.setOnClickListener {
@@ -193,10 +277,14 @@ class ComicDetailActivity : AppCompatActivity() {
         binding.btnReaderConfig.text = "阅读配置: ${cfg.name}"
 
         if (loaded.coverCacheKey.isNotBlank()) {
-            lifecycleScope.launch {
+            app.coverCache.getMemoryCover(loaded.coverCacheKey)?.let { cached ->
+                binding.ivCover.setImageBitmap(cached)
+                applyCoverAtmosphere(cached)
+            } ?: lifecycleScope.launch {
                 val bmp = withContext(Dispatchers.IO) { app.coverCache.getCover(loaded.coverCacheKey) }
                 if (bmp != null) {
                     binding.ivCover.finishCover(bmp)
+                    applyCoverAtmosphere(bmp)
                 } else {
                     if (!onlineLoading) binding.ivCover.showCoverLoading(false)
                 }
@@ -221,6 +309,7 @@ class ComicDetailActivity : AppCompatActivity() {
                 if (coverUrl.isNotBlank()) launch {
                     val (_, bitmap) = withContext(Dispatchers.IO) { app.coverCache.getOrDownloadHttpCover(coverUrl, loaded.headers) }
                     binding.ivCover.finishCover(bitmap)
+                    applyCoverAtmosphere(bitmap)
                 }
                 loaded
             } catch (error: Exception) {
@@ -236,16 +325,17 @@ class ComicDetailActivity : AppCompatActivity() {
 
     private fun styleFavoriteButton(favorited: Boolean) {
         val btn = binding.btnFavorite
+        val dark = (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
         btn.isSelected = favorited
         if (favorited) {
             btn.text = "★ 已收藏"
-            btn.backgroundTintList = android.content.res.ColorStateList.valueOf(0x36F59E0B)
-            btn.strokeColor = android.content.res.ColorStateList.valueOf(0xFFF59E0B.toInt())
-            btn.setTextColor(0xFFD97706.toInt())
+            btn.backgroundTintList = ColorStateList.valueOf(if (dark) 0x48FFBE3D else 0x2EF59E0B)
+            btn.strokeColor = ColorStateList.valueOf(if (dark) 0xFFFFC44D.toInt() else 0xFFEA910C.toInt())
+            btn.setTextColor(if (dark) 0xFFFFD266.toInt() else 0xFFC26A00.toInt())
         } else {
             btn.text = "☆ 收藏"
-            btn.backgroundTintList = android.content.res.ColorStateList.valueOf(android.graphics.Color.TRANSPARENT)
-            btn.strokeColor = android.content.res.ColorStateList.valueOf(getColor(R.color.text_secondary))
+            btn.backgroundTintList = ColorStateList.valueOf(android.graphics.Color.TRANSPARENT)
+            btn.strokeColor = ColorStateList.valueOf(getColor(R.color.surface_border))
             btn.setTextColor(getColor(R.color.text_primary))
         }
     }
@@ -321,6 +411,7 @@ private class ChapterAdapter(
 
     override fun onBindViewHolder(holder: VH, position: Int) {
         val ch = items[position]
+        holder.binding.root.applyGlassCardStyle(12f)
         holder.binding.tvChapterTitle.text = ch.title
         holder.binding.tvChapterProgress.text = when {
             ch.pageCount > 0 && ch.lastReadPage > 0 -> "${ch.lastReadPage + 1}/${ch.pageCount}"

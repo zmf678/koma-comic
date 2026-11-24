@@ -5,6 +5,7 @@ import android.content.pm.ActivityInfo
 import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.graphics.Color
+import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.os.Bundle
 import android.util.LruCache
@@ -16,10 +17,10 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
-import android.view.animation.AccelerateInterpolator
-import android.view.animation.DecelerateInterpolator
+import android.view.animation.PathInterpolator
 import android.widget.FrameLayout
 import android.widget.ImageView
+import android.widget.PopupMenu
 import android.widget.SeekBar
 import android.widget.TextView
 import android.widget.Toast
@@ -32,6 +33,7 @@ import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
+import androidx.recyclerview.widget.SimpleItemAnimator
 import androidx.viewpager2.widget.ViewPager2
 import com.arkreader.comic.ArkReaderApp
 import com.arkreader.comic.R
@@ -101,13 +103,18 @@ class ComicReaderActivity : AppCompatActivity() {
     private var toolbarVisible = false
     private var lastWheelTurnMs = 0L
     private var prefetchJob: Job? = null
+    private var widePageRebuildPending = false
     private val prefetchSemaphore = Semaphore(2)
     private val inFlightSlotJobs = java.util.concurrent.ConcurrentHashMap<Int, Deferred<Bitmap?>>()
+    private val pageBindJobs = java.util.WeakHashMap<ZoomableImageView, Job>()
+    private val easeOutCubic = PathInterpolator(0.22f, 1f, 0.36f, 1f)
+    private val easeInCubic = PathInterpolator(0.4f, 0f, 1f, 1f)
 
     private val bitmapCache = object : LruCache<Int, Bitmap>(18) {}
     private val vpCallback = object : ViewPager2.OnPageChangeCallback() {
         override fun onPageSelected(position: Int) {
             onSlotSelected(position)
+            refreshReaderGlassChrome()
         }
     }
 
@@ -162,9 +169,9 @@ class ComicReaderActivity : AppCompatActivity() {
         ViewCompat.setOnApplyWindowInsetsListener(binding.readerRoot) { _, insets ->
             val sys = insets.getInsetsIgnoringVisibility(WindowInsetsCompat.Type.systemBars())
             binding.topOverlay.setPadding(
-                sidePad / 2,
+                (14 * density).toInt(),
                 sys.top + baseTopPad,
-                sidePad / 2,
+                (12 * density).toInt(),
                 (16 * density).toInt()
             )
             binding.bottomOverlay.setPadding(
@@ -173,6 +180,12 @@ class ComicReaderActivity : AppCompatActivity() {
                 sidePad,
                 sys.bottom + baseBottomPad
             )
+            val drawerLp = binding.readerSettingsPanel.layoutParams as? FrameLayout.LayoutParams
+            if (drawerLp != null) {
+                val m = (12 * density).toInt()
+                drawerLp.setMargins(m, sys.top + m, m, sys.bottom + m)
+                binding.readerSettingsPanel.layoutParams = drawerLp
+            }
             insets
         }
         ViewCompat.requestApplyInsets(binding.readerRoot)
@@ -180,17 +193,25 @@ class ComicReaderActivity : AppCompatActivity() {
 
     private fun updateBottomCapsuleWidth() {
         val dm = resources.displayMetrics
-        val maxPx = (560 * dm.density).toInt()
+        val maxPx = (600 * dm.density).toInt()
         val targetW = if (dm.widthPixels > maxPx + (32 * dm.density).toInt()) {
             maxPx + (32 * dm.density).toInt()
         } else {
             ViewGroup.LayoutParams.MATCH_PARENT
         }
-        val lp = binding.bottomOverlay.layoutParams as? FrameLayout.LayoutParams ?: return
-        if (lp.width != targetW) {
+        val lp = binding.bottomOverlay.layoutParams as? FrameLayout.LayoutParams
+        if (lp != null && lp.width != targetW) {
             lp.width = targetW
             lp.gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
             binding.bottomOverlay.layoutParams = lp
+        }
+        val drawerLp = binding.readerSettingsPanel.layoutParams as? FrameLayout.LayoutParams
+        if (drawerLp != null) {
+            val desiredDrawerW = (356 * dm.density).toInt().coerceAtMost(dm.widthPixels - (24 * dm.density).toInt())
+            if (drawerLp.width != desiredDrawerW) {
+                drawerLp.width = desiredDrawerW
+                binding.readerSettingsPanel.layoutParams = drawerLp
+            }
         }
     }
 
@@ -223,7 +244,8 @@ class ComicReaderActivity : AppCompatActivity() {
 
     override fun onPause() {
         readerForeground = false
-        resetTranslations()
+        translationJob?.cancel()
+        translationPrefetch?.cancel()
         stopReadingClock()
         super.onPause()
         saveCurrentProgress()
@@ -269,6 +291,21 @@ class ComicReaderActivity : AppCompatActivity() {
         readingStart = null
     }
 
+    private fun refreshReaderGlassChrome() {
+        if (!app.prefs.glassMaterial) return
+        binding.root.post {
+            if (isDestroyed) return@post
+            if (binding.bottomOverlay.visibility == View.VISIBLE) binding.bottomCapsuleCard.refreshLiquidGlassBackdrop()
+            if (binding.topOverlay.visibility == View.VISIBLE && binding.btnSpreadMatch.visibility == View.VISIBLE) {
+                binding.btnSpreadMatch.refreshLiquidGlassBackdrop()
+            }
+            if (binding.translationBall.visibility == View.VISIBLE) binding.translationBall.refreshLiquidGlassBackdrop()
+            if (binding.tvPageIndicator.visibility == View.VISIBLE) binding.tvPageIndicator.refreshLiquidGlassBackdrop()
+            if (binding.tvTranslationState.visibility == View.VISIBLE) binding.tvTranslationState.refreshLiquidGlassBackdrop()
+            if (binding.readerSettingsOverlay.visibility == View.VISIBLE) binding.readerSettingsPanel.refreshLiquidGlassBackdrop()
+        }
+    }
+
     private fun setupOverlayControls() {
         if (app.prefs.glassMaterial) {
             val readerBackdrop: () -> View? = {
@@ -277,14 +314,14 @@ class ComicReaderActivity : AppCompatActivity() {
             binding.bottomCapsuleCard.applyLiquidGlass(
                 backdropProvider = readerBackdrop,
                 preset = LiquidGlassPreset.READER_CAPSULE,
-                cornerRadiusDp = 26f,
+                cornerRadiusDp = 28f,
                 forceDark = true,
                 elevationDp = 8f
             )
             binding.translationBall.applyLiquidGlass(
                 backdropProvider = readerBackdrop,
                 preset = LiquidGlassPreset.CLEAR_LENS,
-                cornerRadiusDp = 24f,
+                cornerRadiusDp = 25f,
                 forceDark = true,
                 interactiveElastic = true,
                 elevationDp = 8f
@@ -292,10 +329,10 @@ class ComicReaderActivity : AppCompatActivity() {
             binding.btnSpreadMatch.applyLiquidGlass(
                 backdropProvider = readerBackdrop,
                 preset = LiquidGlassPreset.SUBTLE_PILL,
-                cornerRadiusDp = 18f,
+                cornerRadiusDp = 16f,
                 forceDark = true,
                 interactiveElastic = true,
-                elevationDp = 5f
+                elevationDp = 4f
             )
             binding.tvPageIndicator.applyLiquidGlass(
                 backdropProvider = readerBackdrop,
@@ -311,10 +348,17 @@ class ComicReaderActivity : AppCompatActivity() {
                 forceDark = true,
                 elevationDp = 5f
             )
+            binding.readerLoadingBox.applyLiquidGlass(
+                backdropProvider = readerBackdrop,
+                preset = LiquidGlassPreset.SUBTLE_PILL,
+                cornerRadiusDp = 16f,
+                forceDark = true,
+                elevationDp = 6f
+            )
             binding.readerSettingsPanel.applyLiquidGlass(
                 backdropProvider = readerBackdrop,
                 preset = LiquidGlassPreset.READER_DRAWER,
-                cornerRadiusDp = 20f,
+                cornerRadiusDp = 22f,
                 forceDark = true,
                 elevationDp = 10f
             )
@@ -323,17 +367,34 @@ class ComicReaderActivity : AppCompatActivity() {
         binding.btnReaderMore.setOnClickListener { openReaderSettingsPanel() }
         binding.btnReaderFavorite.setOnClickListener { toggleReaderFavorite() }
         binding.btnTranslate.setOnClickListener { toggleTranslation() }
-        binding.translationBall.setOnClickListener {
+        binding.translationBall.setOnClickListener { anchor ->
             val textOnly = !app.prefs.translationModel().acceptsPageImage
-            val choices = arrayOf(if (textOnly) "输入原文" else "翻译当前页", "显示原文", "翻译设置", "查看 Token 用量")
-            MaterialAlertDialogBuilder(this).setTitle("漫画翻译").setItems(choices) { _, index ->
-                when (index) {
-                    0 -> if (textOnly) showTextTranslation() else translateCurrentPage()
+            val popup = PopupMenu(this, anchor)
+            popup.menu.add(0, 0, 0, if (textOnly) "输入原文" else "翻译当前页")
+            popup.menu.add(0, 1, 1, "显示原文")
+            popup.menu.add(0, 2, 2, "翻译设置")
+            popup.menu.add(0, 3, 3, "查看 Token 用量")
+            popup.setOnMenuItemClickListener { item ->
+                when (item.itemId) {
+                    0 -> if (textOnly) showTextTranslation() else {
+                        translatedPages.remove(currentSlotIndex)
+                        translatingView = null
+                        translateCurrentPage()
+                    }
                     1 -> toggleTranslation()
                     2 -> showReaderTranslationSettings()
                     3 -> showTranslationUsage(this)
                 }
-            }.show()
+                true
+            }
+            popup.show()
+        }
+        binding.tvTranslationState.setOnClickListener {
+            if (translationEnabled && app.prefs.translationModel().acceptsPageImage) {
+                translatedPages.remove(currentSlotIndex)
+                translatingView = null
+                translateCurrentPage()
+            }
         }
         binding.btnBookmark.setOnClickListener { showBookmarkDialog() }
         binding.btnReaderSettings.setOnClickListener { openReaderSettingsPanel() }
@@ -370,39 +431,47 @@ class ComicReaderActivity : AppCompatActivity() {
         }
         translationEnabled = !translationEnabled
         resetTranslations()
-        binding.btnTranslate.text = if (translationEnabled) "原文" else "翻译"
+        binding.tvTranslateIcon.text = if (translationEnabled) "文" else "译"
+        binding.tvTranslateLabel.text = if (translationEnabled) "原文" else "翻译"
         binding.tvTranslationState.visibility = if (translationEnabled) View.VISIBLE else View.GONE
         binding.translationBall.visibility = if (translationEnabled && binding.readerSettingsOverlay.visibility != View.VISIBLE) View.VISIBLE else View.GONE
-        binding.tvTranslationState.setOnClickListener(null)
         if (translationEnabled) {
             binding.tvTranslationState.text = if (model.acceptsPageImage) "等待页面…" else "点击译球输入原文"
+            refreshReaderGlassChrome()
             if (model.acceptsPageImage) translateCurrentPage() else showTextTranslation()
         } else activePageRecycler()?.adapter?.notifyDataSetChanged()
     }
 
     private fun toggleCrossPageMatch() {
         if (!this::readerConfig.isInitialized || pageSource == null) return
-        val rawPage = getCurrentRawPage()
+        val oldSlot = slots.getOrNull(currentSlotIndex)
+        val oldFirst = getCurrentRawPage()
+        val oldSecond = (oldSlot as? PageSlot.Merged)?.rightRaw
         val nextDoubleMode = if (readerConfig.doublePageMode == DoublePageMode.NORMAL) {
             DoublePageMode.AUTO_LANDSCAPE
         } else {
             readerConfig.doublePageMode
         }
         val nextFirstSingle = !readerConfig.firstPageSingle
+        // Sync with Windows v1.5.3 (fe97933): when toggling odd -> even, anchor on oldSecond so visible spread shifts cleanly
+        val anchorPage = if (!nextFirstSingle && oldSecond != null) oldSecond else oldFirst
         readerConfig = readerConfig.copy(
             doublePageMode = nextDoubleMode,
             firstPageSingle = nextFirstSingle
         )
         app.db.upsertReaderConfig(readerConfig)
         bitmapCache.evictAll()
-        rebuildSlotsAndRender(rawPage)
+        rebuildSlotsAndRender(anchorPage)
 
         val effective = effectiveDoublePageMode()
-        val matchState = if (nextFirstSingle) "首页单页起" else "成对跨页起"
-        val tip = if (effective == DoublePageMode.NORMAL) {
-            "已切换跨页匹配 ($matchState)，横屏双页时生效"
-        } else {
-            "已切换跨页匹配 ($matchState)"
+        val matchState = if (nextFirstSingle) "首页单页起" else "默认双页起"
+        val newSlot = slots.getOrNull(currentSlotIndex)
+        val curWide = oldFirst in widePageFlags.indices && widePageFlags[oldFirst]
+        val tip = when {
+            effective == DoublePageMode.NORMAL -> "已切换跨页偏移 ($matchState)，横屏双页时生效"
+            curWide && newSlot == oldSlot -> "已切换为「$matchState」（当前页为宽图，翻页后生效）"
+            newSlot is PageSlot.Merged && newSlot.rightRaw != null -> "已切换为「$matchState」· 第 ${newSlot.leftRaw + 1}-${newSlot.rightRaw + 1} 页"
+            else -> "已切换为「$matchState」· 第 ${getCurrentRawPage() + 1} 页"
         }
         Toast.makeText(this, tip, Toast.LENGTH_SHORT).show()
     }
@@ -414,10 +483,12 @@ class ComicReaderActivity : AppCompatActivity() {
 
     private fun updateOverlayActionPills() {
         if (!this::readerConfig.isInitialized) return
+        val showSpreadPill = readerConfig.scrollMode != ScrollMode.VERTICAL && effectiveDoublePageMode() == DoublePageMode.MERGE
+        binding.btnSpreadMatch.visibility = if (showSpreadPill) View.VISIBLE else View.GONE
         binding.btnSpreadMatch.text = if (readerConfig.firstPageSingle) {
-            "更改跨页匹配(单起)"
+            "跨页偏移 · 首页单页"
         } else {
-            "更改跨页匹配(对起)"
+            "跨页偏移 · 默认双页"
         }
     }
 
@@ -455,8 +526,18 @@ class ComicReaderActivity : AppCompatActivity() {
 
     private fun syncReaderFavoriteButton() {
         val fav = currentComic?.isFavorite == true
-        binding.btnReaderFavorite.setImageResource(if (fav) R.drawable.ic_favorite else R.drawable.ic_favorite_border)
-        binding.btnReaderFavorite.setColorFilter(if (fav) 0xFFFFBE3D.toInt() else Color.WHITE)
+        val density = resources.displayMetrics.density
+        binding.ivReaderFav.setImageResource(if (fav) R.drawable.ic_favorite else R.drawable.ic_favorite_border)
+        binding.ivReaderFav.setColorFilter(if (fav) 0xFFFFD466.toInt() else Color.WHITE)
+        binding.tvReaderFav.text = if (fav) "已收藏" else "收藏"
+        binding.tvReaderFav.setTextColor(if (fav) 0xFFFFD466.toInt() else 0xF0FFFFFF.toInt())
+        binding.btnReaderFavorite.background = if (fav) {
+            GradientDrawable().apply {
+                cornerRadius = 18f * density
+                setColor(0x3AF59E0B)
+                setStroke((1f * density).toInt().coerceAtLeast(1), 0xA5FBBF24.toInt())
+            }
+        } else null
         binding.btnReaderFavorite.contentDescription = if (fav) "已收藏，点击取消" else "收藏"
     }
 
@@ -509,21 +590,22 @@ class ComicReaderActivity : AppCompatActivity() {
                     }
                 }
                 "curl" -> ViewPager2.PageTransformer { page, position ->
+                    val isRtl = this::readerConfig.isInitialized && readerConfig.scrollMode == ScrollMode.RTL
                     page.cameraDistance = 18000f
                     page.translationX = -position * page.width
                     page.pivotY = page.height * 0.5f
                     when {
                         position < -1f || position > 1f -> page.alpha = 0f
                         position <= 0f -> {
-                            page.pivotX = 0f
-                            page.rotationY = position * 88f
+                            page.pivotX = if (isRtl) page.width.toFloat() else 0f
+                            page.rotationY = if (isRtl) -position * 88f else position * 88f
                             page.alpha = (1f + position * 0.65f).coerceIn(0f, 1f)
                             page.scaleX = 1f
                             page.scaleY = 1f
                             page.translationZ = 2f
                         }
                         else -> {
-                            page.pivotX = page.width.toFloat()
+                            page.pivotX = if (isRtl) 0f else page.width.toFloat()
                             page.rotationY = 0f
                             page.alpha = (1f - position * 0.25f).coerceIn(0.75f, 1f)
                             page.scaleX = 1f
@@ -534,19 +616,18 @@ class ComicReaderActivity : AppCompatActivity() {
                 }
                 "depth" -> ViewPager2.PageTransformer { page, position ->
                     page.rotationY = 0f
+                    page.translationX = -position * page.width
                     when {
                         position < -1f || position > 1f -> page.alpha = 0f
                         position <= 0f -> {
                             page.alpha = (1f + position).coerceIn(0f, 1f)
-                            page.translationX = -position * page.width
-                            val scale = (1f + position * 0.1f).coerceIn(0.9f, 1f)
+                            val scale = (1f + position * 0.12f).coerceIn(0.88f, 1f)
                             page.scaleX = scale
                             page.scaleY = scale
                         }
                         else -> {
                             page.alpha = (1f - position).coerceIn(0f, 1f)
-                            page.translationX = 0f
-                            val scale = (1f + position * 0.06f).coerceIn(1f, 1.06f)
+                            val scale = (1f + position * 0.08f).coerceIn(1f, 1.08f)
                             page.scaleX = scale
                             page.scaleY = scale
                         }
@@ -589,20 +670,22 @@ class ComicReaderActivity : AppCompatActivity() {
     }
 
     private fun updatePageIndicatorVisibility() {
-        val shouldShow = this::readerConfig.isInitialized && readerConfig.showPageNumber && !toolbarVisible
+        val shouldShow = this::readerConfig.isInitialized && readerConfig.showPageNumber
         binding.tvPageIndicator.visibility = if (shouldShow) View.VISIBLE else View.GONE
     }
 
     private fun openChapterSource(chapter: Chapter, initialRawPage: Int) {
         stopReadingClock()
         val wh = currentComic?.let { app.db.getWarehouse(it.warehouseId) }
-        binding.progressBar.visibility = View.VISIBLE
+        binding.tvLoadingStatus.text = "正在加载章节…"
+        binding.readerLoadingBox.visibility = View.VISIBLE
         chapterLoad?.cancel()
         resetTranslations()
         pageErrorShown = false
         pageSource?.close()
         pageSource = null
         widePageFlags = BooleanArray(0)
+        widePageRebuildPending = false
         bitmapCache.evictAll()
 
         chapterLoad = lifecycleScope.launch {
@@ -632,7 +715,7 @@ class ComicReaderActivity : AppCompatActivity() {
                 }
             } catch (err: Exception) {
                 if (err is CancellationException && err !is TimeoutCancellationException) throw err
-                binding.progressBar.visibility = View.GONE
+                binding.readerLoadingBox.visibility = View.GONE
                 val message = err.message.orEmpty().lineSequence().first()
                 MaterialAlertDialogBuilder(this@ComicReaderActivity)
                     .setTitle("无法打开章节")
@@ -642,7 +725,7 @@ class ComicReaderActivity : AppCompatActivity() {
                     .show()
                 return@launch
             }
-            binding.progressBar.visibility = View.GONE
+            binding.readerLoadingBox.visibility = View.GONE
             pageSource = result.first
             startReadingClock()
             widePageFlags = result.second
@@ -651,18 +734,34 @@ class ComicReaderActivity : AppCompatActivity() {
         }
     }
 
+    private fun scheduleWidePageRebuild() {
+        if (widePageRebuildPending) return
+        widePageRebuildPending = true
+        binding.root.post {
+            widePageRebuildPending = false
+            if (isDestroyed || pageSource == null || !this::readerConfig.isInitialized) return@post
+            val effective = effectiveDoublePageMode()
+            if (effective == DoublePageMode.MERGE || (effective == DoublePageMode.SPLIT && !app.prefs.splitAllPages)) {
+                val anchor = getCurrentRawPage()
+                bitmapCache.evictAll()
+                rebuildSlotsAndRender(anchor)
+            }
+        }
+    }
+
     private fun rebuildSlotsAndRender(targetRawPage: Int) {
         val count = pageSource?.pageCount ?: 0
         if (count <= 0) return
         resetTranslations()
 
-        val effectiveMode = effectiveDoublePageMode()
+        val effectiveMode = if (readerConfig.scrollMode == ScrollMode.VERTICAL) DoublePageMode.NORMAL else effectiveDoublePageMode()
         slots = SpreadSlotBuilder.buildSlots(
             pageCount = count,
             effectiveMode = effectiveMode,
             firstPageSingle = readerConfig.firstPageSingle,
             mergeRightToLeft = readerConfig.mergeRightToLeft,
-            isWidePage = { idx -> idx in widePageFlags.indices && widePageFlags[idx] }
+            isWidePage = { idx -> idx in widePageFlags.indices && widePageFlags[idx] },
+            splitAllPages = app.prefs.splitAllPages
         )
 
         val slotIndex = SpreadSlotBuilder.findSlotForRawPage(slots, targetRawPage)
@@ -674,6 +773,9 @@ class ComicReaderActivity : AppCompatActivity() {
             binding.vpHorizontal.visibility = View.GONE
             val lm = LinearLayoutManager(this)
             binding.rvVertical.layoutManager = lm
+            binding.rvVertical.setItemViewCacheSize(8)
+            (binding.rvVertical.itemAnimator as? SimpleItemAnimator)?.supportsChangeAnimations = false
+            binding.rvVertical.attachLiquidGlassScrollbar()
             binding.rvVertical.adapter = PageSlotAdapter(isVertical = true)
             binding.rvVertical.clearOnScrollListeners()
             binding.rvVertical.addOnScrollListener(object : RecyclerView.OnScrollListener() {
@@ -681,6 +783,11 @@ class ComicReaderActivity : AppCompatActivity() {
                     val pos = lm.findFirstVisibleItemPosition()
                     if (pos != RecyclerView.NO_POSITION && pos != currentSlotIndex) {
                         onSlotSelected(pos)
+                    }
+                }
+                override fun onScrollStateChanged(rv: RecyclerView, newState: Int) {
+                    if (newState == RecyclerView.SCROLL_STATE_IDLE) {
+                        refreshReaderGlassChrome()
                     }
                 }
             })
@@ -694,6 +801,7 @@ class ComicReaderActivity : AppCompatActivity() {
             jumpToSlot(slotIndex)
         }
         onSlotSelected(slotIndex)
+        refreshReaderGlassChrome()
     }
 
     private fun jumpToSlot(slotIndex: Int) {
@@ -726,7 +834,18 @@ class ComicReaderActivity : AppCompatActivity() {
 
     private fun formatSeekShort(slotIndex: Int): String {
         val clamped = slotIndex.coerceIn(0, (slots.size - 1).coerceAtLeast(0))
-        return "${clamped + 1}/${slots.size}"
+        val slot = slots.getOrNull(clamped)
+        val rawTotal = pageSource?.pageCount ?: slots.size
+        return when (slot) {
+            is PageSlot.Merged -> if (slot.rightRaw != null) {
+                "${slot.leftRaw + 1}-${slot.rightRaw + 1}/$rawTotal"
+            } else {
+                "${slot.leftRaw + 1}/$rawTotal"
+            }
+            is PageSlot.SplitHalf -> "${slot.rawIndex + 1}/$rawTotal · ${if (slot.leftHalf) "左半页" else "右半页"}"
+            is PageSlot.Single -> "${slot.rawIndex + 1}/$rawTotal"
+            null -> "${clamped + 1}/${slots.size}"
+        }
     }
 
     private fun onSlotSelected(slotIndex: Int) {
@@ -745,9 +864,9 @@ class ComicReaderActivity : AppCompatActivity() {
         }
         currentSlotIndex = nextSlot
         if (translationEnabled) binding.root.post { translateCurrentPage() }
-        val displayText = formatProgressText(currentSlotIndex)
-        binding.tvPageIndicator.text = "${currentChapter?.title.orEmpty()} · $displayText"
-        binding.tvSeekLabel.text = formatSeekShort(currentSlotIndex)
+        val shortLabel = formatSeekShort(currentSlotIndex)
+        binding.tvPageIndicator.text = shortLabel
+        binding.tvSeekLabel.text = shortLabel
         binding.seekPage.progress = currentSlotIndex
         preloadAdjacent(currentSlotIndex)
     }
@@ -954,10 +1073,12 @@ class ComicReaderActivity : AppCompatActivity() {
         val result: Bitmap? = when (slot) {
             is PageSlot.Single -> {
                 val raw = loadPage(src, slot.rawIndex, reqW, reqH) ?: return null
+                detectWidePageDynamic(slot.rawIndex, raw)
                 postProcess(raw)
             }
             is PageSlot.SplitHalf -> {
                 val raw = loadPage(src, slot.rawIndex, reqW * 2, reqH) ?: return null
+                detectWidePageDynamic(slot.rawIndex, raw)
                 val half = ImageProcessor.splitWideBitmap(raw, slot.leftHalf)
                 if (half !== raw) raw.recycle()
                 postProcess(half)
@@ -965,16 +1086,22 @@ class ComicReaderActivity : AppCompatActivity() {
             is PageSlot.Merged -> {
                 val halfReqW = (reqW / 2).coerceAtLeast(720)
                 val leftRaw = loadPage(src, slot.leftRaw, halfReqW, reqH) ?: return null
+                val leftWide = detectWidePageDynamic(slot.leftRaw, leftRaw)
                 val leftClean = postProcess(leftRaw) ?: leftRaw
                 val rightRaw = slot.rightRaw?.let { loadPage(src, it, halfReqW, reqH) }
+                val rightWide = if (rightRaw != null && slot.rightRaw != null) detectWidePageDynamic(slot.rightRaw, rightRaw) else false
+                if (leftWide || rightWide) {
+                    scheduleWidePageRebuild()
+                }
                 if (rightRaw == null) {
                     leftClean
                 } else {
                     val rightClean = postProcess(rightRaw) ?: rightRaw
+                    val gapPx = if (app.prefs.spreadGap) (6 * resources.displayMetrics.density).toInt() else 0
                     if (readerConfig.mergeRightToLeft) {
-                        ImageProcessor.mergeSideBySide(rightClean, leftClean, readerConfig.bgColor.colorInt)
+                        ImageProcessor.mergeSideBySide(rightClean, leftClean, readerConfig.bgColor.colorInt, gapPx)
                     } else {
-                        ImageProcessor.mergeSideBySide(leftClean, rightClean, readerConfig.bgColor.colorInt)
+                        ImageProcessor.mergeSideBySide(leftClean, rightClean, readerConfig.bgColor.colorInt, gapPx)
                     }
                 }
             }
@@ -983,6 +1110,20 @@ class ComicReaderActivity : AppCompatActivity() {
             bitmapCache.put(slotIndex, result)
         }
         return result
+    }
+
+    private fun detectWidePageDynamic(rawIndex: Int, bmp: Bitmap): Boolean {
+        if (rawIndex !in widePageFlags.indices) return false
+        if (bmp.width > bmp.height * 1.15f && !widePageFlags[rawIndex]) {
+            widePageFlags[rawIndex] = true
+            if (effectiveDoublePageMode() == DoublePageMode.MERGE ||
+                (effectiveDoublePageMode() == DoublePageMode.SPLIT && !app.prefs.splitAllPages)
+            ) {
+                scheduleWidePageRebuild()
+            }
+            return true
+        }
+        return widePageFlags[rawIndex]
     }
 
     private fun loadPage(source: ComicPageSource, index: Int, width: Int, height: Int): Bitmap? =
@@ -1038,7 +1179,7 @@ class ComicReaderActivity : AppCompatActivity() {
                     binding.rvVertical.smoothScrollToPosition(next)
                     onSlotSelected(next)
                 } else {
-                    binding.vpHorizontal.setCurrentItem(next, true)
+                    binding.vpHorizontal.setCurrentItem(next, app.prefs.pageTurnAnimation != "none")
                 }
             }
         }
@@ -1066,14 +1207,41 @@ class ComicReaderActivity : AppCompatActivity() {
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
-        if (readerConfig.volumeKeyFlip) {
-            if (keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) {
-                stepPage(1)
+        if (this::readerConfig.isInitialized) {
+            if (keyCode == KeyEvent.KEYCODE_ESCAPE) {
+                if (binding.readerSettingsOverlay.visibility == View.VISIBLE) {
+                    closeReaderSettingsPanel()
+                } else {
+                    finish()
+                }
                 return true
             }
-            if (keyCode == KeyEvent.KEYCODE_VOLUME_UP) {
-                stepPage(-1)
-                return true
+            if (readerConfig.scrollMode != ScrollMode.VERTICAL) {
+                val rtl = readerConfig.scrollMode == ScrollMode.RTL
+                when (keyCode) {
+                    KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                        stepPage(if (rtl) -1 else 1)
+                        return true
+                    }
+                    KeyEvent.KEYCODE_DPAD_LEFT -> {
+                        stepPage(if (rtl) 1 else -1)
+                        return true
+                    }
+                    KeyEvent.KEYCODE_SPACE -> {
+                        stepPage(1)
+                        return true
+                    }
+                }
+            }
+            if (readerConfig.volumeKeyFlip) {
+                if (keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) {
+                    stepPage(1)
+                    return true
+                }
+                if (keyCode == KeyEvent.KEYCODE_VOLUME_UP) {
+                    stepPage(-1)
+                    return true
+                }
             }
         }
         return super.onKeyDown(keyCode, event)
@@ -1091,15 +1259,16 @@ class ComicReaderActivity : AppCompatActivity() {
         if (visible) {
             binding.topOverlay.visibility = View.VISIBLE
             binding.bottomOverlay.visibility = View.VISIBLE
+            refreshReaderGlassChrome()
             if (smooth) {
                 val topH = (if (binding.topOverlay.height > 0) binding.topOverlay.height else (72 * resources.displayMetrics.density).toInt()).toFloat()
-                val botH = (if (binding.bottomOverlay.height > 0) binding.bottomOverlay.height else (120 * resources.displayMetrics.density).toInt()).toFloat()
+                val botH = (if (binding.bottomOverlay.height > 0) binding.bottomOverlay.height else (124 * resources.displayMetrics.density).toInt()).toFloat()
                 binding.topOverlay.translationY = -topH
                 binding.topOverlay.alpha = 0f
-                binding.topOverlay.animate().translationY(0f).alpha(1f).setDuration(230L).setInterpolator(DecelerateInterpolator()).start()
+                binding.topOverlay.animate().translationY(0f).alpha(1f).setDuration(260L).setInterpolator(easeOutCubic).start()
                 binding.bottomOverlay.translationY = botH
                 binding.bottomOverlay.alpha = 0f
-                binding.bottomOverlay.animate().translationY(0f).alpha(1f).setDuration(260L).setInterpolator(DecelerateInterpolator()).start()
+                binding.bottomOverlay.animate().translationY(0f).alpha(1f).setDuration(320L).setInterpolator(easeOutCubic).start()
             } else {
                 binding.topOverlay.translationY = 0f
                 binding.topOverlay.alpha = 1f
@@ -1109,10 +1278,10 @@ class ComicReaderActivity : AppCompatActivity() {
         } else {
             if (smooth && binding.bottomOverlay.visibility == View.VISIBLE) {
                 val topH = (if (binding.topOverlay.height > 0) binding.topOverlay.height else (72 * resources.displayMetrics.density).toInt()).toFloat()
-                val botH = (if (binding.bottomOverlay.height > 0) binding.bottomOverlay.height else (120 * resources.displayMetrics.density).toInt()).toFloat()
-                binding.topOverlay.animate().translationY(-topH).alpha(0f).setDuration(180L).setInterpolator(AccelerateInterpolator())
+                val botH = (if (binding.bottomOverlay.height > 0) binding.bottomOverlay.height else (124 * resources.displayMetrics.density).toInt()).toFloat()
+                binding.topOverlay.animate().translationY(-topH).alpha(0f).setDuration(200L).setInterpolator(easeInCubic)
                     .withEndAction { if (!toolbarVisible) binding.topOverlay.visibility = View.GONE }.start()
-                binding.bottomOverlay.animate().translationY(botH).alpha(0f).setDuration(200L).setInterpolator(AccelerateInterpolator())
+                binding.bottomOverlay.animate().translationY(botH).alpha(0f).setDuration(230L).setInterpolator(easeInCubic)
                     .withEndAction { if (!toolbarVisible) binding.bottomOverlay.visibility = View.GONE }.start()
             } else {
                 binding.topOverlay.visibility = View.GONE
@@ -1250,25 +1419,33 @@ class ComicReaderActivity : AppCompatActivity() {
         syncReaderSettingsPanelState()
         binding.readerSettingsOverlay.visibility = View.VISIBLE
         binding.translationBall.visibility = View.GONE
-        binding.readerSettingsPanel.translationX = 80f
+        val slidePx = 360f * resources.displayMetrics.density
+        binding.readerSettingsPanel.translationX = slidePx
         binding.readerSettingsPanel.alpha = 0f
         binding.readerSettingsPanel.animate()
             .translationX(0f)
             .alpha(1f)
-            .setDuration(180)
+            .setDuration(260L)
+            .setInterpolator(easeOutCubic)
+            .withEndAction { refreshReaderGlassChrome() }
             .start()
     }
 
     private fun closeReaderSettingsPanel() {
         binding.readerSettingsPanel.animate().cancel()
+        val slidePx = 360f * resources.displayMetrics.density
         if (android.animation.ValueAnimator.areAnimatorsEnabled() && binding.readerSettingsOverlay.visibility == View.VISIBLE) {
             binding.readerSettingsPanel.animate()
-                .translationX(80f)
+                .translationX(slidePx)
                 .alpha(0f)
-                .setDuration(160)
+                .setDuration(200L)
+                .setInterpolator(easeInCubic)
                 .withEndAction {
                     binding.readerSettingsOverlay.visibility = View.GONE
-                    if (translationEnabled) binding.translationBall.visibility = View.VISIBLE
+                    if (translationEnabled) {
+                        binding.translationBall.visibility = View.VISIBLE
+                        refreshReaderGlassChrome()
+                    }
                 }
                 .start()
         } else {
@@ -1280,6 +1457,7 @@ class ComicReaderActivity : AppCompatActivity() {
     private fun setupReaderSettingsDrawer() {
         binding.readerSettingsOverlay.setOnClickListener { closeReaderSettingsPanel() }
         binding.readerSettingsPanel.setOnClickListener { /* consume click */ }
+        binding.btnCloseDrawer.setOnClickListener { closeReaderSettingsPanel() }
 
         binding.btnBrightnessAuto.setOnClickListener {
             app.prefs.readerBrightness = -1
@@ -1367,37 +1545,28 @@ class ComicReaderActivity : AppCompatActivity() {
         binding.btnPageSplit.setOnClickListener { selectDoublePage(DoublePageMode.SPLIT) }
         binding.btnPageAuto.setOnClickListener { selectDoublePage(DoublePageMode.AUTO_LANDSCAPE) }
 
-        binding.btnPageAnimPicker.setOnClickListener {
-            val keys = arrayOf("none", "fade", "slide", "cover", "curl", "depth")
-            val labels = keys.map { pageTurnAnimLabel(it) }.toTypedArray()
-            val cur = keys.indexOf(app.prefs.pageTurnAnimation).coerceAtLeast(0)
-            MaterialAlertDialogBuilder(this)
-                .setTitle("选择翻页动画")
-                .setSingleChoiceItems(labels, cur) { dialog, which ->
-                    app.prefs.pageTurnAnimation = keys[which]
-                    applyPageTurnTransformer()
-                    syncReaderSettingsPanelState()
-                    dialog.dismiss()
-                }
-                .setNegativeButton("取消", null)
-                .show()
+        val selectAnim: (String) -> Unit = { key ->
+            app.prefs.pageTurnAnimation = key
+            applyPageTurnTransformer()
+            syncReaderSettingsPanelState()
         }
+        binding.btnAnimNone.setOnClickListener { selectAnim("none") }
+        binding.btnAnimFade.setOnClickListener { selectAnim("fade") }
+        binding.btnAnimSlide.setOnClickListener { selectAnim("slide") }
+        binding.btnAnimCover.setOnClickListener { selectAnim("cover") }
+        binding.btnAnimCurl.setOnClickListener { selectAnim("curl") }
+        binding.btnAnimDepth.setOnClickListener { selectAnim("depth") }
 
-        binding.btnPrefetchPicker.setOnClickListener {
-            val counts = intArrayOf(0, 2, 4, 6, 8)
-            val labels = counts.map { if (it == 0) "关闭预加载" else "提前缓存后续 $it 页" }.toTypedArray()
-            val cur = counts.indexOf(app.prefs.pagePrefetchCount).coerceAtLeast(0)
-            MaterialAlertDialogBuilder(this)
-                .setTitle("后续页预加载缓存")
-                .setSingleChoiceItems(labels, cur) { dialog, which ->
-                    app.prefs.pagePrefetchCount = counts[which]
-                    syncReaderSettingsPanelState()
-                    preloadAdjacent(currentSlotIndex)
-                    dialog.dismiss()
-                }
-                .setNegativeButton("取消", null)
-                .show()
+        val selectPrefetch: (Int) -> Unit = { count ->
+            app.prefs.pagePrefetchCount = count
+            syncReaderSettingsPanelState()
+            preloadAdjacent(currentSlotIndex)
         }
+        binding.btnPrefetch0.setOnClickListener { selectPrefetch(0) }
+        binding.btnPrefetch2.setOnClickListener { selectPrefetch(2) }
+        binding.btnPrefetch4.setOnClickListener { selectPrefetch(4) }
+        binding.btnPrefetch6.setOnClickListener { selectPrefetch(6) }
+        binding.btnPrefetch8.setOnClickListener { selectPrefetch(8) }
 
         val selectSpreadOdd: (Boolean) -> Unit = { firstSingle ->
             if (this::readerConfig.isInitialized && readerConfig.firstPageSingle != firstSingle) {
@@ -1441,17 +1610,17 @@ class ComicReaderActivity : AppCompatActivity() {
         binding.btnBrightnessAuto.setBackgroundResource(
             if (isAuto) R.drawable.bg_reader_seg_selected else R.drawable.bg_reader_seg_unselected
         )
-        binding.btnBrightnessAuto.setTextColor(if (isAuto) 0xFF3898FF.toInt() else 0xFFB8C0D0.toInt())
+        binding.btnBrightnessAuto.setTextColor(if (isAuto) 0xFF7DCEFF.toInt() else 0xFFCBD5E1.toInt())
     }
 
     private fun stylePill(tv: TextView, selected: Boolean) {
         tv.setBackgroundResource(if (selected) R.drawable.bg_reader_seg_selected else R.drawable.bg_reader_seg_unselected)
-        tv.setTextColor(if (selected) 0xFF3898FF.toInt() else 0xFFB8C0D0.toInt())
+        tv.setTextColor(if (selected) 0xFF7DCEFF.toInt() else 0xFFCBD5E1.toInt())
     }
 
     private fun styleModeCard(container: View, icon: ImageView, label: TextView, selected: Boolean) {
         container.setBackgroundResource(if (selected) R.drawable.bg_reader_seg_selected else R.drawable.bg_reader_seg_unselected)
-        val tint = if (selected) 0xFF3898FF.toInt() else 0xFFB8C0D0.toInt()
+        val tint = if (selected) 0xFF7DCEFF.toInt() else 0xFFCBD5E1.toInt()
         icon.setColorFilter(tint)
         label.setTextColor(tint)
     }
@@ -1487,9 +1656,21 @@ class ComicReaderActivity : AppCompatActivity() {
         stylePill(binding.btnPageDouble, readerConfig.doublePageMode == DoublePageMode.MERGE)
         stylePill(binding.btnPageSplit, readerConfig.doublePageMode == DoublePageMode.SPLIT)
         stylePill(binding.btnPageAuto, readerConfig.doublePageMode == DoublePageMode.AUTO_LANDSCAPE)
-        binding.btnPageAnimPicker.text = "${pageTurnAnimLabel(app.prefs.pageTurnAnimation)} ▾"
+
+        val anim = app.prefs.pageTurnAnimation
+        stylePill(binding.btnAnimNone, anim == "none")
+        stylePill(binding.btnAnimFade, anim == "fade")
+        stylePill(binding.btnAnimSlide, anim == "slide")
+        stylePill(binding.btnAnimCover, anim == "cover")
+        stylePill(binding.btnAnimCurl, anim == "curl")
+        stylePill(binding.btnAnimDepth, anim == "depth")
+
         val prefCount = app.prefs.pagePrefetchCount
-        binding.btnPrefetchPicker.text = if (prefCount == 0) "预加载 关闭 ▾" else "预加载 ${prefCount}页 ▾"
+        stylePill(binding.btnPrefetch0, prefCount == 0)
+        stylePill(binding.btnPrefetch2, prefCount == 2)
+        stylePill(binding.btnPrefetch4, prefCount == 4)
+        stylePill(binding.btnPrefetch6, prefCount == 6)
+        stylePill(binding.btnPrefetch8, prefCount == 8)
 
         stylePill(binding.btnSpreadOdd, readerConfig.firstPageSingle)
         stylePill(binding.btnSpreadEven, !readerConfig.firstPageSingle)
@@ -1498,6 +1679,28 @@ class ComicReaderActivity : AppCompatActivity() {
         stylePill(binding.btnBgDarkGray, readerConfig.bgColor == ReaderBgColor.DARK_GRAY)
         stylePill(binding.btnBgLightGray, readerConfig.bgColor == ReaderBgColor.LIGHT_GRAY)
         stylePill(binding.btnBgWhite, readerConfig.bgColor == ReaderBgColor.WHITE)
+
+        binding.swSpreadGap.setOnCheckedChangeListener(null)
+        binding.swSpreadGap.isChecked = app.prefs.spreadGap
+        binding.swSpreadGap.setOnCheckedChangeListener { _, isChecked ->
+            app.prefs.spreadGap = isChecked
+            bitmapCache.evictAll()
+            rebuildSlotsAndRender(getCurrentRawPage())
+        }
+
+        binding.swSplitAllPages.setOnCheckedChangeListener(null)
+        binding.swSplitAllPages.isChecked = app.prefs.splitAllPages
+        binding.swSplitAllPages.setOnCheckedChangeListener { _, isChecked ->
+            app.prefs.splitAllPages = isChecked
+            bitmapCache.evictAll()
+            rebuildSlotsAndRender(getCurrentRawPage())
+        }
+
+        binding.swWheelPageTurn.setOnCheckedChangeListener(null)
+        binding.swWheelPageTurn.isChecked = app.prefs.wheelPageTurn
+        binding.swWheelPageTurn.setOnCheckedChangeListener { _, isChecked ->
+            app.prefs.wheelPageTurn = isChecked
+        }
 
         binding.swDoubleTapZoom.setOnCheckedChangeListener(null)
         binding.swDoubleTapZoom.isChecked = app.prefs.allowDoubleTapZoom
@@ -1527,6 +1730,8 @@ class ComicReaderActivity : AppCompatActivity() {
         private val isVertical: Boolean
     ) : RecyclerView.Adapter<PageSlotAdapter.PageVH>() {
 
+        private val verticalPlaceholderHeight = (resources.displayMetrics.widthPixels * 1.35f).toInt().coerceAtLeast(480)
+
         override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): PageVH {
             val view = ZoomableImageView(parent.context).apply {
                 verticalFitWidthMode = isVertical
@@ -1543,21 +1748,43 @@ class ComicReaderActivity : AppCompatActivity() {
 
         override fun getItemCount(): Int = slots.size
 
+        override fun onViewRecycled(holder: PageVH) {
+            super.onViewRecycled(holder)
+            pageBindJobs.remove(holder.imageView)?.cancel()
+        }
+
         override fun onBindViewHolder(holder: PageVH, position: Int) {
             val view = holder.imageView
+            pageBindJobs.remove(view)?.cancel()
             view.tag = position
             view.doubleTapZoomEnabled = app.prefs.allowDoubleTapZoom
-            view.setImageDrawable(null)
             view.onSingleTapAt = { rx, ry -> handleTapAt(rx, ry) }
             if (isVertical) {
                 view.adjustViewBounds = true
                 view.scaleType = ImageView.ScaleType.FIT_CENTER
             }
+
+            // Fast synchronous path from memory cache -> zero layout collapse & butter-smooth vertical scroll!
+            val translated = if (translationEnabled) translatedPages.get(position)?.image else null
+            val cached = translated ?: bitmapCache.get(position)
+            if (cached != null && !cached.isRecycled) {
+                if (isVertical) view.minimumHeight = 0
+                view.setImageBitmap(cached)
+                if (!isVertical) view.resetZoom()
+                if (translationEnabled && translated == null) {
+                    translateVisiblePage(view, cached, position)
+                }
+                return
+            }
+
+            if (isVertical) view.minimumHeight = verticalPlaceholderHeight
+            view.setImageDrawable(null)
             val source = pageSource
-            lifecycleScope.launch {
+            pageBindJobs[view] = lifecycleScope.launch {
                 val bmp = withContext(Dispatchers.IO) { renderSlotBitmap(position) }
                 if (view.tag != position || source !== pageSource) return@launch
                 if (bmp != null) {
+                    if (isVertical) view.minimumHeight = 0
                     view.setImageBitmap(bmp)
                     translateVisiblePage(view, bmp, position)
                     if (!isVertical) view.resetZoom()

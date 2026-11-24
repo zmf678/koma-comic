@@ -10,6 +10,7 @@ import android.graphics.Color
 import android.graphics.ColorFilter
 import android.graphics.LinearGradient
 import android.graphics.Matrix
+import android.graphics.Outline
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.PixelFormat
@@ -20,12 +21,17 @@ import android.graphics.RuntimeShader
 import android.graphics.Shader
 import android.graphics.drawable.Drawable
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.os.SystemClock
+import android.util.LruCache
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewTreeObserver
 import androidx.annotation.RequiresApi
+import androidx.recyclerview.widget.RecyclerView
 import com.arkreader.comic.R
+import java.util.concurrent.Executors
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
@@ -43,12 +49,13 @@ internal enum class LiquidGlassPreset {
 }
 
 /**
- * Optical Liquid Glass drawable implementing the WWDC25 multi-layer glass model:
+ * Optical Liquid Glass drawable synchronized with Windows LiquidGlass.cs / LiquidGlass.hlsl:
  * - Edge-only rounded-rectangle SDF optical refraction (center stays undistorted)
- * - Subtle bevel chromatic dispersion (API 33+ AGSL GPU RuntimeShader)
- * - Downsampled isotropic frosted blur (for panels/docks) vs. crystal-clear lens (for floating orbs/buttons)
- * - Dual-angle opposing Fresnel specular rim + top caustic sheen + inner depth shadow
+ * - Subtle bevel chromatic dispersion (API 33+ AGSL GPU RuntimeShader with density-scaled rim)
+ * - Downsampled frosted blur (for panels/docks) vs. crystal-clear lens (for floating orbs/buttons)
+ * - Dual-angle opposing Fresnel specular rim + per-preset top caustic sheen + inner depth shadow
  * - Hardware-accelerated Canvas.drawBitmapMesh SDF refraction fallback for API 28-32
+ * - Proper getOutline() for real rounded elevation shadows & outline clipping
  */
 internal class LiquidGlassDrawable(
     private val density: Float,
@@ -69,13 +76,13 @@ internal class LiquidGlassDrawable(
     private val sheenPaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val innerShadowPaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val rimPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
+    private val outerLipPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
     private val fallbackBgPaint = Paint(Paint.ANTI_ALIAS_FLAG)
 
     private var lightU = 0.18f
     private var lightV = 0.12f
     private var selectedState = false
 
-    // Precomputed SDF displacement mesh for API 28-32 hardware-accelerated Canvas.drawBitmapMesh
     private var meshWidth = -1
     private var meshHeight = -1
     private var meshVerts: FloatArray? = null
@@ -121,17 +128,28 @@ internal class LiquidGlassDrawable(
         setLightPosition(0.18f, 0.12f)
     }
 
-    fun updateBackdrop(bitmap: Bitmap?) {
+    fun updateBackdrop(bitmap: Bitmap?, invalidate: Boolean = true) {
         if (bitmap == null || bitmap.isRecycled || bitmap.width < 2 || bitmap.height < 2) {
             backdropBitmap = null
             backdropShader = null
+            if (invalidate) invalidateSelf()
             return
         }
         if (backdropBitmap !== bitmap) {
             backdropBitmap = bitmap
             backdropShader = BitmapShader(bitmap, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP)
         }
-        invalidateSelf()
+        if (invalidate) invalidateSelf()
+    }
+
+    override fun getOutline(outline: Outline) {
+        if (bounds.isEmpty) {
+            outline.setEmpty()
+            return
+        }
+        val radius = resolvedCornerRadius(bounds.width().toFloat(), bounds.height().toFloat())
+        outline.setRoundRect(bounds, radius)
+        outline.alpha = 1f
     }
 
     override fun onBoundsChange(bounds: Rect) {
@@ -163,7 +181,6 @@ internal class LiquidGlassDrawable(
             return
         }
 
-        // Clean optical fallback before first backdrop capture
         drawStaticOpticalGlass(canvas, radius)
     }
 
@@ -185,6 +202,7 @@ internal class LiquidGlassDrawable(
 
         val spec = tuningFor(preset, effectiveDark, selectedState, density)
         shader.setFloatUniform("resolution", w, h)
+        shader.setFloatUniform("densityScale", density)
         shader.setFloatUniform("cornerRadius", radius)
         shader.setFloatUniform("bevelWidth", bevel)
         shader.setFloatUniform("refractionStrength", spec.refractionPx)
@@ -192,6 +210,7 @@ internal class LiquidGlassDrawable(
         shader.setFloatUniform("opticalBoost", spec.opticalBoost)
         shader.setFloatUniform("lightPos", lightU, lightV)
         shader.setFloatUniform("rimIntensity", spec.rimIntensity)
+        shader.setFloatUniform("sheenStrength", spec.sheenStrength)
         shader.setFloatUniform("innerShadowOpacity", spec.innerShadowOpacity)
         shader.setFloatUniform("outerDarkLipOpacity", spec.outerDarkLipOpacity)
         shader.setColorUniform("tintColor", spec.tintColor)
@@ -229,7 +248,6 @@ internal class LiquidGlassDrawable(
         canvas.drawBitmapMesh(bmp, MESH_COLS, MESH_ROWS, verts, 0, null, 0, null)
         canvas.restoreToCount(save)
 
-        // Material tint + inner depth + caustic sheen + dual-angle specular rim
         drawOpticalOverlays(canvas, radius, spec)
     }
 
@@ -247,20 +265,36 @@ internal class LiquidGlassDrawable(
         tintPaint.color = spec.tintColor
         canvas.drawRoundRect(boundsF, radius, radius, tintPaint)
 
-        // Top caustic sheen + bottom inner depth shadow
         canvas.drawRoundRect(boundsF, radius, radius, innerShadowPaint)
         canvas.drawRoundRect(boundsF, radius, radius, sheenPaint)
 
+        // Subtle outer grazing dark lip (visible on light mode for glass edge separation)
+        if (spec.outerDarkLipOpacity > 0.01f) {
+            val lipInset = max(0.5f * density, 0.75f)
+            outerLipPaint.strokeWidth = max(1.0f * density, 1f)
+            outerLipPaint.color = Color.argb(
+                (255f * spec.outerDarkLipOpacity * 0.72f).toInt().coerceIn(0, 96),
+                12, 24, 48
+            )
+            val lipRect = RectF(
+                boundsF.left + lipInset,
+                boundsF.top + lipInset,
+                boundsF.right - lipInset,
+                boundsF.bottom - lipInset
+            )
+            canvas.drawRoundRect(lipRect, max(0f, radius - lipInset), max(0f, radius - lipInset), outerLipPaint)
+        }
+
         // Crisp dual-angle Fresnel rim stroke
-        val inset = max(0.75f * density, 1f)
-        rimPaint.strokeWidth = inset * 1.25f
+        val inset = max(0.85f * density, 1f)
+        rimPaint.strokeWidth = inset * 1.3f
         val rimRect = RectF(
-            boundsF.left + inset * 0.6f,
-            boundsF.top + inset * 0.6f,
-            boundsF.right - inset * 0.6f,
-            boundsF.bottom - inset * 0.6f
+            boundsF.left + inset * 0.65f,
+            boundsF.top + inset * 0.65f,
+            boundsF.right - inset * 0.65f,
+            boundsF.bottom - inset * 0.65f
         )
-        canvas.drawRoundRect(rimRect, max(0f, radius - inset * 0.5f), max(0f, radius - inset * 0.5f), rimPaint)
+        canvas.drawRoundRect(rimRect, max(0f, radius - inset * 0.55f), max(0f, radius - inset * 0.55f), rimPaint)
     }
 
     private fun rebuildFallbackPaints() {
@@ -276,7 +310,7 @@ internal class LiquidGlassDrawable(
                 selectedState -> intArrayOf(0xECE0F1FF.toInt(), 0xD8C2E0FF.toInt())
                 preset == LiquidGlassPreset.CLEAR_LENS -> intArrayOf(0xB84673A8.toInt(), 0xA81D3354.toInt())
                 d -> intArrayOf(0xCC1E2C45.toInt(), 0xBA111A2C.toInt())
-                else -> intArrayOf(0xE0FFFFFF.toInt(), 0xC8ECF4FF.toInt())
+                else -> intArrayOf(0xE4FFFFFF.toInt(), 0xC8ECF4FF.toInt())
             },
             null,
             Shader.TileMode.CLAMP
@@ -285,7 +319,7 @@ internal class LiquidGlassDrawable(
         sheenPaint.shader = LinearGradient(
             boundsF.left, boundsF.top, boundsF.left, boundsF.top + h * 0.58f,
             intArrayOf(
-                Color.argb((Color.alpha(spec.specularColor) * (if (d) 0.20f else 0.42f)).toInt(), 255, 255, 255),
+                Color.argb((Color.alpha(spec.specularColor) * spec.sheenStrength).toInt().coerceIn(0, 220), 255, 255, 255),
                 0x00FFFFFF
             ),
             null,
@@ -306,7 +340,7 @@ internal class LiquidGlassDrawable(
             boundsF.left, boundsF.top, boundsF.left + w, boundsF.top + h,
             intArrayOf(
                 spec.specularColor,
-                Color.argb(if (d) 36 else 110, 220, 234, 255),
+                Color.argb(if (d) 40 else 124, 220, 234, 255),
                 spec.secondaryRimColor
             ),
             floatArrayOf(0f, 0.48f, 1f),
@@ -346,6 +380,7 @@ internal class LiquidGlassDrawable(
         val chromaticPx: Float,
         val opticalBoost: Float,
         val rimIntensity: Float,
+        val sheenStrength: Float,
         val innerShadowOpacity: Float,
         val outerDarkLipOpacity: Float,
         val tintColor: Int,
@@ -365,10 +400,11 @@ internal class LiquidGlassDrawable(
         ): GlassTuning {
             if (selected) {
                 return GlassTuning(
-                    refractionPx = 14f * density,
-                    chromaticPx = 2.4f * density,
+                    refractionPx = 16f * density,
+                    chromaticPx = 2.6f * density,
                     opticalBoost = 1.16f,
-                    rimIntensity = 1.28f,
+                    rimIntensity = 1.30f,
+                    sheenStrength = if (dark) 0.28f else 0.42f,
                     innerShadowOpacity = if (dark) 0.16f else 0.14f,
                     outerDarkLipOpacity = if (dark) 0.10f else 0.22f,
                     tintColor = if (dark) 0x783A9BFF else 0x86CBE8FF.toInt(),
@@ -378,10 +414,11 @@ internal class LiquidGlassDrawable(
             }
             return when (preset) {
                 LiquidGlassPreset.CLEAR_LENS -> GlassTuning(
-                    refractionPx = 22.0f * density,
-                    chromaticPx = 3.4f * density,
+                    refractionPx = 26.0f * density,
+                    chromaticPx = 3.8f * density,
                     opticalBoost = 1.24f,
-                    rimIntensity = 1.32f,
+                    rimIntensity = 1.34f,
+                    sheenStrength = 0.28f,
                     innerShadowOpacity = 0.24f,
                     outerDarkLipOpacity = 0.14f,
                     tintColor = 0x58182E52,
@@ -389,10 +426,11 @@ internal class LiquidGlassDrawable(
                     secondaryRimColor = 0xD676CCFF.toInt()
                 )
                 LiquidGlassPreset.READER_CAPSULE -> GlassTuning(
-                    refractionPx = 22.0f * density,
-                    chromaticPx = 3.0f * density,
+                    refractionPx = 26.0f * density,
+                    chromaticPx = 3.4f * density,
                     opticalBoost = 1.15f,
-                    rimIntensity = 1.24f,
+                    rimIntensity = 1.26f,
+                    sheenStrength = 0.24f,
                     innerShadowOpacity = 0.24f,
                     outerDarkLipOpacity = 0.12f,
                     tintColor = 0x760E1626,
@@ -400,10 +438,11 @@ internal class LiquidGlassDrawable(
                     secondaryRimColor = 0xB86EC2FF.toInt()
                 )
                 LiquidGlassPreset.READER_DRAWER -> GlassTuning(
-                    refractionPx = 16.0f * density,
-                    chromaticPx = 2.2f * density,
+                    refractionPx = 18.0f * density,
+                    chromaticPx = 2.4f * density,
                     opticalBoost = 1.00f,
-                    rimIntensity = 1.05f,
+                    rimIntensity = 1.08f,
+                    sheenStrength = 0.16f,
                     innerShadowOpacity = 0.18f,
                     outerDarkLipOpacity = 0.10f,
                     tintColor = 0xA60E1523.toInt(),
@@ -411,10 +450,11 @@ internal class LiquidGlassDrawable(
                     secondaryRimColor = 0x9870B8FF.toInt()
                 )
                 LiquidGlassPreset.FLOATING_DOCK -> GlassTuning(
-                    refractionPx = 24.0f * density,
-                    chromaticPx = 3.2f * density,
+                    refractionPx = 28.0f * density,
+                    chromaticPx = 3.6f * density,
                     opticalBoost = if (dark) 1.16f else 1.10f,
-                    rimIntensity = if (dark) 1.26f else 1.35f,
+                    rimIntensity = if (dark) 1.28f else 1.36f,
+                    sheenStrength = if (dark) 0.24f else 0.42f,
                     innerShadowOpacity = if (dark) 0.22f else 0.18f,
                     outerDarkLipOpacity = if (dark) 0.10f else 0.26f,
                     tintColor = if (dark) 0x58121E36 else 0x3EF2F9FF,
@@ -422,10 +462,11 @@ internal class LiquidGlassDrawable(
                     secondaryRimColor = if (dark) 0xBC6CC0FF.toInt() else 0xD660A6FF.toInt()
                 )
                 LiquidGlassPreset.SUBTLE_PILL -> GlassTuning(
-                    refractionPx = 18.0f * density,
-                    chromaticPx = 2.6f * density,
+                    refractionPx = 22.0f * density,
+                    chromaticPx = 3.0f * density,
                     opticalBoost = 1.12f,
-                    rimIntensity = if (dark) 1.18f else 1.30f,
+                    rimIntensity = if (dark) 1.20f else 1.32f,
+                    sheenStrength = if (dark) 0.22f else 0.36f,
                     innerShadowOpacity = if (dark) 0.18f else 0.16f,
                     outerDarkLipOpacity = if (dark) 0.10f else 0.24f,
                     tintColor = if (dark) 0x62121C30 else 0x42F4FAFF,
@@ -433,10 +474,11 @@ internal class LiquidGlassDrawable(
                     secondaryRimColor = if (dark) 0xB072C2FF.toInt() else 0xCC66AAFF.toInt()
                 )
                 LiquidGlassPreset.FROSTED_BAR -> GlassTuning(
-                    refractionPx = 22.0f * density,
-                    chromaticPx = 3.0f * density,
+                    refractionPx = 26.0f * density,
+                    chromaticPx = 3.4f * density,
                     opticalBoost = if (dark) 1.14f else 1.08f,
-                    rimIntensity = if (dark) 1.22f else 1.32f,
+                    rimIntensity = if (dark) 1.24f else 1.34f,
+                    sheenStrength = if (dark) 0.22f else 0.38f,
                     innerShadowOpacity = if (dark) 0.20f else 0.17f,
                     outerDarkLipOpacity = if (dark) 0.10f else 0.25f,
                     tintColor = if (dark) 0x60121D32 else 0x44F4FAFF,
@@ -444,10 +486,11 @@ internal class LiquidGlassDrawable(
                     secondaryRimColor = if (dark) 0xB470C0FF.toInt() else 0xD062A8FF.toInt()
                 )
                 LiquidGlassPreset.CARD_CAPTION -> GlassTuning(
-                    refractionPx = 19.0f * density,
-                    chromaticPx = 2.8f * density,
+                    refractionPx = 22.0f * density,
+                    chromaticPx = 3.2f * density,
                     opticalBoost = if (dark) 1.14f else 1.06f,
-                    rimIntensity = if (dark) 1.24f else 1.32f,
+                    rimIntensity = if (dark) 1.26f else 1.34f,
+                    sheenStrength = if (dark) 0.24f else 0.38f,
                     innerShadowOpacity = if (dark) 0.22f else 0.16f,
                     outerDarkLipOpacity = if (dark) 0.12f else 0.24f,
                     tintColor = if (dark) 0x8E10192C.toInt() else 0x94F8FBFF.toInt(),
@@ -487,7 +530,7 @@ internal class LiquidGlassDrawable(
                     val sdf = roundedRectSdf(px, py, halfW, halfH, radius)
                     val distIn = max(-sdf, 0f)
                     val edgeT = (1f - distIn / max(bevel, 2f)).coerceIn(0f, 1f)
-                    val steep = edgeT.toDouble().pow(2.2).toFloat()
+                    val steep = edgeT.toDouble().pow(2.4).toFloat()
                     if (steep > 0.001f) {
                         val eps = 1.5f
                         val gx = roundedRectSdf(px + eps, py, halfW, halfH, radius) -
@@ -496,7 +539,6 @@ internal class LiquidGlassDrawable(
                             roundedRectSdf(px, py - eps, halfW, halfH, radius)
                         val len = sqrt(gx * gx + gy * gy)
                         if (len > 0.0001f) {
-                            // Push outer mesh vertices outward along normal so backdrop magnifies/wraps at edge
                             val disp = refractionPx * steep * 0.72f
                             verts[idx++] = x + (gx / len) * disp
                             verts[idx++] = y + (gy / len) * disp
@@ -513,10 +555,11 @@ internal class LiquidGlassDrawable(
             return verts
         }
 
-        // Exact AGSL translation of the WWDC25 / shuding-style roundedRectSDF Liquid Glass optical shader
+        // AGSL shader aligned with windows/LiquidGlass.hlsl (density-scaled rim & per-preset caustic sheen)
         private const val LIQUID_GLASS_AGSL = """
             uniform shader backdrop;
             uniform float2 resolution;
+            uniform float densityScale;
             uniform float cornerRadius;
             uniform float bevelWidth;
             uniform float refractionStrength;
@@ -524,6 +567,7 @@ internal class LiquidGlassDrawable(
             uniform float opticalBoost;
             uniform float2 lightPos;
             uniform float rimIntensity;
+            uniform float sheenStrength;
             uniform float innerShadowOpacity;
             uniform float outerDarkLipOpacity;
             layout(color) uniform half4 tintColor;
@@ -535,8 +579,7 @@ internal class LiquidGlassDrawable(
                 return min(max(q.x, q.y), 0.0) + length(max(q, 0.0)) - radius;
             }
 
-            float2 roundedRectNormal(float2 p, float2 halfSize, float radius) {
-                float eps = 1.0;
+            float2 roundedRectNormal(float2 p, float2 halfSize, float radius, float eps) {
                 float gx = roundedRectSDF(p + float2(eps, 0.0), halfSize, radius)
                          - roundedRectSDF(p - float2(eps, 0.0), halfSize, radius);
                 float gy = roundedRectSDF(p + float2(0.0, eps), halfSize, radius)
@@ -558,6 +601,7 @@ internal class LiquidGlassDrawable(
                 float2 halfSize = size * 0.5;
                 float radius = min(cornerRadius, min(halfSize.x, halfSize.y));
                 float bevel = max(bevelWidth, 2.0);
+                float dScale = max(densityScale, 1.0);
 
                 float2 p = fragCoord - halfSize;
                 float sdf = roundedRectSDF(p, halfSize, radius);
@@ -568,10 +612,10 @@ internal class LiquidGlassDrawable(
 
                 float distIn = max(-sdf, 0.0);
                 float edgeT = clamp(1.0 - distIn / bevel, 0.0, 1.0);
-                float meniscus = edgeT * edgeT * (3.0 - 2.0 * edgeT);
-                float steepCurve = pow(edgeT, 2.4);
+                float meniscus = edgeT * edgeT;
+                float steepCurve = edgeT * edgeT * edgeT;
 
-                float2 normal = roundedRectNormal(p, halfSize, radius);
+                float2 normal = roundedRectNormal(p, halfSize, radius, max(1.0, dScale * 0.85));
                 float2 refractPos = clamp(fragCoord - normal * (refractionStrength * steepCurve), float2(0.0), size);
                 float2 chromaOff = -normal * (chromaticPx * steepCurve);
 
@@ -585,11 +629,11 @@ internal class LiquidGlassDrawable(
 
                 float2 uv = fragCoord / size;
                 float outerRim = smoothstep(bevel * 0.36, 0.0, distIn);
-                float crispRim = smoothstep(2.2, 0.0, distIn);
+                float crispRim = smoothstep(2.08 * dScale, 0.0, distIn);
                 float depthShade = innerShadowOpacity * (uv.y * 0.52 + meniscus * 0.52) + outerDarkLipOpacity * crispRim;
                 glassRgb *= half(clamp(1.0 - depthShade, 0.0, 1.0));
 
-                float topSheen = pow(clamp(1.0 - uv.y * 1.9, 0.0, 1.0), 2.0) * (0.20 + 0.12 * (1.0 - edgeT));
+                float topSheen = pow(clamp(1.0 - uv.y * 1.9, 0.0, 1.0), 2.0) * (sheenStrength * (0.68 + 0.32 * (1.0 - edgeT)));
                 glassRgb += specularColor.rgb * half(topSheen * float(specularColor.a) * rimIntensity);
 
                 float2 lightDir = normalize((lightPos - 0.5) * size - p + float2(-0.001, -0.001));
@@ -612,8 +656,7 @@ internal class LiquidGlassDrawable(
 
 /**
  * Attaches live backdrop sampling + touch-reactive optical glint & elastic feedback to any View.
- * Captures the real underlying backdrop view into a reused offscreen Bitmap (downscaled + stack-blurred
- * for frosted presets; 1:1 sharp for CLEAR_LENS), with re-entrancy guards and frame throttling.
+ * Uses fingerprint change detection & pooled blur buffers to avoid idle CPU redraw loops.
  */
 internal class LiquidGlassBinder(
     private val targetView: View,
@@ -622,20 +665,29 @@ internal class LiquidGlassBinder(
     private val preset: LiquidGlassPreset,
     private val fallbackBaseColor: Int,
     private val interactiveElastic: Boolean = false
-) : ViewTreeObserver.OnPreDrawListener, View.OnAttachStateChangeListener {
+) : ViewTreeObserver.OnPreDrawListener, View.OnAttachStateChangeListener, View.OnLayoutChangeListener {
 
     private var captureBitmap: Bitmap? = null
     private var captureCanvas: Canvas? = null
+    private var blurPixels: IntArray? = null
+    private var blurTmp: IntArray? = null
     private val targetLoc = IntArray(2)
     private val backdropLoc = IntArray(2)
     private var lastCaptureMs = 0L
+    private var lastFingerprint = 0L
+    private var lastDx = Float.NaN
+    private var lastDy = Float.NaN
+    private var lastW = -1
+    private var lastH = -1
     private var isSampling = false
     private var attached = false
+    private var dirty = true
 
     fun attach() {
         if (attached) return
         attached = true
         targetView.addOnAttachStateChangeListener(this)
+        targetView.addOnLayoutChangeListener(this)
         if (targetView.isAttachedToWindow) {
             targetView.viewTreeObserver.addOnPreDrawListener(this)
         }
@@ -652,9 +704,26 @@ internal class LiquidGlassBinder(
             targetView.viewTreeObserver.removeOnPreDrawListener(this)
         }
         targetView.removeOnAttachStateChangeListener(this)
+        targetView.removeOnLayoutChangeListener(this)
+        drawable.updateBackdrop(null, invalidate = false)
         captureBitmap?.recycle()
         captureBitmap = null
         captureCanvas = null
+        blurPixels = null
+        blurTmp = null
+    }
+
+    fun markDirty() {
+        dirty = true
+    }
+
+    override fun onLayoutChange(
+        v: View?, left: Int, top: Int, right: Int, bottom: Int,
+        oldLeft: Int, oldTop: Int, oldRight: Int, oldBottom: Int
+    ) {
+        if (left != oldLeft || top != oldTop || right != oldRight || bottom != oldBottom) {
+            dirty = true
+        }
     }
 
     override fun onViewAttachedToWindow(v: View) {
@@ -662,6 +731,7 @@ internal class LiquidGlassBinder(
             v.viewTreeObserver.removeOnPreDrawListener(this)
             v.viewTreeObserver.addOnPreDrawListener(this)
         }
+        dirty = true
         captureNow(force = true)
     }
 
@@ -683,32 +753,44 @@ internal class LiquidGlassBinder(
         val h = targetView.height
         if (w < 4 || h < 4 || backdropView.width < 4 || backdropView.height < 4) return
 
+        targetView.getLocationInWindow(targetLoc)
+        backdropView.getLocationInWindow(backdropLoc)
+        val dx = (targetLoc[0] - backdropLoc[0]).toFloat()
+        val dy = (targetLoc[1] - backdropLoc[1]).toFloat()
+        val geometryChanged = dx != lastDx || dy != lastDy || w != lastW || h != lastH
+
         val now = SystemClock.uptimeMillis()
-        val minInterval = if (preset == LiquidGlassPreset.CLEAR_LENS) 24L else 33L
-        if (!force && now - lastCaptureMs < minInterval) return
+        val minInterval = if (preset == LiquidGlassPreset.CLEAR_LENS) 32L else 48L
+        if (!force && !dirty && !geometryChanged) {
+            // Never stall scrolling with periodic onPreDraw captures; refresh explicitly on idle/page change
+            return
+        } else if (!force && now - lastCaptureMs < minInterval) {
+            return
+        }
         lastCaptureMs = now
+        dirty = false
+        lastDx = dx
+        lastDy = dy
+        lastW = w
+        lastH = h
 
         val scale = when (preset) {
             LiquidGlassPreset.CLEAR_LENS -> 0.85f
             LiquidGlassPreset.SUBTLE_PILL -> 0.45f
-            else -> 0.25f
+            else -> 0.28f
         }
         val bw = (w * scale).toInt().coerceIn(8, 360)
         val bh = (h * scale).toInt().coerceIn(8, 360)
 
         var bmp = captureBitmap
+        var oldToRecycle: Bitmap? = null
         if (bmp == null || bmp.isRecycled || bmp.width != bw || bmp.height != bh) {
-            bmp?.recycle()
+            oldToRecycle = bmp
             bmp = Bitmap.createBitmap(bw, bh, Bitmap.Config.ARGB_8888)
             captureBitmap = bmp
             captureCanvas = Canvas(bmp)
         }
         val canvas = captureCanvas ?: return
-
-        targetView.getLocationInWindow(targetLoc)
-        backdropView.getLocationInWindow(backdropLoc)
-        val dx = (targetLoc[0] - backdropLoc[0]).toFloat()
-        val dy = (targetLoc[1] - backdropLoc[1]).toFloat()
 
         isSampling = true
         val prevVisibility = targetView.visibility
@@ -722,25 +804,55 @@ internal class LiquidGlassBinder(
             backdropView.draw(canvas)
             canvas.restoreToCount(save)
 
+            val fp = computeSampleFingerprint(bmp)
+            if (!force && !geometryChanged && oldToRecycle == null && fp == lastFingerprint) {
+                return
+            }
+            lastFingerprint = fp
+
             val blurRadius = when (preset) {
                 LiquidGlassPreset.CLEAR_LENS -> 0
-                LiquidGlassPreset.SUBTLE_PILL -> 3
-                LiquidGlassPreset.FLOATING_DOCK -> 5
-                LiquidGlassPreset.FROSTED_BAR -> 5
-                LiquidGlassPreset.READER_CAPSULE -> 6
-                LiquidGlassPreset.READER_DRAWER -> 8
-                LiquidGlassPreset.CARD_CAPTION -> 4
+                LiquidGlassPreset.SUBTLE_PILL -> 2
+                LiquidGlassPreset.FLOATING_DOCK -> 4
+                LiquidGlassPreset.FROSTED_BAR -> 4
+                LiquidGlassPreset.READER_CAPSULE -> 5
+                LiquidGlassPreset.READER_DRAWER -> 7
+                LiquidGlassPreset.CARD_CAPTION -> 3
             }
             if (blurRadius > 0) {
-                fastBoxBlur(bmp, blurRadius)
+                val needed = bw * bh
+                var pBuf = blurPixels
+                var tBuf = blurTmp
+                if (pBuf == null || pBuf.size < needed) {
+                    pBuf = IntArray(needed)
+                    tBuf = IntArray(needed)
+                    blurPixels = pBuf
+                    blurTmp = tBuf
+                }
+                fastBoxBlur(bmp, blurRadius, pBuf, tBuf!!)
             }
-            drawable.updateBackdrop(bmp)
+            drawable.updateBackdrop(bmp, invalidate = force || geometryChanged || oldToRecycle != null)
+            oldToRecycle?.recycle()
         } catch (_: Throwable) {
             // Keep previous frame gracefully on transient hardware canvas states
         } finally {
             if (sameSubtree) targetView.visibility = prevVisibility
             isSampling = false
         }
+    }
+
+    private fun computeSampleFingerprint(bmp: Bitmap): Long {
+        val w = bmp.width
+        val h = bmp.height
+        var hash = 1125899906842597L
+        for (ry in 0..3) {
+            val y = ((ry + 0.5f) * h / 4f).toInt().coerceIn(0, h - 1)
+            for (rx in 0..3) {
+                val x = ((rx + 0.5f) * w / 4f).toInt().coerceIn(0, w - 1)
+                hash = hash * 31L + bmp.getPixel(x, y).toLong()
+            }
+        }
+        return hash
     }
 
     @SuppressLint("ClickableViewAccessibility")
@@ -785,21 +897,21 @@ internal class LiquidGlassBinder(
     }
 
     companion object {
-        internal fun blurBitmapInPlace(bitmap: Bitmap, radius: Int) = fastBoxBlur(bitmap, radius)
+        internal fun blurBitmapInPlace(bitmap: Bitmap, radius: Int) {
+            val size = bitmap.width * bitmap.height
+            if (size < 9 || radius < 1) return
+            fastBoxBlur(bitmap, radius, IntArray(size), IntArray(size))
+        }
 
-        // Zero-allocation separable 2-pass box blur on compact downsampled backdrop bitmap
-        private fun fastBoxBlur(bitmap: Bitmap, radius: Int) {
+        private fun fastBoxBlur(bitmap: Bitmap, radius: Int, pixels: IntArray, tmp: IntArray) {
             val w = bitmap.width
             val h = bitmap.height
             if (w < 3 || h < 3 || radius < 1) return
-            val pixels = IntArray(w * h)
-            val tmp = IntArray(w * h)
             bitmap.getPixels(pixels, 0, w, 0, 0, w, h)
             val r = radius.coerceIn(1, min(w, h) / 2)
             val div = r * 2 + 1
 
             repeat(2) {
-                // Horizontal pass
                 for (y in 0 until h) {
                     val row = y * w
                     var rSum = 0
@@ -820,7 +932,6 @@ internal class LiquidGlassBinder(
                         bSum += (newC and 0xFF) - (oldC and 0xFF)
                     }
                 }
-                // Vertical pass
                 for (x in 0 until w) {
                     var rSum = 0
                     var gSum = 0
@@ -846,16 +957,21 @@ internal class LiquidGlassBinder(
     }
 }
 
+/**
+ * 4-orb ambient gradient backdrop synchronized with Windows BuildAmbientOrbLayer().
+ */
 internal class AmbientGlassCanvasDrawable(private val dark: Boolean) : Drawable() {
     private val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val orb1Paint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val orb2Paint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val orb3Paint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val orb4Paint = Paint(Paint.ANTI_ALIAS_FLAG)
 
     override fun onBoundsChange(bounds: Rect) {
         super.onBoundsChange(bounds)
         val w = max(bounds.width().toFloat(), 1f)
         val h = max(bounds.height().toFloat(), 1f)
+        val span = max(w, h)
         bgPaint.shader = LinearGradient(
             0f, 0f, w, h,
             if (dark) intArrayOf(0xFF0A0F1C.toInt(), 0xFF0F172A.toInt(), 0xFF131B30.toInt())
@@ -863,22 +979,32 @@ internal class AmbientGlassCanvasDrawable(private val dark: Boolean) : Drawable(
             floatArrayOf(0f, 0.5f, 1f),
             Shader.TileMode.CLAMP
         )
+        // Orb 1: Top-left blue (#943A9EFF)
         orb1Paint.shader = RadialGradient(
-            w * 0.10f, h * 0.12f, max(w, h) * 0.48f,
-            if (dark) 0x723A9EFF else 0x6C3A9EFF,
+            w * 0.10f, h * 0.12f, span * 0.48f,
+            if (dark) 0x823A9EFF.toInt() else 0x743A9EFF,
             0x003A9EFF,
             Shader.TileMode.CLAMP
         )
+        // Orb 2: Center-left indigo/purple (#888A6EFF)
         orb2Paint.shader = RadialGradient(
-            w * 0.12f, h * 0.68f, max(w, h) * 0.44f,
-            if (dark) 0x648A6EFF else 0x5E8A6EFF,
+            w * 0.14f, h * 0.62f, span * 0.44f,
+            if (dark) 0x768A6EFF else 0x6A8A6EFF,
             0x008A6EFF,
             Shader.TileMode.CLAMP
         )
+        // Orb 3: Top-right cyan (#8022C5F6)
         orb3Paint.shader = RadialGradient(
-            w * 0.88f, h * 0.16f, max(w, h) * 0.50f,
-            if (dark) 0x5E22C5F6 else 0x5822C5F6,
+            w * 0.88f, h * 0.14f, span * 0.50f,
+            if (dark) 0x7022C5F6 else 0x6422C5F6,
             0x0022C5F6,
+            Shader.TileMode.CLAMP
+        )
+        // Orb 4: Bottom-right violet (#6CC484FC)
+        orb4Paint.shader = RadialGradient(
+            w * 0.86f, h * 0.86f, span * 0.46f,
+            if (dark) 0x60C484FC else 0x56C484FC,
+            0x00C484FC,
             Shader.TileMode.CLAMP
         )
     }
@@ -888,12 +1014,151 @@ internal class AmbientGlassCanvasDrawable(private val dark: Boolean) : Drawable(
         canvas.drawRect(bounds, orb1Paint)
         canvas.drawRect(bounds, orb2Paint)
         canvas.drawRect(bounds, orb3Paint)
+        canvas.drawRect(bounds, orb4Paint)
     }
 
     override fun setAlpha(alpha: Int) { bgPaint.alpha = alpha }
     override fun setColorFilter(colorFilter: ColorFilter?) { bgPaint.colorFilter = colorFilter }
     @Deprecated("Android drawable compatibility")
     override fun getOpacity(): Int = PixelFormat.OPAQUE
+}
+
+/**
+ * Floating Liquid Glass vertical scrollbar thumb overlay for RecyclerViews,
+ * synchronized with Windows' floating glass ScrollBar (v1.5.5+).
+ */
+internal class LiquidGlassScrollbarDecoration(
+    private val recyclerView: RecyclerView
+) : RecyclerView.ItemDecoration() {
+
+    private val density = recyclerView.resources.displayMetrics.density
+    private val thumbPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val rimPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
+    private val glossPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val thumbRect = RectF()
+    private val glossRect = RectF()
+    private var alphaProgress = 0f
+    private var scrolling = false
+    private var fadeAnim: ValueAnimator? = null
+
+    private val hideRunnable = Runnable {
+        scrolling = false
+        animateAlphaTo(0f, 360L)
+    }
+
+    private val scrollListener = object : RecyclerView.OnScrollListener() {
+        override fun onScrolled(rv: RecyclerView, dx: Int, dy: Int) {
+            if (dy != 0) showThumb()
+        }
+
+        override fun onScrollStateChanged(rv: RecyclerView, newState: Int) {
+            if (newState != RecyclerView.SCROLL_STATE_IDLE) {
+                showThumb()
+            } else {
+                scheduleHide()
+            }
+        }
+    }
+
+    init {
+        recyclerView.addOnScrollListener(scrollListener)
+    }
+
+    fun detach() {
+        recyclerView.removeCallbacks(hideRunnable)
+        fadeAnim?.cancel()
+        recyclerView.removeOnScrollListener(scrollListener)
+        recyclerView.removeItemDecoration(this)
+    }
+
+    private fun showThumb() {
+        recyclerView.removeCallbacks(hideRunnable)
+        scrolling = true
+        if (alphaProgress < 0.99f) {
+            animateAlphaTo(1f, 120L)
+        } else {
+            recyclerView.invalidate()
+        }
+        scheduleHide()
+    }
+
+    private fun scheduleHide() {
+        recyclerView.removeCallbacks(hideRunnable)
+        recyclerView.postDelayed(hideRunnable, 1100L)
+    }
+
+    private fun animateAlphaTo(target: Float, duration: Long) {
+        fadeAnim?.cancel()
+        fadeAnim = ValueAnimator.ofFloat(alphaProgress, target).apply {
+            this.duration = duration
+            addUpdateListener {
+                alphaProgress = it.animatedValue as Float
+                recyclerView.invalidate()
+            }
+            start()
+        }
+    }
+
+    override fun onDrawOver(canvas: Canvas, parent: RecyclerView, state: RecyclerView.State) {
+        if (alphaProgress <= 0.01f) return
+        val range = parent.computeVerticalScrollRange()
+        val extent = parent.computeVerticalScrollExtent()
+        if (range <= extent || extent <= 0) return
+        val offset = parent.computeVerticalScrollOffset()
+
+        val dark = (parent.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
+        val trackTop = parent.paddingTop + 8f * density
+        val trackBottom = (parent.height - parent.paddingBottom - 8f * density).coerceAtLeast(trackTop + 48f * density)
+        val trackH = trackBottom - trackTop
+        val minThumbH = 38f * density
+        val thumbH = max(minThumbH, trackH * (extent.toFloat() / range.toFloat())).coerceAtMost(trackH * 0.72f)
+        val scrollable = (range - extent).coerceAtLeast(1)
+        val ratio = (offset.toFloat() / scrollable.toFloat()).coerceIn(0f, 1f)
+        val top = trackTop + ratio * (trackH - thumbH)
+
+        val thumbW = (if (scrolling) 8.5f else 6.5f) * density
+        val right = parent.width - 5f * density
+        val left = right - thumbW
+        val radius = thumbW * 0.5f
+        thumbRect.set(left, top, right, top + thumbH)
+
+        val a = (alphaProgress * 255f).toInt().coerceIn(0, 255)
+        thumbPaint.shader = LinearGradient(
+            left, top, right, top + thumbH,
+            if (dark) intArrayOf(0xB856B4FF.toInt(), 0x942D7AE6.toInt())
+            else intArrayOf(0xC83A9BFF.toInt(), 0xA81D72DA.toInt()),
+            null,
+            Shader.TileMode.CLAMP
+        )
+        thumbPaint.alpha = a
+        canvas.drawRoundRect(thumbRect, radius, radius, thumbPaint)
+
+        // Top gloss highlight matching Windows Liquid Glass scrollbar
+        val glossH = min(16f * density, thumbH * 0.35f)
+        glossRect.set(left + density * 0.8f, top + density * 0.8f, right - density * 0.8f, top + glossH)
+        glossPaint.shader = LinearGradient(
+            left, top, left, top + glossH,
+            intArrayOf(0x78FFFFFF, 0x00FFFFFF),
+            null,
+            Shader.TileMode.CLAMP
+        )
+        glossPaint.alpha = a
+        canvas.drawRoundRect(glossRect, radius, radius, glossPaint)
+
+        rimPaint.strokeWidth = max(0.9f * density, 1f)
+        rimPaint.color = if (dark) 0x96FFFFFF.toInt() else 0xD8FFFFFF.toInt()
+        rimPaint.alpha = (a * 0.75f).toInt()
+        canvas.drawRoundRect(thumbRect, radius, radius, rimPaint)
+    }
+}
+
+internal fun RecyclerView.attachLiquidGlassScrollbar() {
+    val existing = getTag(R.id.tag_glass_scrollbar) as? LiquidGlassScrollbarDecoration
+    if (existing != null) return
+    isVerticalScrollBarEnabled = false
+    val deco = LiquidGlassScrollbarDecoration(this)
+    addItemDecoration(deco)
+    setTag(R.id.tag_glass_scrollbar, deco)
 }
 
 internal fun View.applyLiquidGlass(
@@ -948,14 +1213,25 @@ internal fun View.detachLiquidGlass() {
 }
 
 internal fun View.refreshLiquidGlassBackdrop() {
-    (getTag(R.id.tag_liquid_glass_binder) as? LiquidGlassBinder)?.captureNow(force = true)
+    val binder = getTag(R.id.tag_liquid_glass_binder) as? LiquidGlassBinder ?: return
+    binder.markDirty()
+    binder.captureNow(force = true)
 }
 
+private val captionSliceCache = object : LruCache<Int, Bitmap>(96) {}
+private val captionBlurExecutor = Executors.newFixedThreadPool(2)
+private val captionMainHandler = Handler(Looper.getMainLooper())
+
 /**
- * Applies zero-overhead Liquid Glass caption backdrop directly from a comic card's cover Bitmap
- * (bottom 30% slice, lightly blurred, passed straight into GPU AGSL / SDF mesh LiquidGlassDrawable).
+ * Applies Liquid Glass caption backdrop directly from a comic card's cover Bitmap,
+ * computing the exact centerCrop (1:1.45) bottom region off the main thread with LRU caching
+ * so RecyclerView vertical scrolling stays butter-smooth (zero main-thread blur).
  */
-internal fun View.applyCoverCaptionLiquidGlass(coverBitmap: Bitmap?, cornerRadiusDp: Float = 12f) {
+internal fun View.applyCoverCaptionLiquidGlass(
+    coverBitmap: Bitmap?,
+    cornerRadiusDp: Float = 12.5f,
+    cardAspectRatio: Float = 1.45f
+) {
     detachLiquidGlass()
     val dark = (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
     val existing = background as? LiquidGlassDrawable
@@ -971,22 +1247,69 @@ internal fun View.applyCoverCaptionLiquidGlass(coverBitmap: Bitmap?, cornerRadiu
             forceDark = false
         ).also { background = it }
     }
+    elevation = 3f * resources.displayMetrics.density
     if (coverBitmap == null || coverBitmap.isRecycled || coverBitmap.width < 4 || coverBitmap.height < 8) {
+        setTag(R.id.tag_caption_slice_bmp, null)
         drawable.updateBackdrop(null)
         return
     }
-    val sliceH = (coverBitmap.height * 0.30f).toInt().coerceAtLeast(4)
-    val startY = (coverBitmap.height - sliceH).coerceAtLeast(0)
-    val targetW = 96
-    val targetH = 34
-    val slice = Bitmap.createBitmap(targetW, targetH, Bitmap.Config.ARGB_8888)
-    val canvas = Canvas(slice)
-    canvas.drawBitmap(
-        coverBitmap,
-        Rect(0, startY, coverBitmap.width, coverBitmap.height),
-        Rect(0, 0, targetW, targetH),
-        Paint(Paint.FILTER_BITMAP_FLAG)
-    )
-    LiquidGlassBinder.blurBitmapInPlace(slice, 3)
-    drawable.updateBackdrop(slice)
+
+    val cacheKey = System.identityHashCode(coverBitmap)
+    setTag(R.id.tag_caption_slice_bmp, cacheKey)
+    captionSliceCache.get(cacheKey)?.takeIf { !it.isRecycled }?.let { cached ->
+        drawable.updateBackdrop(cached)
+        return
+    }
+
+    // Offload slice extraction & CPU blur to background thread to avoid scroll jank
+    captionBlurExecutor.execute {
+        if (coverBitmap.isRecycled) return@execute
+        val slice = runCatching {
+            val bw = coverBitmap.width.toFloat()
+            val bh = coverBitmap.height.toFloat()
+            val targetRatio = 1f / cardAspectRatio
+            val bmpRatio = bw / bh
+            val cropLeft: Int
+            val cropTop: Int
+            val cropRight: Int
+            val cropBottom: Int
+            if (bmpRatio > targetRatio) {
+                val visibleW = (bh * targetRatio).toInt().coerceIn(4, coverBitmap.width)
+                val x0 = ((coverBitmap.width - visibleW) / 2).coerceAtLeast(0)
+                cropLeft = x0
+                cropRight = (x0 + visibleW).coerceAtMost(coverBitmap.width)
+                cropTop = 0
+                cropBottom = coverBitmap.height
+            } else {
+                val visibleH = (bw / targetRatio).toInt().coerceIn(8, coverBitmap.height)
+                val y0 = ((coverBitmap.height - visibleH) / 2).coerceAtLeast(0)
+                cropLeft = 0
+                cropRight = coverBitmap.width
+                cropTop = y0
+                cropBottom = (y0 + visibleH).coerceAtMost(coverBitmap.height)
+            }
+            val visibleH = (cropBottom - cropTop).coerceAtLeast(8)
+            val sliceH = (visibleH * 0.30f).toInt().coerceAtLeast(4)
+            val startY = (cropBottom - sliceH).coerceAtLeast(cropTop)
+
+            val targetW = 72
+            val targetH = 28
+            val out = Bitmap.createBitmap(targetW, targetH, Bitmap.Config.ARGB_8888)
+            val canvas = Canvas(out)
+            canvas.drawBitmap(
+                coverBitmap,
+                Rect(cropLeft, startY, cropRight, cropBottom),
+                Rect(0, 0, targetW, targetH),
+                Paint(Paint.FILTER_BITMAP_FLAG)
+            )
+            LiquidGlassBinder.blurBitmapInPlace(out, 2)
+            out
+        }.getOrNull() ?: return@execute
+        captionSliceCache.put(cacheKey, slice)
+        captionMainHandler.post {
+            if (getTag(R.id.tag_caption_slice_bmp) == cacheKey && !slice.isRecycled) {
+                drawable.updateBackdrop(slice)
+            }
+        }
+    }
 }

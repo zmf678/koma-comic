@@ -60,12 +60,12 @@ class MainSettingsPanel(
 
         addSectionTitle(root, "外观与显示")
         addCardGroup(root) { group ->
-            addSwitchRow(group, "液态玻璃", "使用半透明材质、光泽边缘和柔化背景", prefs.glassMaterial) {
+            addSwitchRow(group, "液态玻璃", "使用半透明光学材质、光泽边缘与通透壁纸", prefs.glassMaterial) {
                 prefs.glassMaterial = it
                 activity.recreate()
             }
             addDivider(group)
-            addActionRow(group, "背景壁纸", if (prefs.wallpaperEnabled) "更换或关闭壁纸" else "选择本地图片") {
+            addActionRow(group, "背景壁纸", if (prefs.wallpaperEnabled) "已启用自定义壁纸 · 点击更换或关闭" else "选择本地图片（原图清晰呈现）") {
                 if (prefs.wallpaperEnabled) {
                     MaterialAlertDialogBuilder(activity)
                         .setTitle("背景壁纸")
@@ -79,17 +79,12 @@ class MainSettingsPanel(
                 } else wallpaperPicker.launch(arrayOf("image/*"))
             }
             addDivider(group)
-            val themeModes = arrayOf("跟随系统", "浅色模式", "深色模式")
-            addActionRow(group, "深色模式", themeModes.getOrElse(prefs.themeMode) { "跟随系统" }) {
-                MaterialAlertDialogBuilder(activity)
-                    .setTitle("选择深色模式")
-                    .setSingleChoiceItems(themeModes, prefs.themeMode) { d, which ->
-                        prefs.themeMode = which
-                        app.applyNightMode(which)
-                        d.dismiss()
-                        activity.recreate()
-                    }
-                    .show()
+            addThemeModePillRow(group, prefs.themeMode) { which ->
+                if (prefs.themeMode != which) {
+                    prefs.themeMode = which
+                    app.applyNightMode(which)
+                    activity.recreate()
+                }
             }
             addDivider(group)
 
@@ -205,8 +200,12 @@ class MainSettingsPanel(
             }
             addDivider(group)
 
-            addActionRow(group, "关于页光 Koma", "版本 v$versionName") {
-                Toast.makeText(activity, "页光 Koma v$versionName", Toast.LENGTH_SHORT).show()
+            addActionRow(group, "关于页光 Koma", "版本 v$versionName · Android 原生高清版") {
+                MaterialAlertDialogBuilder(activity)
+                    .setTitle("页光 Koma v$versionName")
+                    .setMessage("开源本地 / WebDAV 与多源在线漫画阅读器。\n无广告、无过期弹窗、无第三方统计分析。")
+                    .setPositiveButton("确定", null)
+                    .show()
             }
         }
     }
@@ -281,16 +280,17 @@ class MainSettingsPanel(
                     Toast.makeText(activity, "当前已是最新版本 (v$currentVersion)", Toast.LENGTH_SHORT).show()
                     return@onSuccess
                 }
-                val sizeLabel = if (apkSize > 0) String.format(Locale.getDefault(), " (%.1f MB)", apkSize / (1024f * 1024f)) else ""
+                val sizeLabel = if (apkSize > 0) String.format(Locale.getDefault(), " · %.2f MB", apkSize / (1024f * 1024f)) else ""
+                val msg = "最新版本 v$ver（当前 v$currentVersion）$sizeLabel\n更新仅替换应用本体，书架、阅读记录与配置均会保留。\n\n$notes"
                 val builder = MaterialAlertDialogBuilder(activity)
-                    .setTitle("发现新版本 v$ver$sizeLabel")
-                    .setMessage(notes)
+                    .setTitle("发现新版本 v$ver")
+                    .setMessage(msg)
                     .setNeutralButton("打开发布页") { _, _ ->
                         runCatching { activity.startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(htmlUrl))) }
                     }
                     .setNegativeButton("稍后再说", null)
                 if (apkUrl.startsWith("https://")) {
-                    builder.setPositiveButton("一键下载并安装") { _, _ ->
+                    builder.setPositiveButton("一键下载并自动更新") { _, _ ->
                         downloadAndInstallApk(tag, apkUrl, apkSize)
                     }
                 }
@@ -301,15 +301,31 @@ class MainSettingsPanel(
     }
 
     private fun downloadAndInstallApk(tag: String, apkUrl: String, expectedSize: Long) {
-        val statusView = TextView(activity).apply {
-            text = "正在下载安装包…"
+        val box = LinearLayout(activity).apply {
+            orientation = LinearLayout.VERTICAL
             setPadding(dp(24), dp(14), dp(24), dp(8))
         }
+        val statusView = TextView(activity).apply {
+            text = "正在连接下载安装包…"
+            textSize = 13.5f
+            setTextColor(ContextCompat.getColor(activity, R.color.text_primary))
+        }
+        val progressBar = android.widget.ProgressBar(activity, null, android.R.attr.progressBarStyleHorizontal).apply {
+            max = 1000
+            isIndeterminate = expectedSize <= 0
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = dp(10) }
+        }
+        box.addView(statusView)
+        box.addView(progressBar)
+
         var downloadJob: kotlinx.coroutines.Job? = null
         val dialog = MaterialAlertDialogBuilder(activity)
             .setTitle("正在更新 $tag")
-            .setView(statusView)
-            .setNegativeButton("取消") { _, _ -> downloadJob?.cancel() }
+            .setView(box)
+            .setNegativeButton("取消下载") { _, _ -> downloadJob?.cancel() }
             .setCancelable(false)
             .show()
 
@@ -338,15 +354,21 @@ class MainSettingsPanel(
                                     output.write(buf, 0, n)
                                     downloaded += n
                                     val now = android.os.SystemClock.uptimeMillis()
-                                    if (now - lastUi >= 120L) {
+                                    if (now - lastUi >= 100L) {
                                         lastUi = now
+                                        val pct = if (total > 0) (downloaded * 100f / total).coerceIn(0f, 100f) else -1f
                                         val msg = if (total > 0) {
-                                            val pct = (downloaded * 100f / total).coerceIn(0f, 100f)
-                                            String.format(Locale.getDefault(), "正在下载… %.1f%% (%.1f / %.1f MB)", pct, downloaded / 1048576f, total / 1048576f)
+                                            String.format(Locale.getDefault(), "正在下载… %.1f%% (%.2f / %.2f MB)", pct, downloaded / 1048576f, total / 1048576f)
                                         } else {
-                                            String.format(Locale.getDefault(), "正在下载… %.1f MB", downloaded / 1048576f)
+                                            String.format(Locale.getDefault(), "正在下载… %.2f MB", downloaded / 1048576f)
                                         }
-                                        withContext(Dispatchers.Main) { statusView.text = msg }
+                                        withContext(Dispatchers.Main) {
+                                            statusView.text = msg
+                                            if (pct >= 0f) {
+                                                progressBar.isIndeterminate = false
+                                                progressBar.progress = (pct * 10f).toInt().coerceIn(0, 1000)
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -360,9 +382,29 @@ class MainSettingsPanel(
             if (dialog.isShowing) dialog.dismiss()
             result.onFailure { err ->
                 if (err !is kotlinx.coroutines.CancellationException) {
-                    Toast.makeText(activity, "下载失败：${err.message ?: "网络异常"}", Toast.LENGTH_LONG).show()
+                    MaterialAlertDialogBuilder(activity)
+                        .setTitle("下载失败")
+                        .setMessage(err.message ?: "网络异常")
+                        .setPositiveButton("重试") { _, _ -> downloadAndInstallApk(tag, apkUrl, expectedSize) }
+                        .setNegativeButton("关闭", null)
+                        .show()
                 }
             }.onSuccess { apkFile ->
+                if (!activity.packageManager.canRequestPackageInstalls()) {
+                    MaterialAlertDialogBuilder(activity)
+                        .setTitle("需要允许安装未知应用")
+                        .setMessage("安装包已下载完成。请先授予「页光 Koma」安装应用权限，返回后再重新点击安装。")
+                        .setPositiveButton("前往授权") { _, _ ->
+                            val permIntent = Intent(
+                                android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                                android.net.Uri.parse("package:${activity.packageName}")
+                            )
+                            runCatching { activity.startActivity(permIntent) }
+                        }
+                        .setNegativeButton("取消", null)
+                        .show()
+                    return@onSuccess
+                }
                 val uri = androidx.core.content.FileProvider.getUriForFile(
                     activity,
                     "${activity.packageName}.fileprovider",
@@ -541,9 +583,46 @@ class MainSettingsPanel(
                 if (address != base.text.toString().trim()) { testStatus.text = ""; return@launch }
                 result.onSuccess { choices ->
                     testStatus.text = if (choices.isEmpty()) "API 未列出模型，可手动填写模型 ID" else "${choices.size} 个可选模型"
-                    if (choices.isNotEmpty()) MaterialAlertDialogBuilder(activity).setTitle("选择模型")
-                        .setItems(choices.toTypedArray()) { _, index -> model.setText(choices[index]) }
-                        .setNegativeButton("取消", null).show()
+                    if (choices.isNotEmpty()) {
+                        val pickerBox = LinearLayout(activity).apply {
+                            orientation = LinearLayout.VERTICAL
+                            setPadding(dp(16), dp(8), dp(16), 0)
+                        }
+                        val etFilter = EditText(activity).apply {
+                            hint = "搜索模型 ID（共 ${choices.size} 个）"
+                            isSingleLine = true
+                        }
+                        val filtered = choices.toMutableList()
+                        val listView = android.widget.ListView(activity).apply {
+                            layoutParams = LinearLayout.LayoutParams(
+                                LinearLayout.LayoutParams.MATCH_PARENT,
+                                (activity.resources.configuration.screenHeightDp * 0.42f * activity.resources.displayMetrics.density).toInt()
+                            )
+                            adapter = ArrayAdapter(activity, android.R.layout.simple_list_item_1, filtered)
+                        }
+                        etFilter.addTextChangedListener(object : android.text.TextWatcher {
+                            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+                            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
+                                val q = s?.toString()?.trim()?.lowercase().orEmpty()
+                                filtered.clear()
+                                if (q.isEmpty()) filtered.addAll(choices)
+                                else filtered.addAll(choices.filter { it.lowercase().contains(q) })
+                                listView.adapter = ArrayAdapter(activity, android.R.layout.simple_list_item_1, filtered)
+                            }
+                            override fun afterTextChanged(s: android.text.Editable?) {}
+                        })
+                        pickerBox.addView(etFilter)
+                        pickerBox.addView(listView)
+                        val picker = MaterialAlertDialogBuilder(activity)
+                            .setTitle("选择模型 (${choices.size})")
+                            .setView(pickerBox)
+                            .setNegativeButton("取消", null)
+                            .show()
+                        listView.setOnItemClickListener { _, _, index, _ ->
+                            filtered.getOrNull(index)?.let { model.setText(it) }
+                            picker.dismiss()
+                        }
+                    }
                 }.onFailure { testStatus.text = "获取模型失败 · ${MangaTranslation.describe(it)}" }
             }
         }
@@ -606,16 +685,50 @@ class MainSettingsPanel(
         parent.addView(tv)
     }
 
+    private fun addThemeModePillRow(parent: LinearLayout, currentMode: Int, onSelect: (Int) -> Unit) {
+        val col = LinearLayout(activity).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(18), dp(12), dp(18), dp(14))
+        }
+        col.addView(TextView(activity).apply {
+            text = "外观主题"
+            textSize = 15f
+            setTextColor(ContextCompat.getColor(activity, R.color.text_primary))
+        })
+        val pillRow = LinearLayout(activity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = dp(10) }
+        }
+        val items = listOf(2 to "深色模式", 1 to "浅色模式", 0 to "跟随系统")
+        items.forEachIndexed { idx, (modeVal, label) ->
+            val selected = currentMode == modeVal
+            val style = if (selected) com.google.android.material.R.attr.materialButtonStyle
+            else com.google.android.material.R.attr.materialButtonOutlinedStyle
+            pillRow.addView(com.google.android.material.button.MaterialButton(activity, null, style).apply {
+                text = label
+                textSize = 12.5f
+                minWidth = 0
+                setPadding(dp(8), 0, dp(8), 0)
+                layoutParams = LinearLayout.LayoutParams(0, dp(40), 1f).apply {
+                    if (idx > 0) marginStart = dp(8)
+                }
+                setOnClickListener { onSelect(modeVal) }
+            })
+        }
+        col.addView(pillRow)
+        parent.addView(col)
+    }
+
     private fun addCardGroup(parent: LinearLayout, fill: (LinearLayout) -> Unit) {
         val card = MaterialCardView(activity).apply {
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply { bottomMargin = dp(6) }
-            setCardBackgroundColor(ContextCompat.getColor(activity, R.color.surface_card))
-            radius = dp(16).toFloat()
-            cardElevation = 0f
-            strokeWidth = 0
+            ).apply { bottomMargin = dp(8) }
+            applyGlassCardStyle(18f)
         }
         val inner = LinearLayout(activity).apply {
             orientation = LinearLayout.VERTICAL

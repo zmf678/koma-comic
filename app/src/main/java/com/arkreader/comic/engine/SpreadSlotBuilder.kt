@@ -22,7 +22,8 @@ object SpreadSlotBuilder {
         effectiveMode: DoublePageMode,
         firstPageSingle: Boolean,
         mergeRightToLeft: Boolean,
-        isWidePage: (Int) -> Boolean = { false }
+        isWidePage: (Int) -> Boolean = { false },
+        splitAllPages: Boolean = false
     ): List<PageSlot> {
         if (pageCount <= 0) return emptyList()
         return when (effectiveMode) {
@@ -31,8 +32,9 @@ object SpreadSlotBuilder {
             }
             DoublePageMode.SPLIT -> buildList {
                 for (i in 0 until pageCount) {
-                    if (firstPageSingle && i == 0) {
-                        add(PageSlot.Single(0))
+                    val shouldSplit = splitAllPages || isWidePage(i)
+                    if (!shouldSplit || (firstPageSingle && i == 0)) {
+                        add(PageSlot.Single(i))
                     } else if (mergeRightToLeft) {
                         add(PageSlot.SplitHalf(i, leftHalf = false))
                         add(PageSlot.SplitHalf(i, leftHalf = true))

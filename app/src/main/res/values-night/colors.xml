@@ -1,9 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="surface_bg">#121316</color>
-    <color name="surface_card">#22252B</color>
-    <color name="surface_pill">#23262E</color>
-    <color name="text_primary">#ECEEF2</color>
-    <color name="text_secondary">#9FA5B0</color>
-    <color name="rail_bg">#181A1F</color>
+    <color name="surface_bg">#0F131A</color>
+    <color name="surface_card">#171D27</color>
+    <color name="surface_pill">#1A212D</color>
+    <color name="surface_border">#1AFFFFFF</color>
+    <color name="text_primary">#EEF2F8</color>
+    <color name="text_secondary">#98A4B8</color>
+    <color name="rail_bg">#131821</color>
+    <color name="accent_blue">#38A3FF</color>
+    <color name="danger_red">#F05A65</color>
 </resources>

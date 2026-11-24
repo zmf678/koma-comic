@@ -91,7 +91,7 @@ namespace KomaComic.Windows
 
     internal static class Program
     {
-        internal const string AppVersion = "1.5.6";
+        internal const string AppVersion = "1.5.7";
         internal const string GithubRepoSlug = "zmf678/koma-comic";
 
         [STAThread]

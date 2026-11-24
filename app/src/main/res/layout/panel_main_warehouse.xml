@@ -13,58 +13,98 @@
         android:orientation="horizontal"
         android:paddingHorizontal="20dp"
         android:paddingTop="14dp"
-        android:paddingBottom="8dp">
+        android:paddingBottom="4dp">
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="vertical">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="漫画仓库"
+                android:textColor="@color/text_primary"
+                android:textSize="22sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="2dp"
+                android:text="挂载本机漫画目录、ZIP / CBZ / EPUB 压缩包或配置 WebDAV 云端仓库"
+                android:textColor="@color/text_secondary"
+                android:textSize="12sp" />
+        </LinearLayout>
 
         <TextView
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:text="@string/nav_warehouse"
-            android:textColor="@color/text_primary"
-            android:textSize="22sp"
-            android:textStyle="bold" />
-
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/btnWhRescanAll"
-            style="@style/Widget.Material3.Button.TextButton"
+            android:id="@+id/tvLocalComicCount"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="全部扫描"
-            app:icon="@drawable/ic_refresh" />
+            android:layout_marginStart="8dp"
+            android:paddingHorizontal="10dp"
+            android:paddingVertical="4dp"
+            android:text="0 本本地漫画"
+            android:textColor="?attr/colorPrimary"
+            android:textSize="12sp"
+            android:textStyle="bold" />
     </LinearLayout>
 
-    <LinearLayout
+    <HorizontalScrollView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:orientation="horizontal"
+        android:clipToPadding="false"
         android:paddingHorizontal="16dp"
-        android:paddingVertical="6dp">
+        android:paddingVertical="6dp"
+        android:scrollbars="none">
 
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/btnWhAddLocal"
-            android:layout_width="0dp"
+        <LinearLayout
+            android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:text="添加本地仓库" />
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
 
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/btnWhAddWebDav"
-            style="@style/Widget.Material3.Button.TonalButton"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_marginStart="8dp"
-            android:layout_weight="1"
-            android:text="WebDAV" />
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnWhAddLocal"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="+ 添加本地文件夹" />
 
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/btnWhManageSources"
-            style="@style/Widget.Material3.Button.TonalButton"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_marginStart="8dp"
-            android:layout_weight="1"
-            android:text="在线漫画源" />
-    </LinearLayout>
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnWhImportArchive"
+                style="@style/Widget.Material3.Button.TonalButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="8dp"
+                android:text="+ 导入压缩包" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnWhRescanAll"
+                style="@style/Widget.Material3.Button.TonalButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="8dp"
+                android:text="重新扫描"
+                app:icon="@drawable/ic_refresh" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnWhAddWebDav"
+                style="@style/Widget.Material3.Button.TonalButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="8dp"
+                android:text="WebDAV" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnWhManageSources"
+                style="@style/Widget.Material3.Button.TonalButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="8dp"
+                android:text="在线漫画源" />
+        </LinearLayout>
+    </HorizontalScrollView>
 
     <FrameLayout
         android:layout_width="match_parent"
@@ -77,7 +117,7 @@
             android:layout_height="match_parent"
             android:clipToPadding="false"
             android:paddingHorizontal="12dp"
-            android:paddingBottom="24dp" />
+            android:paddingBottom="96dp" />
 
         <TextView
             android:id="@+id/tvWarehouseEmpty"
@@ -87,7 +127,7 @@
             android:gravity="center"
             android:lineSpacingExtra="6dp"
             android:padding="24dp"
-            android:text="暂无本地或 WebDAV 仓库\n点击上方「添加本地仓库」或「在线漫画源」开始使用"
+            android:text="暂无本地或 WebDAV 仓库\n点击上方「添加本地文件夹」「导入压缩包」或「在线漫画源」开始使用"
             android:textColor="@color/text_secondary"
             android:textSize="15sp"
             android:visibility="gone" />

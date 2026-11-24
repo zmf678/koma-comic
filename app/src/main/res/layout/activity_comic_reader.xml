@@ -4,7 +4,7 @@
     android:id="@+id/readerRoot"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="#000000">
+    android:background="#07090D">
 
     <androidx.recyclerview.widget.RecyclerView
         android:id="@+id/rvVertical"
@@ -17,59 +17,86 @@
         android:layout_width="match_parent"
         android:layout_height="match_parent" />
 
-    <ProgressBar
-        android:id="@+id/progressBar"
+    <!-- Centered Liquid Glass Loading Box matching Windows PC -->
+    <LinearLayout
+        android:id="@+id/readerLoadingBox"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_gravity="center"
-        android:visibility="gone" />
+        android:background="@drawable/bg_reader_pill"
+        android:gravity="center"
+        android:orientation="horizontal"
+        android:paddingHorizontal="18dp"
+        android:paddingVertical="12dp"
+        android:visibility="gone">
+
+        <ProgressBar
+            android:id="@+id/progressBar"
+            android:layout_width="22dp"
+            android:layout_height="22dp"
+            android:indeterminateTint="#FFFFFFFF" />
+
+        <TextView
+            android:id="@+id/tvLoadingStatus"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="10dp"
+            android:text="正在加载页面…"
+            android:textColor="#FFE5ECF8"
+            android:textSize="13sp" />
+    </LinearLayout>
 
     <TextView
         android:id="@+id/tvTranslationState"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_gravity="top|end"
-        android:layout_marginTop="60dp"
+        android:layout_marginTop="66dp"
         android:layout_marginEnd="18dp"
         android:accessibilityLiveRegion="polite"
         android:background="@drawable/bg_reader_pill"
         android:paddingHorizontal="14dp"
         android:paddingVertical="8dp"
         android:textColor="#FFFFFF"
+        android:textSize="12.5sp"
         android:visibility="gone" />
 
     <TextView
         android:id="@+id/translationBall"
-        android:layout_width="48dp"
-        android:layout_height="48dp"
+        android:layout_width="50dp"
+        android:layout_height="50dp"
         android:layout_gravity="center_vertical|end"
         android:layout_marginEnd="16dp"
         android:background="@drawable/bg_reader_translation_ball"
         android:contentDescription="翻译菜单"
-        android:elevation="6dp"
+        android:elevation="8dp"
         android:focusable="true"
         android:gravity="center"
+        android:shadowColor="#B8000000"
+        android:shadowDy="1.5"
+        android:shadowRadius="5"
         android:text="译"
         android:textColor="#FFFFFF"
         android:textSize="19sp"
         android:textStyle="bold"
         android:visibility="gone" />
 
-    <!-- Subtle page number badge visible only when toolbar is hidden -->
+    <!-- Corner Liquid Glass page indicator (matches Windows PC: "1/20" or "2-3/20") -->
     <TextView
         android:id="@+id/tvPageIndicator"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_gravity="bottom|end"
-        android:layout_margin="14dp"
+        android:layout_marginEnd="18dp"
+        android:layout_marginBottom="14dp"
         android:background="@drawable/bg_reader_pill"
-        android:paddingHorizontal="10dp"
+        android:paddingHorizontal="11dp"
         android:paddingVertical="4dp"
-        android:textColor="#E6FFFFFF"
-        android:textSize="11sp"
+        android:textColor="#FFE1EAF8"
+        android:textSize="12sp"
         android:visibility="gone" />
 
-    <!-- Transparent status bar top gradient overlay (shown on center tap) -->
+    <!-- Top gradient HUD overlay synced with Windows PC -->
     <LinearLayout
         android:id="@+id/topOverlay"
         android:layout_width="match_parent"
@@ -78,36 +105,29 @@
         android:background="@drawable/bg_reader_top_gradient"
         android:gravity="center_vertical"
         android:orientation="horizontal"
-        android:paddingHorizontal="10dp"
+        android:paddingHorizontal="14dp"
         android:paddingTop="12dp"
         android:paddingBottom="18dp"
         android:visibility="gone">
 
         <ImageButton
             android:id="@+id/btnBack"
-            android:layout_width="44dp"
-            android:layout_height="44dp"
-            android:background="?attr/selectableItemBackgroundBorderless"
+            android:layout_width="38dp"
+            android:layout_height="38dp"
+            android:background="@drawable/bg_reader_back_pill"
             android:contentDescription="返回"
+            android:padding="8dp"
+            android:scaleType="fitCenter"
             android:src="@drawable/ic_arrow_back"
             app:tint="#FFFFFF" />
 
+        <!-- Title stack synced with Windows PC: Comic title on top, chapter title below -->
         <LinearLayout
             android:layout_width="0dp"
             android:layout_height="wrap_content"
-            android:layout_marginHorizontal="6dp"
+            android:layout_marginHorizontal="12dp"
             android:layout_weight="1"
             android:orientation="vertical">
-
-            <TextView
-                android:id="@+id/tvReaderChapterTitle"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:ellipsize="end"
-                android:maxLines="1"
-                android:textColor="#FFFFFF"
-                android:textSize="16sp"
-                android:textStyle="bold" />
 
             <TextView
                 android:id="@+id/tvReaderComicTitle"
@@ -115,21 +135,48 @@
                 android:layout_height="wrap_content"
                 android:ellipsize="end"
                 android:maxLines="1"
-                android:textColor="#B3FFFFFF"
-                android:textSize="11sp" />
+                android:textColor="#FFFFFF"
+                android:textSize="14.5sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/tvReaderChapterTitle"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="1dp"
+                android:ellipsize="end"
+                android:maxLines="1"
+                android:textColor="#FFB0BED4"
+                android:textSize="12sp" />
         </LinearLayout>
+
+        <!-- Spread Offset pill moved to top-right & auto-hidden outside double-page mode (matches Windows PC) -->
+        <TextView
+            android:id="@+id/btnSpreadMatch"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginEnd="4dp"
+            android:background="@drawable/bg_reader_pill"
+            android:clickable="true"
+            android:focusable="true"
+            android:paddingHorizontal="11dp"
+            android:paddingVertical="6dp"
+            android:text="跨页偏移 · 首页单页"
+            android:textColor="#F2FFFFFF"
+            android:textSize="11.5sp"
+            android:visibility="gone" />
 
         <ImageButton
             android:id="@+id/btnReaderMore"
-            android:layout_width="44dp"
-            android:layout_height="44dp"
+            android:layout_width="38dp"
+            android:layout_height="38dp"
             android:background="?attr/selectableItemBackgroundBorderless"
             android:contentDescription="更多阅读设置"
             android:src="@drawable/ic_more_vert"
             app:tint="#FFFFFF" />
     </LinearLayout>
 
-    <!-- Bottom floating capsule menu + spread match pill (shown on center tap, no danmaku) -->
+    <!-- Bottom floating Liquid Glass capsule HUD synced with Windows PC -->
     <LinearLayout
         android:id="@+id/bottomOverlay"
         android:layout_width="match_parent"
@@ -137,24 +184,8 @@
         android:layout_gravity="bottom|center_horizontal"
         android:orientation="vertical"
         android:paddingHorizontal="16dp"
-        android:paddingBottom="18dp"
+        android:paddingBottom="20dp"
         android:visibility="gone">
-
-        <TextView
-            android:id="@+id/btnSpreadMatch"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_gravity="end"
-            android:layout_marginBottom="12dp"
-            android:background="@drawable/bg_reader_pill"
-            android:clickable="true"
-            android:focusable="true"
-            android:foreground="?attr/selectableItemBackgroundBorderless"
-            android:paddingHorizontal="14dp"
-            android:paddingVertical="7dp"
-            android:text="更改跨页匹配"
-            android:textColor="#F2FFFFFF"
-            android:textSize="13sp" />
 
         <LinearLayout
             android:id="@+id/bottomCapsuleCard"
@@ -164,7 +195,7 @@
             android:orientation="vertical"
             android:paddingHorizontal="18dp"
             android:paddingTop="12dp"
-            android:paddingBottom="8dp">
+            android:paddingBottom="10dp">
 
             <LinearLayout
                 android:layout_width="match_parent"
@@ -197,8 +228,8 @@
                     android:layout_height="wrap_content"
                     android:paddingEnd="4dp"
                     android:text="1/1"
-                    android:textColor="#CCFFFFFF"
-                    android:textSize="11sp" />
+                    android:textColor="#D6E6F6FF"
+                    android:textSize="12sp" />
 
                 <ImageButton
                     android:id="@+id/btnNextChapter"
@@ -210,89 +241,176 @@
                     app:tint="#E6FFFFFF" />
             </LinearLayout>
 
+            <!-- Unified icon + label action buttons matching Windows PC capsule -->
             <LinearLayout
                 android:layout_width="match_parent"
-                android:layout_height="44dp"
-                android:layout_marginTop="4dp"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
                 android:gravity="center_vertical"
                 android:orientation="horizontal">
 
-                <ImageButton
+                <LinearLayout
                     android:id="@+id/btnReaderSettings"
                     android:layout_width="0dp"
-                    android:layout_height="match_parent"
+                    android:layout_height="40dp"
                     android:layout_weight="1"
                     android:background="?attr/selectableItemBackgroundBorderless"
-                    android:contentDescription="阅读设置"
-                    android:src="@drawable/ic_hexagon_settings"
-                    app:tint="#FFFFFF" />
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:gravity="center"
+                    android:orientation="horizontal">
 
-                <ImageButton
+                    <ImageView
+                        android:layout_width="17dp"
+                        android:layout_height="17dp"
+                        android:src="@drawable/ic_hexagon_settings"
+                        app:tint="#FFFFFF" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="4dp"
+                        android:text="设置"
+                        android:textColor="#F0FFFFFF"
+                        android:textSize="12sp" />
+                </LinearLayout>
+
+                <LinearLayout
                     android:id="@+id/btnReaderFavorite"
                     android:layout_width="0dp"
-                    android:layout_height="match_parent"
+                    android:layout_height="36dp"
+                    android:layout_marginHorizontal="2dp"
                     android:layout_weight="1"
-                    android:background="?attr/selectableItemBackgroundBorderless"
-                    android:contentDescription="收藏"
-                    android:src="@drawable/ic_favorite_border"
-                    app:tint="#FFFFFF" />
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:gravity="center"
+                    android:orientation="horizontal">
 
-                <ImageButton
+                    <ImageView
+                        android:id="@+id/ivReaderFav"
+                        android:layout_width="17dp"
+                        android:layout_height="17dp"
+                        android:src="@drawable/ic_favorite_border"
+                        app:tint="#FFFFFF" />
+
+                    <TextView
+                        android:id="@+id/tvReaderFav"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="4dp"
+                        android:text="收藏"
+                        android:textColor="#F0FFFFFF"
+                        android:textSize="12sp" />
+                </LinearLayout>
+
+                <LinearLayout
                     android:id="@+id/btnBookmark"
                     android:layout_width="0dp"
-                    android:layout_height="match_parent"
+                    android:layout_height="40dp"
                     android:layout_weight="1"
                     android:background="?attr/selectableItemBackgroundBorderless"
-                    android:contentDescription="书签与作品集"
-                    android:src="@drawable/ic_bookmark"
-                    app:tint="#FFFFFF" />
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:gravity="center"
+                    android:orientation="horizontal">
 
-                <com.google.android.material.button.MaterialButton
-                    android:id="@+id/btnTranslate"
-                    style="@style/Widget.Material3.Button.TextButton"
-                    android:layout_width="0dp"
-                    android:layout_height="match_parent"
-                    android:layout_weight="1"
-                    android:minWidth="0dp"
-                    android:paddingHorizontal="2dp"
-                    android:text="翻译"
-                    android:textColor="#FFFFFF" />
+                    <ImageView
+                        android:layout_width="17dp"
+                        android:layout_height="17dp"
+                        android:src="@drawable/ic_bookmark"
+                        app:tint="#FFFFFF" />
 
-                <ImageButton
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="4dp"
+                        android:text="书签"
+                        android:textColor="#F0FFFFFF"
+                        android:textSize="12sp" />
+                </LinearLayout>
+
+                <LinearLayout
                     android:id="@+id/btnChapterList"
                     android:layout_width="0dp"
-                    android:layout_height="match_parent"
+                    android:layout_height="40dp"
                     android:layout_weight="1"
                     android:background="?attr/selectableItemBackgroundBorderless"
-                    android:contentDescription="章节目录"
-                    android:src="@drawable/ic_toc"
-                    app:tint="#FFFFFF" />
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:gravity="center"
+                    android:orientation="horizontal">
+
+                    <ImageView
+                        android:layout_width="17dp"
+                        android:layout_height="17dp"
+                        android:src="@drawable/ic_toc"
+                        app:tint="#FFFFFF" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="4dp"
+                        android:text="目录"
+                        android:textColor="#F0FFFFFF"
+                        android:textSize="12sp" />
+                </LinearLayout>
+
+                <LinearLayout
+                    android:id="@+id/btnTranslate"
+                    android:layout_width="0dp"
+                    android:layout_height="40dp"
+                    android:layout_weight="1"
+                    android:background="?attr/selectableItemBackgroundBorderless"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:gravity="center"
+                    android:orientation="horizontal">
+
+                    <TextView
+                        android:id="@+id/tvTranslateIcon"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="译"
+                        android:textColor="#FF7DCEFF"
+                        android:textSize="14sp"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:id="@+id/tvTranslateLabel"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="4dp"
+                        android:text="翻译"
+                        android:textColor="#F0FFFFFF"
+                        android:textSize="12sp" />
+                </LinearLayout>
             </LinearLayout>
         </LinearLayout>
     </LinearLayout>
 
-    <!-- Right-side dark card-grouped reader settings drawer overlay -->
+    <!-- Floating inset Liquid Glass reader settings drawer synced with Windows PC -->
     <FrameLayout
         android:id="@+id/readerSettingsOverlay"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:background="#66000000"
+        android:background="#4A000000"
         android:clickable="true"
         android:focusable="true"
         android:visibility="gone">
 
         <ScrollView
             android:id="@+id/readerSettingsPanel"
-            android:layout_width="344dp"
+            android:layout_width="350dp"
             android:layout_height="match_parent"
             android:layout_gravity="end"
+            android:layout_margin="12dp"
             android:background="@drawable/bg_reader_settings_panel"
             android:clickable="true"
             android:clipToPadding="false"
             android:focusable="true"
             android:paddingHorizontal="14dp"
-            android:paddingTop="32dp"
-            android:paddingBottom="24dp"
+            android:paddingTop="16dp"
+            android:paddingBottom="20dp"
             android:scrollbars="none">
 
             <LinearLayout
@@ -305,29 +423,46 @@
                     android:layout_height="wrap_content"
                     android:gravity="center_vertical"
                     android:orientation="horizontal"
-                    android:paddingHorizontal="6dp"
-                    android:paddingBottom="14dp">
+                    android:paddingHorizontal="4dp"
+                    android:paddingBottom="10dp">
 
                     <TextView
                         android:layout_width="0dp"
                         android:layout_height="wrap_content"
                         android:layout_weight="1"
-                        android:text="设置"
+                        android:text="阅读设置"
                         android:textColor="#FFFFFFFF"
-                        android:textSize="18sp"
+                        android:textSize="17sp"
                         android:textStyle="bold" />
 
                     <TextView
                         android:id="@+id/btnBrightnessAuto"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
+                        android:layout_marginEnd="8dp"
                         android:background="@drawable/bg_reader_seg_unselected"
                         android:paddingHorizontal="10dp"
                         android:paddingVertical="4dp"
                         android:text="跟随系统亮度"
-                        android:textColor="#B8C0D0"
+                        android:textColor="#CBD5E1"
                         android:textSize="11sp" />
+
+                    <TextView
+                        android:id="@+id/btnCloseDrawer"
+                        android:layout_width="30dp"
+                        android:layout_height="30dp"
+                        android:background="@drawable/bg_reader_seg_unselected"
+                        android:gravity="center"
+                        android:text="✕"
+                        android:textColor="#E5ECF8"
+                        android:textSize="13sp" />
                 </LinearLayout>
+
+                <View
+                    android:layout_width="match_parent"
+                    android:layout_height="1dp"
+                    android:layout_marginBottom="10dp"
+                    android:background="#1CFFFFFF" />
 
                 <!-- Card 1: Brightness -->
                 <LinearLayout
@@ -338,10 +473,10 @@
                     android:gravity="center_vertical"
                     android:orientation="horizontal"
                     android:paddingHorizontal="14dp"
-                    android:paddingVertical="14dp">
+                    android:paddingVertical="12dp">
 
                     <TextView
-                        android:layout_width="64dp"
+                        android:layout_width="52dp"
                         android:layout_height="wrap_content"
                         android:text="亮度"
                         android:textColor="#FFE5E8F0"
@@ -352,7 +487,7 @@
                         android:layout_width="18dp"
                         android:layout_height="18dp"
                         android:src="@drawable/ic_brightness_low"
-                        app:tint="#B8C0D0" />
+                        app:tint="#CBD5E1" />
 
                     <SeekBar
                         android:id="@+id/sbBrightness"
@@ -362,7 +497,7 @@
                         android:layout_weight="1"
                         android:max="100"
                         android:progressBackgroundTint="#4A5266"
-                        android:progressTint="#3898FF"
+                        android:progressTint="#48AEFF"
                         android:thumbTint="#FFFFFFFF" />
 
                     <ImageView
@@ -390,11 +525,11 @@
                         android:orientation="horizontal">
 
                         <TextView
-                            android:layout_width="64dp"
+                            android:layout_width="60dp"
                             android:layout_height="wrap_content"
                             android:text="阅读模式"
                             android:textColor="#FFE5E8F0"
-                            android:textSize="14sp" />
+                            android:textSize="13.5sp" />
 
                         <LinearLayout
                             android:id="@+id/btnModeLtr"
@@ -411,7 +546,7 @@
                                 android:layout_width="22dp"
                                 android:layout_height="18dp"
                                 android:src="@drawable/ic_mode_ltr"
-                                app:tint="#B8C0D0" />
+                                app:tint="#CBD5E1" />
 
                             <TextView
                                 android:id="@+id/tvModeLtr"
@@ -420,7 +555,7 @@
                                 android:layout_marginTop="3dp"
                                 android:maxLines="1"
                                 android:text="普通模式"
-                                android:textColor="#B8C0D0"
+                                android:textColor="#CBD5E1"
                                 android:textSize="11sp" />
                         </LinearLayout>
 
@@ -440,7 +575,7 @@
                                 android:layout_width="22dp"
                                 android:layout_height="18dp"
                                 android:src="@drawable/ic_mode_rtl"
-                                app:tint="#B8C0D0" />
+                                app:tint="#CBD5E1" />
 
                             <TextView
                                 android:id="@+id/tvModeRtl"
@@ -449,7 +584,7 @@
                                 android:layout_marginTop="3dp"
                                 android:maxLines="1"
                                 android:text="日漫模式"
-                                android:textColor="#B8C0D0"
+                                android:textColor="#CBD5E1"
                                 android:textSize="11sp" />
                         </LinearLayout>
 
@@ -469,7 +604,7 @@
                                 android:layout_width="22dp"
                                 android:layout_height="18dp"
                                 android:src="@drawable/ic_mode_vertical"
-                                app:tint="#B8C0D0" />
+                                app:tint="#CBD5E1" />
 
                             <TextView
                                 android:id="@+id/tvModeVertical"
@@ -478,7 +613,7 @@
                                 android:layout_marginTop="3dp"
                                 android:maxLines="1"
                                 android:text="滚动模式"
-                                android:textColor="#B8C0D0"
+                                android:textColor="#CBD5E1"
                                 android:textSize="11sp" />
                         </LinearLayout>
                     </LinearLayout>
@@ -507,7 +642,7 @@
                                 android:layout_height="wrap_content"
                                 android:text="阅读模式设置全部生效"
                                 android:textColor="#FFE5E8F0"
-                                android:textSize="14sp" />
+                                android:textSize="13.5sp" />
 
                             <TextView
                                 android:layout_width="wrap_content"
@@ -525,7 +660,7 @@
                     </LinearLayout>
                 </LinearLayout>
 
-                <!-- Card 3: Quality, Page Layout, Spread Match, Background -->
+                <!-- Card 3: Quality, Layout, Spread Match, Background -->
                 <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
@@ -542,11 +677,11 @@
                         android:orientation="horizontal">
 
                         <TextView
-                            android:layout_width="52dp"
+                            android:layout_width="48dp"
                             android:layout_height="wrap_content"
                             android:text="画质"
                             android:textColor="#FFE5E8F0"
-                            android:textSize="14sp" />
+                            android:textSize="13.5sp" />
 
                         <TextView
                             android:id="@+id/btnQualityUltra"
@@ -557,8 +692,8 @@
                             android:gravity="center"
                             android:maxLines="1"
                             android:text="超清"
-                            android:textColor="#B8C0D0"
-                            android:textSize="13sp" />
+                            android:textColor="#CBD5E1"
+                            android:textSize="12.5sp" />
 
                         <TextView
                             android:id="@+id/btnQualityHigh"
@@ -570,8 +705,8 @@
                             android:gravity="center"
                             android:maxLines="1"
                             android:text="高清"
-                            android:textColor="#B8C0D0"
-                            android:textSize="13sp" />
+                            android:textColor="#CBD5E1"
+                            android:textSize="12.5sp" />
 
                         <TextView
                             android:id="@+id/btnQualitySmooth"
@@ -583,8 +718,8 @@
                             android:gravity="center"
                             android:maxLines="1"
                             android:text="流畅"
-                            android:textColor="#B8C0D0"
-                            android:textSize="13sp" />
+                            android:textColor="#CBD5E1"
+                            android:textSize="12.5sp" />
                     </LinearLayout>
 
                     <LinearLayout
@@ -595,11 +730,11 @@
                         android:orientation="horizontal">
 
                         <TextView
-                            android:layout_width="52dp"
+                            android:layout_width="48dp"
                             android:layout_height="wrap_content"
                             android:text="模式"
                             android:textColor="#FFE5E8F0"
-                            android:textSize="14sp" />
+                            android:textSize="13.5sp" />
 
                         <TextView
                             android:id="@+id/btnPageSingle"
@@ -610,8 +745,8 @@
                             android:gravity="center"
                             android:maxLines="1"
                             android:text="单页"
-                            android:textColor="#B8C0D0"
-                            android:textSize="13sp" />
+                            android:textColor="#CBD5E1"
+                            android:textSize="12sp" />
 
                         <TextView
                             android:id="@+id/btnPageDouble"
@@ -623,7 +758,7 @@
                             android:gravity="center"
                             android:maxLines="1"
                             android:text="合并"
-                            android:textColor="#B8C0D0"
+                            android:textColor="#CBD5E1"
                             android:textSize="12sp" />
 
                         <TextView
@@ -636,7 +771,7 @@
                             android:gravity="center"
                             android:maxLines="1"
                             android:text="分割"
-                            android:textColor="#B8C0D0"
+                            android:textColor="#CBD5E1"
                             android:textSize="12sp" />
 
                         <TextView
@@ -649,10 +784,11 @@
                             android:gravity="center"
                             android:maxLines="1"
                             android:text="自动"
-                            android:textColor="#B8C0D0"
+                            android:textColor="#CBD5E1"
                             android:textSize="12sp" />
                     </LinearLayout>
 
+                    <!-- Spread offset aligned to Windows PC order: 默认双页起 / 首页单页起 -->
                     <LinearLayout
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
@@ -661,76 +797,36 @@
                         android:orientation="horizontal">
 
                         <TextView
-                            android:layout_width="52dp"
-                            android:layout_height="wrap_content"
-                            android:text="动画"
-                            android:textColor="#FFE5E8F0"
-                            android:textSize="14sp" />
-
-                        <TextView
-                            android:id="@+id/btnPageAnimPicker"
-                            android:layout_width="0dp"
-                            android:layout_height="34dp"
-                            android:layout_weight="1"
-                            android:background="@drawable/bg_reader_seg_unselected"
-                            android:gravity="center"
-                            android:maxLines="1"
-                            android:text="平滑滑动 ▾"
-                            android:textColor="#E5E8F0"
-                            android:textSize="12sp" />
-
-                        <TextView
-                            android:id="@+id/btnPrefetchPicker"
-                            android:layout_width="0dp"
-                            android:layout_height="34dp"
-                            android:layout_marginStart="6dp"
-                            android:layout_weight="1"
-                            android:background="@drawable/bg_reader_seg_unselected"
-                            android:gravity="center"
-                            android:maxLines="1"
-                            android:text="预加载 4页 ▾"
-                            android:textColor="#E5E8F0"
-                            android:textSize="12sp" />
-                    </LinearLayout>
-
-                    <LinearLayout
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:layout_marginTop="10dp"
-                        android:gravity="center_vertical"
-                        android:orientation="horizontal">
-
-                        <TextView
-                            android:layout_width="52dp"
+                            android:layout_width="48dp"
                             android:layout_height="wrap_content"
                             android:text="跨页"
                             android:textColor="#FFE5E8F0"
-                            android:textSize="14sp" />
-
-                        <TextView
-                            android:id="@+id/btnSpreadOdd"
-                            android:layout_width="0dp"
-                            android:layout_height="34dp"
-                            android:layout_weight="1"
-                            android:background="@drawable/bg_reader_seg_unselected"
-                            android:gravity="center"
-                            android:maxLines="1"
-                            android:text="首页单页"
-                            android:textColor="#B8C0D0"
-                            android:textSize="13sp" />
+                            android:textSize="13.5sp" />
 
                         <TextView
                             android:id="@+id/btnSpreadEven"
                             android:layout_width="0dp"
                             android:layout_height="34dp"
+                            android:layout_weight="1"
+                            android:background="@drawable/bg_reader_seg_unselected"
+                            android:gravity="center"
+                            android:maxLines="1"
+                            android:text="默认双页起"
+                            android:textColor="#CBD5E1"
+                            android:textSize="12.5sp" />
+
+                        <TextView
+                            android:id="@+id/btnSpreadOdd"
+                            android:layout_width="0dp"
+                            android:layout_height="34dp"
                             android:layout_marginStart="6dp"
                             android:layout_weight="1"
                             android:background="@drawable/bg_reader_seg_unselected"
                             android:gravity="center"
                             android:maxLines="1"
-                            android:text="首页双页"
-                            android:textColor="#B8C0D0"
-                            android:textSize="13sp" />
+                            android:text="首页单页起"
+                            android:textColor="#CBD5E1"
+                            android:textSize="12.5sp" />
                     </LinearLayout>
 
                     <LinearLayout
@@ -741,11 +837,11 @@
                         android:orientation="horizontal">
 
                         <TextView
-                            android:layout_width="52dp"
+                            android:layout_width="48dp"
                             android:layout_height="wrap_content"
                             android:text="背景"
                             android:textColor="#FFE5E8F0"
-                            android:textSize="14sp" />
+                            android:textSize="13.5sp" />
 
                         <TextView
                             android:id="@+id/btnBgBlack"
@@ -756,7 +852,7 @@
                             android:gravity="center"
                             android:maxLines="1"
                             android:text="纯黑"
-                            android:textColor="#B8C0D0"
+                            android:textColor="#CBD5E1"
                             android:textSize="12sp" />
 
                         <TextView
@@ -769,7 +865,7 @@
                             android:gravity="center"
                             android:maxLines="1"
                             android:text="深灰"
-                            android:textColor="#B8C0D0"
+                            android:textColor="#CBD5E1"
                             android:textSize="12sp" />
 
                         <TextView
@@ -782,7 +878,7 @@
                             android:gravity="center"
                             android:maxLines="1"
                             android:text="浅灰"
-                            android:textColor="#B8C0D0"
+                            android:textColor="#CBD5E1"
                             android:textSize="12sp" />
 
                         <TextView
@@ -795,12 +891,200 @@
                             android:gravity="center"
                             android:maxLines="1"
                             android:text="纯白"
-                            android:textColor="#B8C0D0"
+                            android:textColor="#CBD5E1"
                             android:textSize="12sp" />
                     </LinearLayout>
                 </LinearLayout>
 
-                <!-- Card 4: Switches -->
+                <!-- Card 4: Inline 2x3 Page-Turn Animations (matches Windows PC) -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginBottom="10dp"
+                    android:background="@drawable/bg_reader_settings_card"
+                    android:orientation="vertical"
+                    android:paddingHorizontal="14dp"
+                    android:paddingVertical="12dp">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginBottom="8dp"
+                        android:text="翻页动画"
+                        android:textColor="#FFE5E8F0"
+                        android:textSize="13.5sp"
+                        android:textStyle="bold" />
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal">
+
+                        <TextView
+                            android:id="@+id/btnAnimNone"
+                            android:layout_width="0dp"
+                            android:layout_height="32dp"
+                            android:layout_weight="1"
+                            android:background="@drawable/bg_reader_seg_unselected"
+                            android:gravity="center"
+                            android:text="无动画"
+                            android:textColor="#CBD5E1"
+                            android:textSize="12sp" />
+
+                        <TextView
+                            android:id="@+id/btnAnimFade"
+                            android:layout_width="0dp"
+                            android:layout_height="32dp"
+                            android:layout_marginStart="6dp"
+                            android:layout_weight="1"
+                            android:background="@drawable/bg_reader_seg_unselected"
+                            android:gravity="center"
+                            android:text="柔和淡入"
+                            android:textColor="#CBD5E1"
+                            android:textSize="12sp" />
+
+                        <TextView
+                            android:id="@+id/btnAnimSlide"
+                            android:layout_width="0dp"
+                            android:layout_height="32dp"
+                            android:layout_marginStart="6dp"
+                            android:layout_weight="1"
+                            android:background="@drawable/bg_reader_seg_unselected"
+                            android:gravity="center"
+                            android:text="平滑滑动"
+                            android:textColor="#CBD5E1"
+                            android:textSize="12sp" />
+                    </LinearLayout>
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="6dp"
+                        android:orientation="horizontal">
+
+                        <TextView
+                            android:id="@+id/btnAnimCover"
+                            android:layout_width="0dp"
+                            android:layout_height="32dp"
+                            android:layout_weight="1"
+                            android:background="@drawable/bg_reader_seg_unselected"
+                            android:gravity="center"
+                            android:text="覆层覆盖"
+                            android:textColor="#CBD5E1"
+                            android:textSize="12sp" />
+
+                        <TextView
+                            android:id="@+id/btnAnimCurl"
+                            android:layout_width="0dp"
+                            android:layout_height="32dp"
+                            android:layout_marginStart="6dp"
+                            android:layout_weight="1"
+                            android:background="@drawable/bg_reader_seg_unselected"
+                            android:gravity="center"
+                            android:text="拟真翻书"
+                            android:textColor="#CBD5E1"
+                            android:textSize="12sp" />
+
+                        <TextView
+                            android:id="@+id/btnAnimDepth"
+                            android:layout_width="0dp"
+                            android:layout_height="32dp"
+                            android:layout_marginStart="6dp"
+                            android:layout_weight="1"
+                            android:background="@drawable/bg_reader_seg_unselected"
+                            android:gravity="center"
+                            android:text="景深缩放"
+                            android:textColor="#CBD5E1"
+                            android:textSize="12sp" />
+                    </LinearLayout>
+                </LinearLayout>
+
+                <!-- Card 5: Inline 5-Column Prefetch Count (matches Windows PC) -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginBottom="10dp"
+                    android:background="@drawable/bg_reader_settings_card"
+                    android:orientation="vertical"
+                    android:paddingHorizontal="14dp"
+                    android:paddingVertical="12dp">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginBottom="8dp"
+                        android:text="后续页预加载缓存"
+                        android:textColor="#FFE5E8F0"
+                        android:textSize="13.5sp"
+                        android:textStyle="bold" />
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal">
+
+                        <TextView
+                            android:id="@+id/btnPrefetch0"
+                            android:layout_width="0dp"
+                            android:layout_height="32dp"
+                            android:layout_weight="1"
+                            android:background="@drawable/bg_reader_seg_unselected"
+                            android:gravity="center"
+                            android:text="关闭"
+                            android:textColor="#CBD5E1"
+                            android:textSize="12sp" />
+
+                        <TextView
+                            android:id="@+id/btnPrefetch2"
+                            android:layout_width="0dp"
+                            android:layout_height="32dp"
+                            android:layout_marginStart="5dp"
+                            android:layout_weight="1"
+                            android:background="@drawable/bg_reader_seg_unselected"
+                            android:gravity="center"
+                            android:text="2页"
+                            android:textColor="#CBD5E1"
+                            android:textSize="12sp" />
+
+                        <TextView
+                            android:id="@+id/btnPrefetch4"
+                            android:layout_width="0dp"
+                            android:layout_height="32dp"
+                            android:layout_marginStart="5dp"
+                            android:layout_weight="1"
+                            android:background="@drawable/bg_reader_seg_unselected"
+                            android:gravity="center"
+                            android:text="4页"
+                            android:textColor="#CBD5E1"
+                            android:textSize="12sp" />
+
+                        <TextView
+                            android:id="@+id/btnPrefetch6"
+                            android:layout_width="0dp"
+                            android:layout_height="32dp"
+                            android:layout_marginStart="5dp"
+                            android:layout_weight="1"
+                            android:background="@drawable/bg_reader_seg_unselected"
+                            android:gravity="center"
+                            android:text="6页"
+                            android:textColor="#CBD5E1"
+                            android:textSize="12sp" />
+
+                        <TextView
+                            android:id="@+id/btnPrefetch8"
+                            android:layout_width="0dp"
+                            android:layout_height="32dp"
+                            android:layout_marginStart="5dp"
+                            android:layout_weight="1"
+                            android:background="@drawable/bg_reader_seg_unselected"
+                            android:gravity="center"
+                            android:text="8页"
+                            android:textColor="#CBD5E1"
+                            android:textSize="12sp" />
+                    </LinearLayout>
+                </LinearLayout>
+
+                <!-- Card 6: Switches (synced with Windows PC) -->
                 <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
@@ -815,7 +1099,88 @@
                         android:layout_height="wrap_content"
                         android:gravity="center_vertical"
                         android:orientation="horizontal"
-                        android:paddingVertical="4dp">
+                        android:paddingVertical="3dp">
+
+                        <TextView
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:text="双页合并保留中缝间距"
+                            android:textColor="#FFE5E8F0"
+                            android:textSize="13.5sp" />
+
+                        <com.google.android.material.materialswitch.MaterialSwitch
+                            android:id="@+id/swSpreadGap"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content" />
+                    </LinearLayout>
+
+                    <View
+                        android:layout_width="match_parent"
+                        android:layout_height="1dp"
+                        android:layout_marginVertical="3dp"
+                        android:background="#1CFFFFFF" />
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal"
+                        android:paddingVertical="3dp">
+
+                        <TextView
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:text="双页分割强制裁切全部页"
+                            android:textColor="#FFE5E8F0"
+                            android:textSize="13.5sp" />
+
+                        <com.google.android.material.materialswitch.MaterialSwitch
+                            android:id="@+id/swSplitAllPages"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content" />
+                    </LinearLayout>
+
+                    <View
+                        android:layout_width="match_parent"
+                        android:layout_height="1dp"
+                        android:layout_marginVertical="3dp"
+                        android:background="#1CFFFFFF" />
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal"
+                        android:paddingVertical="3dp">
+
+                        <TextView
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:text="鼠标滚轮翻页"
+                            android:textColor="#FFE5E8F0"
+                            android:textSize="13.5sp" />
+
+                        <com.google.android.material.materialswitch.MaterialSwitch
+                            android:id="@+id/swWheelPageTurn"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content" />
+                    </LinearLayout>
+
+                    <View
+                        android:layout_width="match_parent"
+                        android:layout_height="1dp"
+                        android:layout_marginVertical="3dp"
+                        android:background="#1CFFFFFF" />
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal"
+                        android:paddingVertical="3dp">
 
                         <TextView
                             android:layout_width="0dp"
@@ -823,7 +1188,7 @@
                             android:layout_weight="1"
                             android:text="允许双击缩放画面"
                             android:textColor="#FFE5E8F0"
-                            android:textSize="14sp" />
+                            android:textSize="13.5sp" />
 
                         <com.google.android.material.materialswitch.MaterialSwitch
                             android:id="@+id/swDoubleTapZoom"
@@ -834,15 +1199,15 @@
                     <View
                         android:layout_width="match_parent"
                         android:layout_height="1dp"
-                        android:layout_marginVertical="4dp"
-                        android:background="#1FFFFFFF" />
+                        android:layout_marginVertical="3dp"
+                        android:background="#1CFFFFFF" />
 
                     <LinearLayout
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:gravity="center_vertical"
                         android:orientation="horizontal"
-                        android:paddingVertical="4dp">
+                        android:paddingVertical="3dp">
 
                         <LinearLayout
                             android:layout_width="0dp"
@@ -856,7 +1221,7 @@
                                 android:layout_height="wrap_content"
                                 android:text="智能裁剪页面白边"
                                 android:textColor="#FFE5E8F0"
-                                android:textSize="14sp" />
+                                android:textSize="13.5sp" />
 
                             <TextView
                                 android:layout_width="wrap_content"
@@ -876,15 +1241,15 @@
                     <View
                         android:layout_width="match_parent"
                         android:layout_height="1dp"
-                        android:layout_marginVertical="4dp"
-                        android:background="#1FFFFFFF" />
+                        android:layout_marginVertical="3dp"
+                        android:background="#1CFFFFFF" />
 
                     <LinearLayout
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:gravity="center_vertical"
                         android:orientation="horizontal"
-                        android:paddingVertical="4dp">
+                        android:paddingVertical="3dp">
 
                         <TextView
                             android:layout_width="0dp"
@@ -892,7 +1257,7 @@
                             android:layout_weight="1"
                             android:text="展示页码"
                             android:textColor="#FFE5E8F0"
-                            android:textSize="14sp" />
+                            android:textSize="13.5sp" />
 
                         <com.google.android.material.materialswitch.MaterialSwitch
                             android:id="@+id/swShowPageNumber"
@@ -910,7 +1275,7 @@
                     android:gravity="center"
                     android:paddingVertical="13dp"
                     android:text="翻译设置"
-                    android:textColor="#FF6DB4FF"
+                    android:textColor="#FF7DCEFF"
                     android:textSize="14sp" />
 
                 <TextView
@@ -921,7 +1286,7 @@
                     android:gravity="center"
                     android:paddingVertical="12dp"
                     android:text="更多阅读与点击区域设置..."
-                    android:textColor="#FF6DB4FF"
+                    android:textColor="#FF7DCEFF"
                     android:textSize="13.5sp" />
             </LinearLayout>
         </ScrollView>

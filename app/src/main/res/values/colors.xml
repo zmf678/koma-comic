@@ -1,10 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <color name="ic_launcher_bg">#182942</color>
-    <color name="surface_bg">#F4F5F8</color>
-    <color name="surface_card">#E8EAEE</color>
-    <color name="surface_pill">#E9ECF2</color>
-    <color name="text_primary">#1B1D21</color>
-    <color name="text_secondary">#5F6368</color>
-    <color name="rail_bg">#ECEFF4</color>
+    <color name="surface_bg">#F4F6FA</color>
+    <color name="surface_card">#FFFFFF</color>
+    <color name="surface_pill">#FFFFFF</color>
+    <color name="surface_border">#180F172A</color>
+    <color name="text_primary">#151B26</color>
+    <color name="text_secondary">#5B677C</color>
+    <color name="rail_bg">#EBEFF7</color>
+    <color name="accent_blue">#1D7FE8</color>
+    <color name="danger_red">#D93B47</color>
 </resources>

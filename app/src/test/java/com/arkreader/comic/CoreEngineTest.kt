@@ -135,6 +135,25 @@ class CoreEngineTest {
             listOf(PageSlot.Single(0), PageSlot.Single(1), PageSlot.Single(2), PageSlot.Single(3), PageSlot.Merged(4, 5)),
             withWide
         )
+
+        // Split mode only splits wide pages unless splitAllPages=true (matching Windows PC)
+        val smartSplit = SpreadSlotBuilder.buildSlots(
+            pageCount = 3,
+            effectiveMode = DoublePageMode.SPLIT,
+            firstPageSingle = false,
+            mergeRightToLeft = true,
+            isWidePage = { it == 1 },
+            splitAllPages = false
+        )
+        assertEquals(
+            listOf(
+                PageSlot.Single(0),
+                PageSlot.SplitHalf(1, leftHalf = false),
+                PageSlot.SplitHalf(1, leftHalf = true),
+                PageSlot.Single(2)
+            ),
+            smartSplit
+        )
     }
 
     @Test

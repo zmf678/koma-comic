@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <style name="Theme.ArkReader" parent="Theme.Material3.DayNight.NoActionBar">
-        <item name="colorPrimary">#4A6FA5</item>
-        <item name="colorPrimaryContainer">#D6E3F7</item>
-        <item name="colorOnPrimaryContainer">#132A4A</item>
+        <item name="colorPrimary">#1D7FE8</item>
+        <item name="colorPrimaryContainer">#DCEBFC</item>
+        <item name="colorOnPrimaryContainer">#0F2A4A</item>
         <item name="android:windowBackground">@color/surface_bg</item>
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>
@@ -31,8 +31,8 @@
         <item name="colorPrimaryContainer">#CBEFF4</item>
     </style>
     <style name="Theme.ArkReader.Blue" parent="Theme.ArkReader">
-        <item name="colorPrimary">#4A6FA5</item>
-        <item name="colorPrimaryContainer">#D6E3F7</item>
+        <item name="colorPrimary">#1D7FE8</item>
+        <item name="colorPrimaryContainer">#DCEBFC</item>
     </style>
     <style name="Theme.ArkReader.Purple" parent="Theme.ArkReader">
         <item name="colorPrimary">#7A54B8</item>

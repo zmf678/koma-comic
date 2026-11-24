@@ -7,9 +7,11 @@
     app:cardBackgroundColor="@color/surface_card"
     app:cardCornerRadius="16dp"
     app:cardElevation="2dp"
-    app:strokeWidth="0dp">
+    app:strokeColor="@color/surface_border"
+    app:strokeWidth="1dp">
 
     <androidx.constraintlayout.widget.ConstraintLayout
+        android:id="@+id/cardConstraint"
         android:layout_width="match_parent"
         android:layout_height="wrap_content">
 
@@ -23,36 +25,86 @@
             app:layout_constraintStart_toStartOf="parent"
             app:layout_constraintTop_toTopOf="parent" />
 
+        <!-- Top specular glass sheen matching Windows Liquid Glass showcase card -->
+        <View
+            android:id="@+id/viewTopGlint"
+            android:layout_width="0dp"
+            android:layout_height="36dp"
+            android:importantForAccessibility="no"
+            app:layout_constraintEnd_toEndOf="@id/ivCover"
+            app:layout_constraintStart_toStartOf="@id/ivCover"
+            app:layout_constraintTop_toTopOf="@id/ivCover" />
+
+        <!-- Top-left gold favorite star badge -->
+        <TextView
+            android:id="@+id/tvFavBadge"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_margin="7dp"
+            android:paddingHorizontal="7dp"
+            android:paddingVertical="2dp"
+            android:text="★"
+            android:textColor="#FFFFFFFF"
+            android:textSize="11sp"
+            android:textStyle="bold"
+            android:visibility="gone"
+            app:layout_constraintStart_toStartOf="@id/ivCover"
+            app:layout_constraintTop_toTopOf="@id/ivCover" />
+
+        <!-- Top-right source / chapter / format badge -->
         <TextView
             android:id="@+id/tvBadge"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_margin="7dp"
-            android:background="#AA0E1626"
+            android:ellipsize="end"
+            android:maxLines="1"
+            android:maxWidth="104dp"
             android:paddingHorizontal="7dp"
             android:paddingVertical="2dp"
-            android:textColor="#FFFFFF"
+            android:textColor="#FFFFFFFF"
             android:textSize="10sp"
+            android:textStyle="bold"
             android:visibility="gone"
-            app:layout_constraintStart_toStartOf="parent"
-            app:layout_constraintTop_toTopOf="parent" />
+            app:layout_constraintEnd_toEndOf="@id/ivCover"
+            app:layout_constraintTop_toTopOf="@id/ivCover" />
 
-        <TextView
-            android:id="@+id/tvTitle"
+        <!-- Floating Liquid Glass caption (glass mode) or clean below-cover caption (classic mode) -->
+        <LinearLayout
+            android:id="@+id/captionBox"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_marginHorizontal="6dp"
             android:layout_marginBottom="6dp"
-            android:ellipsize="end"
-            android:gravity="center"
-            android:maxLines="2"
-            android:paddingHorizontal="8dp"
+            android:orientation="vertical"
+            android:paddingHorizontal="9dp"
             android:paddingVertical="6dp"
-            android:textColor="@color/text_primary"
-            android:textSize="12.5sp"
-            android:textStyle="bold"
             app:layout_constraintBottom_toBottomOf="@id/ivCover"
             app:layout_constraintEnd_toEndOf="parent"
-            app:layout_constraintStart_toStartOf="parent" />
+            app:layout_constraintStart_toStartOf="parent">
+
+            <TextView
+                android:id="@+id/tvTitle"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:ellipsize="end"
+                android:gravity="start"
+                android:maxLines="2"
+                android:textColor="@color/text_primary"
+                android:textSize="12.5sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/tvSubTitle"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="2dp"
+                android:ellipsize="end"
+                android:gravity="start"
+                android:maxLines="1"
+                android:textColor="@color/text_secondary"
+                android:textSize="10.5sp"
+                android:visibility="gone" />
+        </LinearLayout>
     </androidx.constraintlayout.widget.ConstraintLayout>
 </com.google.android.material.card.MaterialCardView>

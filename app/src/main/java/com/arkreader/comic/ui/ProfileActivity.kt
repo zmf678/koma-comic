@@ -1,15 +1,15 @@
 package com.arkreader.comic.ui
 
-import android.content.Context
 import android.graphics.BitmapFactory
 import android.graphics.drawable.GradientDrawable
-import android.net.Uri
 import android.os.Bundle
 import android.text.InputFilter
 import android.view.Gravity
+import android.view.View
 import android.view.ViewGroup
 import android.widget.CheckBox
 import android.widget.EditText
+import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -17,6 +17,7 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.graphics.drawable.RoundedBitmapDrawableFactory
 import androidx.lifecycle.lifecycleScope
 import com.arkreader.comic.ArkReaderApp
 import com.arkreader.comic.R
@@ -34,19 +35,34 @@ import java.time.LocalDate
 import java.time.temporal.TemporalAdjusters
 
 internal fun ImageView.showProfileAvatar() {
-    background = GradientDrawable().apply {
-        shape = GradientDrawable.OVAL
-        setColor(context.getColor(R.color.surface_card))
+    val density = resources.displayMetrics.density
+    val keepGlassRing = background is LiquidGlassDrawable
+    if (!keepGlassRing) {
+        background = GradientDrawable().apply {
+            shape = GradientDrawable.OVAL
+            setColor(context.getColor(R.color.surface_card))
+            setStroke((1f * density).toInt().coerceAtLeast(1), context.getColor(R.color.surface_border))
+        }
     }
     clipToOutline = true
     val file = File(context.filesDir, "profile-avatar.jpg")
     val bitmap = if (file.exists()) BitmapFactory.decodeFile(file.absolutePath) else null
     if (bitmap != null) {
-        setPadding(0, 0, 0, 0)
+        // Leave a 3dp circular Liquid Glass ring around the avatar when glass is active (matching Windows PC)
+        val ringPad = if (keepGlassRing) (3f * density).toInt() else 0
+        setPadding(ringPad, ringPad, ringPad, ringPad)
         scaleType = ImageView.ScaleType.CENTER_CROP
-        setImageBitmap(bitmap)
+        if (keepGlassRing) {
+            val rounded = RoundedBitmapDrawableFactory.create(resources, bitmap).apply {
+                isCircular = true
+                setAntiAlias(true)
+            }
+            setImageDrawable(rounded)
+        } else {
+            setImageBitmap(bitmap)
+        }
     } else {
-        val padding = (resources.displayMetrics.density * 8).toInt()
+        val padding = (density * 9f).toInt()
         setPadding(padding, padding, padding, padding)
         scaleType = ImageView.ScaleType.FIT_CENTER
         setImageResource(R.drawable.ic_profile)
@@ -66,11 +82,23 @@ class ProfileActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         ThemeHelper.applyTheme(this)
         super.onCreate(savedInstanceState)
-        val root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
+
+        val frameRoot = FrameLayout(this).apply {
             fitsSystemWindows = true
             setBackgroundColor(getColor(R.color.surface_bg))
         }
+        val wallpaper = ImageView(this).apply {
+            scaleType = ImageView.ScaleType.CENTER_CROP
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+        }
+        frameRoot.addView(wallpaper, FrameLayout.LayoutParams(-1, -1))
+
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+        }
+        frameRoot.addView(root, FrameLayout.LayoutParams(-1, -1))
+        applyLibraryMaterial(frameRoot, wallpaper, root)
+
         val toolbar = MaterialToolbar(this).apply {
             title = "个人"
             setNavigationIcon(R.drawable.ic_arrow_back)
@@ -78,30 +106,35 @@ class ProfileActivity : AppCompatActivity() {
             setNavigationOnClickListener { finish() }
         }
         root.addView(toolbar, LinearLayout.LayoutParams(-1, dp(56)))
-        val content = column().apply { setPadding(dp(22), dp(8), dp(22), dp(24)) }
+        val content = column().apply { setPadding(dp(20), dp(8), dp(20), dp(28)) }
         root.addView(ScrollView(this).apply {
-            addView(content, android.widget.FrameLayout.LayoutParams(
-                resources.displayMetrics.widthPixels.coerceAtMost(dp(720)), -2, Gravity.TOP or Gravity.CENTER_HORIZONTAL))
+            addView(content, FrameLayout.LayoutParams(
+                resources.displayMetrics.widthPixels.coerceAtMost(dp(760)), -2, Gravity.TOP or Gravity.CENTER_HORIZONTAL))
         }, LinearLayout.LayoutParams(-1, 0, 1f))
+
         val account = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
         avatar = ImageView(this).apply {
             contentDescription = "头像"
+            if (ArkReaderApp.instance.prefs.glassMaterial) {
+                applyLiquidGlass(wallpaper, LiquidGlassPreset.FLOATING_DOCK, 25f, interactiveElastic = true, elevationDp = 5f)
+            }
             showProfileAvatar()
         }
-        account.addView(avatar, LinearLayout.LayoutParams(dp(48), dp(48)).apply { marginEnd = dp(14) })
+        account.addView(avatar, LinearLayout.LayoutParams(dp(50), dp(50)).apply { marginEnd = dp(14) })
         account.addView(statText("我的阅读", 23f, bold = true), LinearLayout.LayoutParams(0, -2, 1f))
-        account.addView(MaterialButton(this, null, com.google.android.material.R.attr.borderlessButtonStyle).apply {
+        account.addView(MaterialButton(this, null, com.google.android.material.R.attr.materialButtonOutlinedStyle).apply {
             text = "更换头像"
             setOnClickListener { pickPhoto.launch(arrayOf("image/*")) }
         })
         content.addView(account)
         val stats = column()
         content.addView(stats)
-        content.addView(MaterialButton(this, null, com.google.android.material.R.attr.borderlessButtonStyle).apply {
+        content.addView(MaterialButton(this, null, com.google.android.material.R.attr.materialButtonOutlinedStyle).apply {
             text = "问题反馈"
+            layoutParams = LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(16) }
             setOnClickListener { showFeedback() }
         })
-        setContentView(root)
+        setContentView(frameRoot)
         lifecycleScope.launch {
             val time = withContext(Dispatchers.IO) { ArkReaderApp.instance.db.readingTime() }
             renderStats(stats, time)
@@ -122,10 +155,10 @@ class ProfileActivity : AppCompatActivity() {
             else -> week
         }
         val chart = column().apply {
-            background = statSurface(getColor(R.color.surface_card), 16)
-            setPadding(dp(18), dp(16), dp(18), dp(12))
+            applyGlassPanelSurface(18f)
+            setPadding(dp(18), dp(16), dp(18), dp(14))
         }
-        group.addView(chart, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(18) })
+        group.addView(chart, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(16) })
         chart.addView(statText("阅读时长", 17f, bold = true).apply { isAccessibilityHeading = true })
         val summary = LinearLayout(this).apply { gravity = Gravity.BOTTOM; setPadding(0, dp(8), 0, dp(8)) }
         val main = column().apply {
@@ -134,42 +167,59 @@ class ProfileActivity : AppCompatActivity() {
                 selected != null -> "${selected.monthValue} 月 ${selected.dayOfMonth} 日"
                 else -> "近 7 天"
             }, 13f, muted = true))
-            addView(statText(duration(scope.sumOf { it.millis }), 31f, bold = true))
+            addView(statText(duration(scope.sumOf { it.millis }), 32f, bold = true))
         }
         summary.addView(main, LinearLayout.LayoutParams(0, -2, 1f))
         summary.addView(column().apply {
-            addView(statText("今日 ${duration(daily[today.toString()] ?: 0L)}", 12f, muted = true))
-            addView(statText("本周 ${duration(calendarWeek)}", 12f, muted = true))
+            addView(statText("今日 ${duration(daily[today.toString()] ?: 0L)}", 12.5f, muted = true))
+            addView(statText("本周 ${duration(calendarWeek)}", 12.5f, muted = true))
         })
         chart.addView(summary)
         chart.addView(weekChart(dates, dates.map { daily[it.toString()] ?: 0L }, selected, ::duration) { date ->
             if (date <= today) renderStats(group, data, if (date == selected) null else date)
         })
-        val controls = LinearLayout(this).apply { gravity = Gravity.END }
-        listOf(false to "近 7 天", true to "全部").forEach { (showAll, title) ->
+
+        // Works breakdown card with inline filter pills (synced with Windows PC)
+        val worksCard = column().apply {
+            applyGlassPanelSurface(18f)
+            setPadding(dp(18), dp(14), dp(18), dp(14))
+        }
+        group.addView(worksCard, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(14) })
+
+        val headerRow = LinearLayout(this).apply {
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, 0, 0, dp(8))
+        }
+        headerRow.addView(statText("作品明细", 18f, bold = true).apply { isAccessibilityHeading = true }, LinearLayout.LayoutParams(0, -2, 1f))
+        listOf(false to "近 7 天", true to "全部").forEachIndexed { idx, (showAll, title) ->
             val active = selected == null && showAll == all
             val style = if (active) com.google.android.material.R.attr.materialButtonStyle
-                else com.google.android.material.R.attr.borderlessButtonStyle
-            controls.addView(MaterialButton(this, null, style).apply {
+                else com.google.android.material.R.attr.materialButtonOutlinedStyle
+            headerRow.addView(MaterialButton(this, null, style).apply {
                 text = title
                 isSelected = active
+                layoutParams = LinearLayout.LayoutParams(-2, -2).apply {
+                    if (idx > 0) marginStart = dp(8)
+                }
                 setOnClickListener { if (!active) renderStats(group, data, all = showAll) }
             })
         }
-        group.addView(controls)
-        heading(group, "作品明细")
+        worksCard.addView(headerRow)
+
         val works = scope.groupBy { it.comicId }.values.sortedByDescending { rows -> rows.sumOf { it.millis } }
-        if (works.isEmpty()) group.addView(statText("这段时间没有阅读记录。", 14f, muted = true))
-        works.forEach { rows ->
+        if (works.isEmpty()) worksCard.addView(statText("这段时间没有阅读记录。", 14f, muted = true))
+        works.forEachIndexed { i, rows ->
             val workTime = rows.sumOf { it.millis }
             val line = LinearLayout(this).apply {
                 gravity = Gravity.CENTER_VERTICAL
-                minimumHeight = dp(48)
+                minimumHeight = dp(46)
                 addView(statText(rows.maxBy { it.day }.title, 15f, bold = true), LinearLayout.LayoutParams(0, -2, 1f))
                 addView(statText(duration(workTime), 14f, muted = true).apply { setPadding(dp(12), 0, 0, 0) })
             }
-            group.addView(line)
-            group.addView(android.view.View(this).apply { setBackgroundColor(getColor(R.color.surface_card)) }, LinearLayout.LayoutParams(-1, dp(1)))
+            worksCard.addView(line)
+            if (i < works.lastIndex) {
+                worksCard.addView(View(this).apply { setBackgroundColor(getColor(R.color.surface_border)) }, LinearLayout.LayoutParams(-1, dp(1)))
+            }
         }
     }
 
@@ -192,7 +242,7 @@ class ProfileActivity : AppCompatActivity() {
             hint = if (prefs.hasFeedbackToken) "GitHub Token 已保存，留空继续使用" else "GitHub Token（可创建 Issue）"
             inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
             isSingleLine = true
-            importantForAutofill = android.view.View.IMPORTANT_FOR_AUTOFILL_NO
+            importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO
         }
         val remember = CheckBox(this).apply { text = "在本机加密保存 Token"; isChecked = prefs.hasFeedbackToken }
         val status = statText("", 14f, muted = true)
@@ -233,7 +283,7 @@ class ProfileActivity : AppCompatActivity() {
                 result.onSuccess { (number, saved) ->
                     status.text = (if (number > 0) "已提交 Issue #$number" else "GitHub 已接收反馈") +
                         if (saved) "" else "。Token 设置未保存"
-                    confirm.visibility = android.view.View.GONE
+                    confirm.visibility = View.GONE
                     token.text?.clear()
                     listOf(title, body, details, token, remember).forEach { it.isEnabled = false }
                 }.onFailure {
@@ -246,12 +296,6 @@ class ProfileActivity : AppCompatActivity() {
 
     private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
     private fun column() = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-    private fun heading(group: LinearLayout, value: String) {
-        group.addView(statText(value, 19f, bold = true).apply {
-            isAccessibilityHeading = true
-            setPadding(0, dp(8), 0, dp(6))
-        }, ViewGroup.LayoutParams(-1, -2))
-    }
     private fun duration(millis: Long): String {
         val minutes = millis / 60_000
         return when {

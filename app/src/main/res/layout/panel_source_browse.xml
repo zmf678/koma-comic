@@ -1,23 +1,23 @@
 <?xml version="1.0" encoding="utf-8"?>
-<HorizontalScrollView xmlns:android="http://schemas.android.com/apk/res/android"
-    android:layout_width="match_parent"
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="wrap_content"
     android:layout_height="wrap_content"
-    android:clipToPadding="false"
-    android:paddingHorizontal="12dp"
-    android:scrollbars="none"
+    android:gravity="center_vertical"
+    android:orientation="horizontal"
     android:visibility="gone">
 
     <LinearLayout
         android:id="@+id/browseActions"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
+        android:gravity="center_vertical"
         android:orientation="horizontal">
-
 
         <LinearLayout
             android:id="@+id/channelTabs"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
+            android:gravity="center_vertical"
             android:orientation="horizontal" />
 
         <com.google.android.material.button.MaterialButton
@@ -25,18 +25,21 @@
             style="@style/Widget.Material3.Button.TextButton"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:minHeight="48dp"
-            android:text="分类" />
+            android:minHeight="40dp"
+            android:minWidth="0dp"
+            android:paddingHorizontal="10dp"
+            android:text="分类 ▾"
+            android:textSize="13sp" />
 
         <com.google.android.material.button.MaterialButton
             android:id="@+id/btnSourceFilters"
             style="@style/Widget.Material3.Button.TextButton"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:minHeight="48dp"
-            android:text="筛选" />
-
-
-
+            android:minHeight="40dp"
+            android:minWidth="0dp"
+            android:paddingHorizontal="10dp"
+            android:text="筛选"
+            android:textSize="13sp" />
     </LinearLayout>
-</HorizontalScrollView>
+</LinearLayout>

@@ -1,6 +1,7 @@
 package com.arkreader.comic.ui
 
 import android.content.Intent
+import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.view.LayoutInflater
 import android.view.View
@@ -14,7 +15,10 @@ import androidx.documentfile.provider.DocumentFile
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
+import androidx.recyclerview.widget.SimpleItemAnimator
 import com.arkreader.comic.ArkReaderApp
+import com.arkreader.comic.R
+import com.arkreader.comic.data.SortType
 import com.arkreader.comic.data.Warehouse
 import com.arkreader.comic.data.WarehouseType
 import com.arkreader.comic.databinding.ItemWarehouseBinding
@@ -104,8 +108,11 @@ class MainWarehousePanel(
     init {
         binding.rvMainWarehouses.layoutManager = LinearLayoutManager(activity)
         binding.rvMainWarehouses.adapter = adapter
+        (binding.rvMainWarehouses.itemAnimator as? SimpleItemAnimator)?.supportsChangeAnimations = false
+        binding.rvMainWarehouses.attachLiquidGlassScrollbar()
 
         binding.btnWhAddLocal.setOnClickListener { pickFolderLauncher.launch(null) }
+        binding.btnWhImportArchive.setOnClickListener { importLocalArchives() }
         binding.btnWhAddWebDav.setOnClickListener {
             activity.startActivity(Intent(activity, WebDavConfigActivity::class.java))
         }
@@ -119,6 +126,14 @@ class MainWarehousePanel(
         val list = app.db.getWarehouses()
         adapter.submitList(list)
         binding.tvWarehouseEmpty.visibility = if (list.isEmpty()) View.VISIBLE else View.GONE
+        val localCount = app.db.getComicsForHome(0, 0L, emptySet(), "", SortType.NAME_ASC).size
+        val density = activity.resources.displayMetrics.density
+        binding.tvLocalComicCount.text = "$localCount 本本地漫画"
+        binding.tvLocalComicCount.background = GradientDrawable().apply {
+            cornerRadius = 12f * density
+            setColor(0x2238A3FF)
+            setStroke((1f * density).toInt().coerceAtLeast(1), 0x4838A3FF)
+        }
     }
 
     private fun addLocalWarehouseFromUri(uri: Uri) {
@@ -284,6 +299,7 @@ class MainWarehousePanel(
         override fun onBindViewHolder(holder: VH, position: Int) {
             val item = items[position]
             val b = holder.binding
+            b.root.applyGlassCardStyle(16f)
             b.tvWhName.text = item.name
             val typeLabel = if (item.type == WarehouseType.WEBDAV) "WebDAV" else "本地目录"
             val scanTime = if (item.lastScannedAt > 0L) " · 上次扫描 ${dateFmt.format(Date(item.lastScannedAt))}" else ""

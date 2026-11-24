@@ -32,9 +32,20 @@ class CoverCache(context: Context) {
         return digest.joinToString("") { "%02x".format(it) }.take(32)
     }
 
+    fun getMemoryCover(key: String): Bitmap? {
+        if (key.isEmpty()) return null
+        return memCache.get(key)?.takeIf { !it.isRecycled }
+    }
+
+    fun getMemoryHttpCover(url: String): Bitmap? {
+        if (url.isBlank()) return null
+        val key = makeKey("url:$url")
+        return memCache.get(key)?.takeIf { !it.isRecycled }
+    }
+
     fun getCover(key: String): Bitmap? {
         if (key.isEmpty()) return null
-        memCache.get(key)?.let { return it }
+        memCache.get(key)?.takeIf { !it.isRecycled }?.let { return it }
         val file = File(coverDir, "$key.jpg")
         if (!file.exists()) return null
         val bmp = BitmapFactory.decodeFile(file.absolutePath) ?: return null

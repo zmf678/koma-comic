@@ -187,18 +187,19 @@ object ImageProcessor {
         return Bitmap.createBitmap(src, x, 0, halfW, src.height)
     }
 
-    fun mergeSideBySide(left: Bitmap, right: Bitmap, bgColor: Int): Bitmap {
+    fun mergeSideBySide(left: Bitmap, right: Bitmap, bgColor: Int, gapPx: Int = 0): Bitmap {
         val targetH = max(left.height, right.height)
         val leftScaledW = (left.width * (targetH.toFloat() / left.height)).toInt().coerceAtLeast(1)
         val rightScaledW = (right.width * (targetH.toFloat() / right.height)).toInt().coerceAtLeast(1)
-        val totalW = leftScaledW + rightScaledW
+        val safeGap = gapPx.coerceAtLeast(0)
+        val totalW = leftScaledW + safeGap + rightScaledW
         val out = Bitmap.createBitmap(totalW, targetH, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(out)
         canvas.drawColor(bgColor)
         val lBmp = if (left.height != targetH) Bitmap.createScaledBitmap(left, leftScaledW, targetH, true) else left
         val rBmp = if (right.height != targetH) Bitmap.createScaledBitmap(right, rightScaledW, targetH, true) else right
         canvas.drawBitmap(lBmp, 0f, 0f, null)
-        canvas.drawBitmap(rBmp, leftScaledW.toFloat(), 0f, null)
+        canvas.drawBitmap(rBmp, (leftScaledW + safeGap).toFloat(), 0f, null)
         if (lBmp !== left) lBmp.recycle()
         if (rBmp !== right) rBmp.recycle()
         return out

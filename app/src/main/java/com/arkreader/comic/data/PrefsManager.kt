@@ -152,4 +152,12 @@ class PrefsManager(context: Context) {
     var wheelPageTurn: Boolean
         get() = sp.getBoolean("wheel_page_turn", true)
         set(value) = sp.edit().putBoolean("wheel_page_turn", value).apply()
+
+    var spreadGap: Boolean
+        get() = sp.getBoolean("reader_spread_gap", true)
+        set(value) = sp.edit().putBoolean("reader_spread_gap", value).apply()
+
+    var splitAllPages: Boolean
+        get() = sp.getBoolean("reader_split_all_pages", false)
+        set(value) = sp.edit().putBoolean("reader_split_all_pages", value).apply()
 }

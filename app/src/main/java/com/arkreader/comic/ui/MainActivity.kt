@@ -1,7 +1,9 @@
 package com.arkreader.comic.ui
 
 import android.content.Intent
+import android.content.res.Configuration
 import android.graphics.Bitmap
+import android.graphics.drawable.GradientDrawable
 import android.hardware.biometrics.BiometricPrompt
 import android.os.Bundle
 import android.os.CancellationSignal
@@ -15,12 +17,15 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.inputmethod.EditorInfo
 import android.widget.EditText
+import android.widget.HorizontalScrollView
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.PopupMenu
+import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
+import androidx.constraintlayout.widget.ConstraintLayout
 import androidx.core.os.BundleCompat
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
@@ -28,6 +33,7 @@ import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
+import androidx.recyclerview.widget.SimpleItemAnimator
 import com.arkreader.comic.ArkReaderApp
 import com.arkreader.comic.R
 import com.arkreader.comic.data.Bookshelf
@@ -47,8 +53,9 @@ import com.arkreader.comic.databinding.ActivityMainBinding
 import com.arkreader.comic.databinding.ItemComicCardBinding
 import com.arkreader.comic.databinding.ItemComicListBinding
 import com.arkreader.comic.engine.LocalScanner
-import com.google.android.material.chip.Chip
 import com.google.android.material.button.MaterialButton
+import com.google.android.material.chip.Chip
+import com.google.android.material.chip.ChipGroup
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -62,6 +69,7 @@ import org.json.JSONArray
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.WeakHashMap
 
 sealed class DisplayComicItem {
     data class Local(val comic: Comic) : DisplayComicItem()
@@ -98,10 +106,11 @@ class MainActivity : AppCompatActivity() {
     private val app get() = ArkReaderApp.instance
     private val Int.dp get() = (this * resources.displayMetrics.density + 0.5f).toInt()
 
-    private var currentNavMode = NAV_HOME // 0=Home, 1=Collections, 2=Warehouse, 3=Settings
+    private var currentNavMode = NAV_HOME // 0=Home, 1=Collections, 2=Warehouse, 3=Settings, 4=Favorites
     private var activeHomeFilterTag = ""
     private val unlockedShelfIds = mutableSetOf<Long>()
     private val shelfPassTimes = mutableMapOf<Long, Long>()
+    private var lockedShelfPending: Bookshelf? = null
     private var currentQuery = ""
     private var scanJob: Job? = null
     private var sourceLoadJob: Job? = null
@@ -114,6 +123,7 @@ class MainActivity : AppCompatActivity() {
     private var filterTarget: SourceBrowseTarget? = null
     private var browseFilters: SourceBrowseFilters? = null
     private var categoryJob: Job? = null
+    private val categoryGroupCache = mutableMapOf<String, List<SourceBrowseTarget>>()
     private val feedMemory by lazy { ViewModelProvider(this)[SourceFeedMemory::class.java] }
     private var loadedSourceKey: String? = null
     private var displayedSourceKey: String? = null
@@ -125,6 +135,9 @@ class MainActivity : AppCompatActivity() {
     private var onlinePageFailed = false
     private val onlineItems = mutableListOf<DisplayComicItem>()
     private val ungroupedComicIds = mutableSetOf<String>()
+
+    // Track in-flight cover jobs per ImageView to cancel cleanly on fast scroll / recycle
+    private val coverJobs = WeakHashMap<ImageView, Job>()
 
     private val comicAdapter = ComicAdapter(
         onClick = { item ->
@@ -143,7 +156,8 @@ class MainActivity : AppCompatActivity() {
             }
         },
         loadLocalCover = { key, iv, onReady -> loadLocalCoverAsync(key, iv, onReady) },
-        loadOnlineCover = { url, headers, iv, onReady -> loadOnlineCoverAsync(url, headers, iv, onReady) }
+        loadOnlineCover = { url, headers, iv, onReady -> loadOnlineCoverAsync(url, headers, iv, onReady) },
+        cancelCover = { iv -> coverJobs.remove(iv)?.cancel() }
     )
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -184,10 +198,23 @@ class MainActivity : AppCompatActivity() {
             }
         })
         binding.profileButton.setOnClickListener { startActivity(Intent(this, ProfileActivity::class.java)) }
+        setupFloatingHeaderInsets()
         setupNavigation()
         setupSearchAndFilters()
         setupRecycler()
         setupFab()
+    }
+
+    private fun setupFloatingHeaderInsets() {
+        val isPhone = binding.bottomNav != null
+        val padH = if (isPhone) 10.dp else 14.dp
+        val padBottom = if (isPhone) 104.dp else 88.dp
+        binding.floatingHeader.addOnLayoutChangeListener { v, _, top, _, bottom, _, oldTop, _, oldBottom ->
+            val h = bottom - top
+            if (h > 0 && h != (oldBottom - oldTop) || binding.rvComics.paddingTop != h + 4.dp) {
+                binding.rvComics.setPadding(padH, h + 4.dp, padH, padBottom)
+            }
+        }
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
@@ -205,12 +232,29 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
-        binding.profileButton.showProfileAvatar()
+        refreshAdapterMetadataCache()
         syncNavigationSelection(currentNavMode)
         applyGridLayoutManager()
-        applyLibraryMaterial(binding.root, binding.libraryWallpaper, binding.panelComics)
+        applyLibraryMaterial(
+            binding.root,
+            binding.libraryWallpaper,
+            binding.panelComics,
+            binding.panelWarehouse.root,
+            binding.panelSettings.root
+        )
         binding.navRail?.let { rail -> applyFloatingDock(rail, binding.btnRailSettings, binding.libraryWallpaper) }
-        applyMainGlassChrome(binding.libraryWallpaper, binding.searchPill, binding.bottomNav, binding.profileButton)
+        applyMainGlassChrome(
+            binding.libraryWallpaper,
+            binding.searchPill,
+            binding.browseBar,
+            binding.bottomNav,
+            binding.profileButton
+        )
+        binding.btnTopRefresh.applyGlassActionPill(binding.libraryWallpaper, 18f)
+        binding.btnTopGrid.applyGlassActionPill(binding.libraryWallpaper, 18f)
+        // Call showProfileAvatar AFTER applyMainGlassChrome so circular avatar sits cleanly inside glass ring
+        binding.profileButton.showProfileAvatar()
+
         relockQuickShelvesIfNeeded()
         applyNavModePanels(currentNavMode)
         when (currentNavMode) {
@@ -226,6 +270,13 @@ class MainActivity : AppCompatActivity() {
             NAV_WAREHOUSE -> warehousePanel.refresh()
             NAV_SETTINGS -> settingsPanel.refresh()
         }
+    }
+
+    private fun refreshAdapterMetadataCache() {
+        val favOnline = app.db.getComicsForHome(3, 0L, unlockedShelfIds, "", SortType.NAME_ASC)
+            .mapTo(HashSet()) { it.sourceUri }
+        val srcNames = app.db.getComicSources(onlyEnabled = false).associate { it.sourceKey to it.name }
+        comicAdapter.updateMetadataCache(favOnline, srcNames, hideFavBadge = currentNavMode == NAV_FAVORITES)
     }
 
     private fun selectedMenuIdForMode(mode: Int): Int = when (mode) {
@@ -248,12 +299,14 @@ class MainActivity : AppCompatActivity() {
 
     private fun applyNavModePanels(mode: Int) {
         val showComics = mode == NAV_HOME || mode == NAV_BOOKSHELF || mode == NAV_FAVORITES
+        binding.localShelfHeader.visibility = if (mode == NAV_BOOKSHELF) View.VISIBLE else View.GONE
         binding.chipScroll.visibility = if (mode == NAV_FAVORITES) View.GONE else View.VISIBLE
         binding.tvSectionTitle.visibility = if (mode == NAV_FAVORITES) View.VISIBLE else View.GONE
         binding.panelComics.visibility = if (showComics) View.VISIBLE else View.GONE
         binding.panelWarehouse.root.visibility = if (mode == NAV_WAREHOUSE) View.VISIBLE else View.GONE
         binding.panelSettings.root.visibility = if (mode == NAV_SETTINGS) View.VISIBLE else View.GONE
         binding.fabContinue.visibility = if (showComics) View.VISIBLE else View.GONE
+        comicAdapter.setHideFavBadge(mode == NAV_FAVORITES)
     }
 
     private fun switchToNavMode(mode: Int) {
@@ -265,6 +318,7 @@ class MainActivity : AppCompatActivity() {
             return
         }
         currentNavMode = mode
+        lockedShelfPending = null
         syncNavigationSelection(mode)
         sourceLoadJob?.cancel()
         categoryJob?.cancel()
@@ -295,8 +349,8 @@ class MainActivity : AppCompatActivity() {
                 else -> binding.panelComics
             }
             panel.animate().cancel()
-            panel.alpha = 0.86f
-            panel.translationY = 7.dp.toFloat()
+            panel.alpha = 0.88f
+            panel.translationY = 6.dp.toFloat()
             panel.animate().alpha(1f).translationY(0f).setDuration(180)
                 .setInterpolator(android.view.animation.DecelerateInterpolator()).start()
         }
@@ -349,16 +403,16 @@ class MainActivity : AppCompatActivity() {
         group.setOnCheckedStateChangeListener(null)
         group.removeAllViews()
 
-        fun addFilterChip(tag: String, label: String): Chip {
+        fun addFilterChip(tag: String, label: String, checkable: Boolean = true): Chip {
             val chip = Chip(this, null, com.google.android.material.R.attr.chipStyle).apply {
                 id = View.generateViewId()
                 text = label
-                ensureAccessibleTouchTarget(48.dp)
-                isCheckable = true
+                ensureAccessibleTouchTarget(40.dp)
+                isCheckable = checkable
                 isCheckedIconVisible = false
                 applyGlassChip()
                 this.tag = tag
-                isChecked = tag == activeHomeFilterTag
+                isChecked = checkable && tag == activeHomeFilterTag
             }
             group.addView(chip)
             return chip
@@ -367,11 +421,16 @@ class MainActivity : AppCompatActivity() {
         val last = enabledSources.find { it.sourceKey == activeHomeFilterTag.removePrefix("src:") }
             ?: enabledSources.find { it.sourceKey == app.prefs.lastSource }
             ?: enabledSources.firstOrNull()
-        if (last != null) {
+        if (activeHomeFilterTag == TAG_LOCAL_HISTORY) {
+            addFilterChip(TAG_LOCAL_HISTORY, "最近阅读")
+            if (last != null) {
+                addFilterChip("back:${last.sourceKey}", "返回 ${last.name}", checkable = false)
+                    .setOnClickListener { selectHomeFilter("src:${last.sourceKey}") }
+            }
+        } else if (last != null) {
             val activeTag = "src:${last.sourceKey}"
-            addFilterChip(activeTag, "${last.name} ▾").setOnClickListener { showQuickSourcePicker(enabledSources) }
+            addFilterChip(activeTag, "${last.name} ▾").setOnClickListener { showQuickSourcePicker() }
         }
-        if (activeHomeFilterTag == TAG_LOCAL_HISTORY) addFilterChip(TAG_LOCAL_HISTORY, "最近阅读")
         val hasContext = group.childCount != 0
         binding.chipScroll.visibility = if (hasContext) View.VISIBLE else View.GONE
         binding.tvSectionTitle.visibility = if (hasContext) View.GONE else View.VISIBLE
@@ -393,28 +452,42 @@ class MainActivity : AppCompatActivity() {
         showHomeFeed()
     }
 
-    private fun showQuickSourcePicker(sources: List<com.arkreader.comic.data.ComicSourceEntity>) {
+    /**
+     * Quick source switcher synced with Windows PC: shows all sources (including disabled ones
+     * labeled "(已停用)" that auto-enable on pick), version tags, search filter, and Source Manager shortcut.
+     */
+    private fun showQuickSourcePicker() {
+        val allSources = app.db.getComicSources(onlyEnabled = false)
         val dp = resources.displayMetrics.density
-        val box = android.widget.LinearLayout(this).apply {
-            orientation = android.widget.LinearLayout.VERTICAL
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
             setPadding((16 * dp).toInt(), (8 * dp).toInt(), (16 * dp).toInt(), 0)
         }
         val etSearch = EditText(this).apply {
-            hint = "搜索已启用漫画源（共 ${sources.size} 个）"
+            hint = "搜索漫画源（共 ${allSources.size} 个）"
             isSingleLine = true
         }
-        val ordered = sources.sortedByDescending { "src:${it.sourceKey}" == activeHomeFilterTag }
+        val ordered = allSources.sortedWith(
+            compareByDescending<com.arkreader.comic.data.ComicSourceEntity> { "src:${it.sourceKey}" == activeHomeFilterTag }
+                .thenByDescending { it.enabled }
+                .thenBy { it.name.lowercase() }
+        )
         val filtered = ordered.toMutableList()
         val listView = android.widget.ListView(this).apply {
-            layoutParams = android.widget.LinearLayout.LayoutParams(
-                android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
-                (resources.configuration.screenHeightDp * 0.42f * dp).toInt()
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                (resources.configuration.screenHeightDp * 0.44f * dp).toInt()
             )
         }
         fun renderList(): android.widget.ArrayAdapter<String> {
-            val labels = filtered.map {
-                if ("src:${it.sourceKey}" == activeHomeFilterTag) "${it.name}（当前）"
-                else "${it.name} · ${it.sourceKey}"
+            val labels = filtered.map { src ->
+                val ver = src.version.takeIf { it.isNotBlank() }?.let { " v$it" }.orEmpty()
+                val status = when {
+                    "src:${src.sourceKey}" == activeHomeFilterTag -> "（当前）"
+                    !src.enabled -> "（已停用 · 点击启用）"
+                    else -> ""
+                }
+                "${src.name}$ver$status"
             }
             return android.widget.ArrayAdapter(this, android.R.layout.simple_list_item_1, labels)
         }
@@ -439,14 +512,21 @@ class MainActivity : AppCompatActivity() {
         box.addView(listView)
 
         val dialog = MaterialAlertDialogBuilder(this)
-            .setTitle("快速切换漫画源 (${sources.size})")
+            .setTitle("切换漫画源 (${allSources.size})")
             .setView(box)
+            .setNeutralButton("源管理") { _, _ ->
+                startActivity(Intent(this, SourceManageActivity::class.java))
+            }
             .setNegativeButton("取消", null)
             .show()
 
         listView.setOnItemClickListener { _, _, position, _ ->
             val chosen = filtered.getOrNull(position) ?: return@setOnItemClickListener
             dialog.dismiss()
+            if (!chosen.enabled) {
+                app.db.setComicSourceEnabled(chosen.sourceKey, true)
+                Toast.makeText(this, "已自动启用「${chosen.name}」", Toast.LENGTH_SHORT).show()
+            }
             selectHomeFilter("src:${chosen.sourceKey}")
         }
     }
@@ -454,28 +534,31 @@ class MainActivity : AppCompatActivity() {
     private fun rebuildCollectionChips() {
         val shelves = app.db.getBookshelves()
         val currentId = app.prefs.activeBookshelfId
-        val activeShelf = shelves.find {
-            it.id == currentId && (it.lockType == LockType.NONE || unlockedShelfIds.contains(it.id))
-        }
-        if (activeShelf == null) app.prefs.activeBookshelfId = 0L
+        val activeShelf = shelves.find { it.id == currentId }
+        if (activeShelf == null && currentId != 0L) app.prefs.activeBookshelfId = 0L
 
         val group = binding.chipGroupHome
         group.setOnCheckedStateChangeListener(null)
         group.removeAllViews()
-        val all = Chip(this).apply {
+        val allCount = app.db.getComicsForHome(4, 0L, unlockedShelfIds, "", SortType.NAME_ASC).size
+        val all = Chip(this, null, com.google.android.material.R.attr.chipStyle).apply {
             id = View.generateViewId()
-            text = "全部本地"
+            text = "全部本地 ($allCount)"
             isCheckable = true
+            isCheckedIconVisible = false
             isChecked = activeShelf == null
             applyGlassChip()
             tag = 0L
         }
         group.addView(all)
         shelves.forEach { shelf ->
-            val lockMark = if (shelf.lockType != LockType.NONE && !unlockedShelfIds.contains(shelf.id)) " [锁]" else ""
+            val locked = shelf.lockType != LockType.NONE && !unlockedShelfIds.contains(shelf.id)
+            val count = if (locked) null else app.db.getComicsForHome(0, shelf.id, unlockedShelfIds, "", SortType.NAME_ASC).size
+            val lockPrefix = if (locked) "🔒 " else ""
+            val countSuffix = if (count != null) " ($count)" else ""
             val chip = Chip(this, null, com.google.android.material.R.attr.chipStyle).apply {
                 id = View.generateViewId()
-                text = shelf.name + lockMark
+                text = "$lockPrefix${shelf.name}$countSuffix"
                 isCheckable = true
                 isCheckedIconVisible = false
                 applyGlassChip()
@@ -490,6 +573,7 @@ class MainActivity : AppCompatActivity() {
                 id = View.generateViewId()
                 text = label
                 isCheckable = false
+                isCheckedIconVisible = false
                 applyGlassChip()
                 setOnClickListener { onClick() }
             })
@@ -506,6 +590,7 @@ class MainActivity : AppCompatActivity() {
             val selectedChip = grp.findViewById<Chip>(checkedId) ?: return@setOnCheckedStateChangeListener
             val shelfId = selectedChip.tag as? Long ?: return@setOnCheckedStateChangeListener
             if (shelfId == 0L) {
+                lockedShelfPending = null
                 app.prefs.activeBookshelfId = 0L
                 reloadComics()
                 return@setOnCheckedStateChangeListener
@@ -544,15 +629,47 @@ class MainActivity : AppCompatActivity() {
         }
 
         binding.btnFilterSort.setOnClickListener { showSortAndGridDialog() }
+        binding.btnTopRefresh.setOnClickListener {
+            if (currentNavMode == NAV_BOOKSHELF) {
+                scanAllWarehouses()
+            } else {
+                reloadComics()
+                Toast.makeText(this, "已刷新", Toast.LENGTH_SHORT).show()
+            }
+        }
+        binding.btnTopGrid.setOnClickListener {
+            val values = GridSize.values()
+            val next = values[(values.indexOf(app.prefs.gridSize) + 1) % values.size]
+            app.prefs.gridSize = next
+            applyGridLayoutManager()
+            Toast.makeText(this, "视图：${next.label}", Toast.LENGTH_SHORT).show()
+        }
+        binding.btnTopGrid.setOnLongClickListener {
+            showGridSizeDialog()
+            true
+        }
         binding.btnMore.setOnClickListener { anchor -> showMoreMenu(anchor) }
         binding.btnOnlineRetry.setOnClickListener { reloadComics() }
-        binding.browseControls.btnCategories.setOnClickListener { showBrowseCategoryGroups() }
+        binding.btnShelfUnlock.setOnClickListener {
+            lockedShelfPending?.let { shelf ->
+                when (shelf.lockType) {
+                    LockType.PIN -> showPinUnlockDialog(shelf)
+                    LockType.BIOMETRIC -> showBiometricUnlock(shelf)
+                    LockType.NONE -> reloadComics()
+                }
+            }
+        }
+        binding.browseControls.btnCategories.setOnClickListener { showUnifiedCategoryDialog() }
         binding.browseControls.btnSourceFilters.setOnClickListener { showBrowseFilters() }
     }
 
     private fun setupRecycler() {
         applyGridLayoutManager()
         binding.rvComics.adapter = comicAdapter
+        binding.rvComics.setHasFixedSize(true)
+        binding.rvComics.setItemViewCacheSize(20)
+        (binding.rvComics.itemAnimator as? SimpleItemAnimator)?.supportsChangeAnimations = false
+        binding.rvComics.attachLiquidGlassScrollbar()
         binding.rvComics.addOnScrollListener(object : RecyclerView.OnScrollListener() {
             override fun onScrolled(recyclerView: RecyclerView, dx: Int, dy: Int) {
                 if (currentNavMode != NAV_HOME || !activeHomeFilterTag.startsWith("src:")) return
@@ -665,6 +782,7 @@ class MainActivity : AppCompatActivity() {
         onlinePageFailed = cached.failedNextPage
         onlineLoading = false
         binding.btnOnlineRetry.visibility = View.GONE
+        binding.btnShelfUnlock.visibility = View.GONE
         binding.tvEmpty.visibility = View.GONE
         if (cached.items.isEmpty() && !cached.hasNext) {
             showBrowseStatus(if (cached.query.isEmpty()) "这个栏目暂无漫画" else "没有找到匹配的漫画")
@@ -679,6 +797,8 @@ class MainActivity : AppCompatActivity() {
         sourceLoadJob?.cancel()
         onlineLoading = false
         binding.btnOnlineRetry.visibility = View.GONE
+        binding.btnShelfUnlock.visibility = View.GONE
+        refreshAdapterMetadataCache()
         if (currentNavMode != NAV_HOME && currentNavMode != NAV_BOOKSHELF && currentNavMode != NAV_FAVORITES) return
         if (currentNavMode == NAV_HOME && activeHomeFilterTag.startsWith("src:")) {
             val sourceKey = activeHomeFilterTag.removePrefix("src:")
@@ -699,12 +819,12 @@ class MainActivity : AppCompatActivity() {
             }
         }
         if (currentNavMode == NAV_FAVORITES) {
-            binding.tvSectionTitle.text = "在线收藏"
+            binding.tvSectionTitle.text = "★ 在线收藏"
             binding.etSearch.hint = "搜索在线收藏"
         } else if (currentNavMode == NAV_HOME) {
             binding.tvSectionTitle.text = when (localTabMode) {
                 1 -> "收藏"
-                2 -> "最近"
+                2 -> "最近阅读"
                 else -> "本地全部"
             }
         } else {
@@ -712,13 +832,22 @@ class MainActivity : AppCompatActivity() {
             binding.tvSectionTitle.text = shelf?.name ?: "本地书架"
         }
 
-        val list = if (currentNavMode == NAV_BOOKSHELF && activeShelfId > 0L) {
+        if (currentNavMode == NAV_BOOKSHELF && activeShelfId > 0L) {
             val shelf = app.db.getBookshelf(activeShelfId)
             if (shelf != null && shelf.lockType != LockType.NONE && !unlockedShelfIds.contains(shelf.id)) {
-                emptyList()
-            } else {
-                app.db.getComicsForHome(0, activeShelfId, unlockedShelfIds, currentQuery, app.prefs.sortType)
+                lockedShelfPending = shelf
+                comicAdapter.submitList(emptyList())
+                binding.tvEmpty.visibility = View.VISIBLE
+                binding.tvEmpty.text = "🔒 作品集「${shelf.name}」已设定隐私锁"
+                binding.btnShelfUnlock.visibility = View.VISIBLE
+                binding.btnShelfUnlock.text = if (shelf.lockType == LockType.BIOMETRIC) "验证生物识别解锁" else "输入 PIN 解锁"
+                return
             }
+        }
+        lockedShelfPending = null
+
+        val list = if (currentNavMode == NAV_BOOKSHELF && activeShelfId > 0L) {
+            app.db.getComicsForHome(0, activeShelfId, unlockedShelfIds, currentQuery, app.prefs.sortType)
         } else {
             app.db.getComicsForHome(localTabMode, 0L, unlockedShelfIds, currentQuery, app.prefs.sortType)
         }
@@ -727,10 +856,10 @@ class MainActivity : AppCompatActivity() {
         if (list.isEmpty()) {
             binding.tvEmpty.visibility = View.VISIBLE
             binding.tvEmpty.text = when {
-                currentNavMode == NAV_BOOKSHELF -> "书架暂无漫画。可长按漫画封面或在详情页管理书架。"
+                currentNavMode == NAV_BOOKSHELF -> "书架暂无漫画。可点击上方「添加本地文件夹」或「导入压缩包」开始阅读。"
                 localTabMode == 1 || localTabMode == 3 -> "暂无在线收藏。可长按封面或在详情页收藏。"
                 localTabMode == 2 -> "暂无阅读记录"
-                app.db.getWarehouses().isEmpty() -> "尚未添加本地仓库，可在「仓库」中添加本地目录或 WebDAV"
+                app.db.getWarehouses().isEmpty() -> "尚未添加本地仓库，可在「设置 → 本地仓库」中添加本地目录或 WebDAV"
                 else -> "当前分类暂无漫画"
             }
         } else {
@@ -743,6 +872,7 @@ class MainActivity : AppCompatActivity() {
         val canSearch = !online || menu?.canSearch == true
         binding.etSearch.isEnabled = canSearch
         binding.etSearch.hint = when {
+            currentNavMode == NAV_FAVORITES -> "搜索在线收藏"
             !online -> getString(R.string.search_hint)
             menu == null -> "正在读取漫画源"
             canSearch -> "搜索当前漫画源"
@@ -753,40 +883,63 @@ class MainActivity : AppCompatActivity() {
         val activeSourceName = app.db.getComicSource(activeHomeFilterTag.removePrefix("src:"))?.name.orEmpty()
         val singleDuplicate = channels.size == 1 && channels[0].title.equals(activeSourceName, ignoreCase = true)
         controls.channelTabs.removeAllViews()
+
+        fun makeChannelChip(label: String, checked: Boolean, checkable: Boolean, onTap: () -> Unit): Chip {
+            return Chip(this, null, com.google.android.material.R.attr.chipStyle).apply {
+                text = label
+                isCheckable = checkable
+                isChecked = checked
+                isCheckedIconVisible = false
+                applyGlassChip()
+                ensureAccessibleTouchTarget(40.dp)
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply { marginEnd = 6.dp }
+                setOnClickListener { onTap() }
+            }
+        }
+
         if (singleDuplicate) {
             if (target?.kind == "category" || target?.kind == "search") {
-                controls.channelTabs.addView(Chip(this).apply {
-                    text = "首页推荐"
-                    isCheckable = false
-                    applyGlassChip()
-                    ensureAccessibleTouchTarget(48.dp)
-                    setOnClickListener { selectBrowseTarget(channels[0]) }
+                controls.channelTabs.addView(makeChannelChip("首页推荐", false, false) {
+                    selectBrowseTarget(channels[0])
                 })
             }
         } else {
             channels.forEach { channel ->
-                controls.channelTabs.addView(Chip(this).apply {
-                    text = channel.title
-                    isCheckable = true
-                    isChecked = channel == target
-                    applyGlassChip()
-                    isCheckedIconVisible = false
-                    ensureAccessibleTouchTarget(48.dp)
-                    setOnClickListener { selectBrowseTarget(channel) }
+                controls.channelTabs.addView(makeChannelChip(channel.title, channel == target, true) {
+                    selectBrowseTarget(channel)
                 })
             }
         }
+
+        // Active dismissible category / search pill synced with Windows PC
+        if (target?.kind == "category") {
+            controls.channelTabs.addView(makeChannelChip("分类：${target.title}  ✕", true, true) {
+                browseTarget = null
+                reloadComics()
+            })
+        } else if (target?.kind == "search" && currentQuery.isNotBlank()) {
+            controls.channelTabs.addView(makeChannelChip("搜索：$currentQuery  ✕", true, true) {
+                clearBrowseQuery()
+                reloadComics()
+            })
+        }
+
         controls.btnCategories.visibility = if (!menu?.groups.isNullOrEmpty()) View.VISIBLE else View.GONE
-        controls.btnCategories.text = if (target?.kind == "category") "分类 · ${target.title}" else "分类 ▾"
+        controls.btnCategories.text = if (target?.kind == "category") "切换分类 ▾" else "分类 ▾"
         controls.btnCategories.contentDescription = "选择分类"
         controls.btnSourceFilters.visibility = if (canFilter) View.VISIBLE else View.GONE
-        controls.root.visibility = if (controls.channelTabs.childCount > 0 || canFilter || !menu?.groups.isNullOrEmpty()) View.VISIBLE else View.GONE
+        val hasBrowseContent = controls.channelTabs.childCount > 0 || canFilter || !menu?.groups.isNullOrEmpty()
+        controls.root.visibility = if (hasBrowseContent) View.VISIBLE else View.GONE
+        binding.browseDivider.visibility = if (online && hasBrowseContent) View.VISIBLE else View.GONE
     }
 
     private fun clearBrowseQuery() {
         searchDebounceJob?.cancel()
         currentQuery = ""
-        binding.etSearch.text.clear()
+        if (binding.etSearch.text.isNotEmpty()) binding.etSearch.text.clear()
     }
 
     private fun selectBrowseTarget(target: SourceBrowseTarget) {
@@ -796,57 +949,154 @@ class MainActivity : AppCompatActivity() {
         reloadComics()
     }
 
-    private fun showBrowseCategoryGroups() {
+    /**
+     * Unified Category Browser Dialog synced with Windows PC:
+     * Group tabs at top (with memory cache) + live keyword search + wrapping pill tag grid.
+     */
+    private fun showUnifiedCategoryDialog() {
         val groups = browseMenu?.groups.orEmpty()
-        if (groups.size == 1) {
-            openBrowseCategoryGroup(groups.single())
-        } else if (groups.isNotEmpty()) {
-            MaterialAlertDialogBuilder(this)
-                .setTitle("分类")
-                .setItems(groups.map { it.title }.toTypedArray()) { _, index -> openBrowseCategoryGroup(groups[index]) }
-                .setNegativeButton("关闭", null)
-                .show()
-        }
-    }
-
-    private fun openBrowseCategoryGroup(group: SourceCategoryGroup) {
-        categoryJob?.cancel()
+        if (groups.isEmpty()) return
         val sourceKey = activeHomeFilterTag.removePrefix("src:")
+        val dp = resources.displayMetrics.density
+
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding((16 * dp).toInt(), (8 * dp).toInt(), (16 * dp).toInt(), (4 * dp).toInt())
+        }
+
+        val groupStrip = ChipGroup(this).apply {
+            isSingleSelection = true
+            isSingleLine = true
+        }
+        val groupScroll = HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = false
+            visibility = if (groups.size > 1) View.VISIBLE else View.GONE
+            addView(groupStrip)
+        }
+        root.addView(groupScroll)
+
+        val etFilter = EditText(this).apply {
+            hint = "输入关键词快速筛选分类…"
+            isSingleLine = true
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = (6 * dp).toInt() }
+        }
+        root.addView(etFilter)
+
+        val statusView = TextView(this).apply {
+            textSize = 13f
+            setTextColor(getColor(R.color.text_secondary))
+            setPadding(0, (12 * dp).toInt(), 0, (6 * dp).toInt())
+            visibility = View.GONE
+        }
+        root.addView(statusView)
+
+        val tagGroup = ChipGroup(this).apply {
+            isSingleLine = false
+            chipSpacingHorizontal = (6 * dp).toInt()
+            chipSpacingVertical = (4 * dp).toInt()
+        }
+        val tagScroll = ScrollView(this).apply {
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                (resources.configuration.screenHeightDp * 0.44f * dp).toInt()
+            ).apply { topMargin = (8 * dp).toInt() }
+            addView(tagGroup)
+        }
+        root.addView(tagScroll)
+
         val dialog = MaterialAlertDialogBuilder(this)
-            .setTitle(group.title)
-            .setMessage("正在加载分类…")
+            .setTitle(if (groups.size == 1) groups.first().title else "分类浏览")
+            .setView(root)
             .setNegativeButton("关闭") { _, _ -> categoryJob?.cancel() }
-            .setPositiveButton("重试") { _, _ -> openBrowseCategoryGroup(group) }
             .setOnCancelListener { categoryJob?.cancel() }
             .show()
-        dialog.getButton(android.content.DialogInterface.BUTTON_POSITIVE).visibility = View.GONE
-        categoryJob = lifecycleScope.launch {
-            val targets = try {
-                app.veneraRuntime.getBrowseCategories(sourceKey, group.index)
-            } catch (error: Exception) {
-                if (error is CancellationException && error !is TimeoutCancellationException) {
-                    if (dialog.isShowing) dialog.dismiss()
-                    throw error
+
+        var currentTargets: List<SourceBrowseTarget> = emptyList()
+        var currentGroup: SourceCategoryGroup = groups.first()
+
+        fun renderTags() {
+            tagGroup.removeAllViews()
+            val q = etFilter.text?.toString()?.trim()?.lowercase().orEmpty()
+            val visible = (if (q.isEmpty()) currentTargets else currentTargets.filter {
+                it.title.lowercase().contains(q)
+            }).take(300)
+            if (visible.isEmpty()) {
+                statusView.visibility = View.VISIBLE
+                statusView.text = if (q.isEmpty()) "这个分组暂无可用分类" else "未找到包含「$q」的分类"
+                return
+            }
+            statusView.visibility = View.GONE
+            visible.forEach { target ->
+                val chip = Chip(this, null, com.google.android.material.R.attr.chipStyle).apply {
+                    text = target.title
+                    isCheckable = true
+                    isChecked = target == filterTarget
+                    isCheckedIconVisible = false
+                    applyGlassChip()
+                    setOnClickListener {
+                        dialog.dismiss()
+                        selectBrowseTarget(target)
+                    }
                 }
-                if (dialog.isShowing) {
-                    dialog.setMessage("加载分类失败\n${browseError(error)}")
-                    dialog.getButton(android.content.DialogInterface.BUTTON_POSITIVE).visibility = View.VISIBLE
-                }
-                return@launch
+                tagGroup.addView(chip)
             }
-            if (!dialog.isShowing || !coroutineContext.isActive) {
-                if (dialog.isShowing) dialog.dismiss()
-                return@launch
-            }
-            dialog.dismiss()
-            val builder = MaterialAlertDialogBuilder(this@MainActivity).setTitle(group.title).setNegativeButton("关闭", null)
-            if (targets.isEmpty()) builder.setMessage("这个分组暂无可用分类")
-            else builder.setSingleChoiceItems(targets.map { it.title }.toTypedArray(), targets.indexOf(filterTarget)) { picker, index ->
-                picker.dismiss()
-                selectBrowseTarget(targets[index])
-            }
-            builder.show()
         }
+
+        fun loadGroup(group: SourceCategoryGroup) {
+            currentGroup = group
+            categoryJob?.cancel()
+            val cacheKey = "$sourceKey#${group.index}"
+            categoryGroupCache[cacheKey]?.let { cached ->
+                currentTargets = cached
+                renderTags()
+                return
+            }
+            tagGroup.removeAllViews()
+            statusView.visibility = View.VISIBLE
+            statusView.text = "正在加载「${group.title}」…"
+            categoryJob = lifecycleScope.launch {
+                val targets = try {
+                    app.veneraRuntime.getBrowseCategories(sourceKey, group.index)
+                } catch (error: Exception) {
+                    if (error is CancellationException && error !is TimeoutCancellationException) throw error
+                    if (dialog.isShowing) {
+                        statusView.visibility = View.VISIBLE
+                        statusView.text = "加载失败：${browseError(error)}（点击上方分组重试）"
+                    }
+                    return@launch
+                }
+                if (!dialog.isShowing || !coroutineContext.isActive) return@launch
+                categoryGroupCache[cacheKey] = targets
+                if (currentGroup == group) {
+                    currentTargets = targets
+                    renderTags()
+                }
+            }
+        }
+
+        groups.forEachIndexed { idx, group ->
+            val tabChip = Chip(this, null, com.google.android.material.R.attr.chipStyle).apply {
+                id = View.generateViewId()
+                text = group.title
+                isCheckable = true
+                isChecked = idx == 0
+                isCheckedIconVisible = false
+                applyGlassChip()
+                setOnClickListener { loadGroup(group) }
+            }
+            groupStrip.addView(tabChip)
+        }
+
+        etFilter.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) { renderTags() }
+            override fun afterTextChanged(s: Editable?) {}
+        })
+
+        loadGroup(groups.first())
     }
 
     private fun showBrowseFilters() {
@@ -1012,37 +1262,15 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun promptSelectBookshelfOrReload() {
-        val shelves = app.db.getBookshelves()
-        if (shelves.isEmpty()) {
-            startActivity(Intent(this, BookshelfManageActivity::class.java))
-            return
-        }
-        val names = shelves.map {
-            val lockMark = if (it.lockType != LockType.NONE) " [已加密]" else ""
-            it.name + lockMark
-        }.toTypedArray()
-        val currentIdx = shelves.indexOfFirst { it.id == app.prefs.activeBookshelfId }.coerceAtLeast(0)
-        MaterialAlertDialogBuilder(this)
-            .setTitle("选择作品集")
-            .setSingleChoiceItems(names, currentIdx) { dialog, which ->
-                val chosen = shelves[which]
-                dialog.dismiss()
-                selectBookshelf(chosen)
-            }
-            .setPositiveButton("管理作品集") { _, _ ->
-                startActivity(Intent(this, BookshelfManageActivity::class.java))
-            }
-            .setNegativeButton("取消") { _, _ -> reloadComics() }
-            .show()
-    }
-
     private fun selectBookshelf(shelf: Bookshelf) {
+        app.prefs.activeBookshelfId = shelf.id
         if (shelf.lockType == LockType.NONE || unlockedShelfIds.contains(shelf.id)) {
-            app.prefs.activeBookshelfId = shelf.id
+            lockedShelfPending = null
             reloadComics()
             return
         }
+        // Show inline locked state immediately and prompt unlock
+        reloadComics()
         when (shelf.lockType) {
             LockType.PIN -> showPinUnlockDialog(shelf)
             LockType.BIOMETRIC -> showBiometricUnlock(shelf)
@@ -1064,6 +1292,7 @@ class MainActivity : AppCompatActivity() {
                     unlockedShelfIds.add(shelf.id)
                     shelfPassTimes[shelf.id] = System.currentTimeMillis()
                     app.prefs.activeBookshelfId = shelf.id
+                    lockedShelfPending = null
                     rebuildCollectionChips()
                     reloadComics()
                 } else {
@@ -1088,6 +1317,7 @@ class MainActivity : AppCompatActivity() {
                         unlockedShelfIds.add(shelf.id)
                         shelfPassTimes[shelf.id] = System.currentTimeMillis()
                         app.prefs.activeBookshelfId = shelf.id
+                        lockedShelfPending = null
                         rebuildCollectionChips()
                         reloadComics()
                     }
@@ -1137,6 +1367,9 @@ class MainActivity : AppCompatActivity() {
         popup.menu.add("刷新当前内容").setOnMenuItemClickListener { reloadComics(); true }
         if (currentNavMode == NAV_HOME) {
             popup.menu.add("最近阅读").setOnMenuItemClickListener { selectHomeFilter(TAG_LOCAL_HISTORY); true }
+            popup.menu.add("源管理").setOnMenuItemClickListener {
+                startActivity(Intent(this, SourceManageActivity::class.java)); true
+            }
             if (currentQuery.isNotEmpty()) popup.menu.add("清除搜索").setOnMenuItemClickListener { clearBrowseQuery(); reloadComics(); true }
             browseMenu?.website?.takeIf { it.isNotBlank() }?.let { url ->
                 val title = if (url == browseMenu?.appWebsite) "官网 / 官方 App" else "官方网站"
@@ -1174,7 +1407,11 @@ class MainActivity : AppCompatActivity() {
                 }
             }
             Toast.makeText(this@MainActivity, "扫描完成，共索引 $total 部漫画", Toast.LENGTH_SHORT).show()
-            if (currentNavMode == NAV_WAREHOUSE) warehousePanel.refresh() else reloadComics()
+            if (currentNavMode == NAV_WAREHOUSE) warehousePanel.refresh()
+            else {
+                if (currentNavMode == NAV_BOOKSHELF) rebuildCollectionChips()
+                reloadComics()
+            }
         }
     }
 
@@ -1262,6 +1499,8 @@ class MainActivity : AppCompatActivity() {
                 val next = !favorite
                 app.db.setFavorite(saved.id, next)
                 app.db.saveOnlineMetadata(saved.id, remote.description, tags = remote.tags, onlyMissing = true)
+                refreshAdapterMetadataCache()
+                comicAdapter.notifyDataSetChanged()
                 Toast.makeText(this, if (next) "已加入在线收藏" else "已取消在线收藏", Toast.LENGTH_SHORT).show()
                 if (remote.cover.isNotBlank()) lifecycleScope.launch(Dispatchers.IO) {
                     app.coverCache.getOrDownloadHttpCover(remote.cover, remote.headers)
@@ -1272,22 +1511,36 @@ class MainActivity : AppCompatActivity() {
 
     private fun showAssignBookshelfDialog(comic: Comic) {
         showComicBookshelves(comic.id) {
-            if (currentNavMode == NAV_BOOKSHELF) reloadComics()
+            if (currentNavMode == NAV_BOOKSHELF) {
+                rebuildCollectionChips()
+                reloadComics()
+            }
         }
     }
 
     private fun loadLocalCoverAsync(cacheKey: String, imageView: ImageView, onReady: ((Bitmap?) -> Unit)? = null) {
-        imageView.tag = "local:$cacheKey"
-        imageView.showCoverLoading(cacheKey.isNotBlank())
+        coverJobs.remove(imageView)?.cancel()
+        val tagVal = "local:$cacheKey"
+        imageView.tag = tagVal
         if (cacheKey.isBlank()) {
+            imageView.showCoverLoading(false)
             onReady?.invoke(null)
             return
         }
-        lifecycleScope.launch {
+        // Fast path: memory cache hit -> zero coroutine, zero flash, zero jank!
+        app.coverCache.getMemoryCover(cacheKey)?.let { cached ->
+            imageView.animate().cancel()
+            imageView.alpha = 1f
+            imageView.setImageBitmap(cached)
+            onReady?.invoke(cached)
+            return
+        }
+        imageView.showCoverLoading(true)
+        coverJobs[imageView] = lifecycleScope.launch {
             val bmp: Bitmap? = withContext(Dispatchers.IO) {
                 app.coverCache.getCover(cacheKey)
             }
-            if (imageView.tag == "local:$cacheKey") imageView.finishCover(bmp, onReady)
+            if (imageView.tag == tagVal) imageView.finishCover(bmp, onReady)
         }
     }
 
@@ -1297,17 +1550,28 @@ class MainActivity : AppCompatActivity() {
         imageView: ImageView,
         onReady: ((Bitmap?) -> Unit)? = null
     ) {
-        imageView.tag = "url:$url"
-        imageView.showCoverLoading(url.isNotBlank())
+        coverJobs.remove(imageView)?.cancel()
+        val tagVal = "url:$url"
+        imageView.tag = tagVal
         if (url.isBlank()) {
+            imageView.showCoverLoading(false)
             onReady?.invoke(null)
             return
         }
-        lifecycleScope.launch {
+        // Fast path: memory cache hit -> zero coroutine, zero flash, zero jank!
+        app.coverCache.getMemoryHttpCover(url)?.let { cached ->
+            imageView.animate().cancel()
+            imageView.alpha = 1f
+            imageView.setImageBitmap(cached)
+            onReady?.invoke(cached)
+            return
+        }
+        imageView.showCoverLoading(true)
+        coverJobs[imageView] = lifecycleScope.launch {
             val (_, bmp) = withContext(Dispatchers.IO) {
                 app.coverCache.getOrDownloadHttpCover(url, headers)
             }
-            if (imageView.tag == "url:$url") imageView.finishCover(bmp, onReady)
+            if (imageView.tag == tagVal) imageView.finishCover(bmp, onReady)
         }
     }
 
@@ -1330,14 +1594,30 @@ private class ComicAdapter(
     private val onClick: (DisplayComicItem) -> Unit,
     private val onLongClick: (DisplayComicItem) -> Unit,
     private val loadLocalCover: (String, ImageView, ((Bitmap?) -> Unit)?) -> Unit,
-    private val loadOnlineCover: (String, Map<String, String>, ImageView, ((Bitmap?) -> Unit)?) -> Unit
+    private val loadOnlineCover: (String, Map<String, String>, ImageView, ((Bitmap?) -> Unit)?) -> Unit,
+    private val cancelCover: (ImageView) -> Unit
 ) : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
 
     private val items = mutableListOf<DisplayComicItem>()
     private var isListMode = false
     private var doubleLineTitle = false
     private var onlyShowCover = false
+    private var favoriteOnlineUris: Set<String> = emptySet()
+    private var sourceNames: Map<String, String> = emptyMap()
+    private var hideFavBadge = false
     private val dateFormat = SimpleDateFormat("MM-dd HH:mm", Locale.getDefault())
+
+    fun updateMetadataCache(favOnlineUris: Set<String>, srcNames: Map<String, String>, hideFavBadge: Boolean) {
+        this.favoriteOnlineUris = favOnlineUris
+        this.sourceNames = srcNames
+        this.hideFavBadge = hideFavBadge
+    }
+
+    fun setHideFavBadge(hide: Boolean) {
+        if (hideFavBadge != hide) {
+            hideFavBadge = hide
+        }
+    }
 
     fun submitList(newItems: List<DisplayComicItem>) {
         var shared = 0
@@ -1370,6 +1650,14 @@ private class ComicAdapter(
         is DisplayComicItem.Section -> 2
         is DisplayComicItem.PageAction -> 3
         else -> if (isListMode) 1 else 0
+    }
+
+    override fun onViewRecycled(holder: RecyclerView.ViewHolder) {
+        super.onViewRecycled(holder)
+        when (holder) {
+            is GridVH -> cancelCover(holder.binding.ivCover)
+            is ListVH -> cancelCover(holder.binding.ivCover)
+        }
     }
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): RecyclerView.ViewHolder {
@@ -1405,7 +1693,26 @@ private class ComicAdapter(
                 layoutParams = RecyclerView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
                 minHeight = touchSize
             })
-            else -> GridVH(ItemComicCardBinding.inflate(inflater, parent, false))
+            else -> {
+                val b = ItemComicCardBinding.inflate(inflater, parent, false)
+                val density = context.resources.displayMetrics.density
+                // Pre-create reusable drawables once per ViewHolder (zero allocations during scroll)
+                b.viewTopGlint.background = GradientDrawable(
+                    GradientDrawable.Orientation.TOP_BOTTOM,
+                    intArrayOf(0x3EFFFFFF, 0x00FFFFFF)
+                )
+                b.tvFavBadge.background = GradientDrawable().apply {
+                    cornerRadius = 10f * density
+                    setColor(0xD7F59E0B.toInt())
+                    setStroke((1f * density).toInt().coerceAtLeast(1), 0xB9FFFFFF.toInt())
+                }
+                b.tvBadge.background = GradientDrawable().apply {
+                    cornerRadius = 10f * density
+                    setColor(0xAC0E1626.toInt())
+                    setStroke((1f * density).toInt().coerceAtLeast(1), 0x82FFFFFF.toInt())
+                }
+                GridVH(b)
+            }
         }
     }
 
@@ -1424,28 +1731,69 @@ private class ComicAdapter(
             holder.button.setOnClickListener { onClick(wrapped) }
         } else if (holder is GridVH) {
             val b = holder.binding
+            val ctx = b.root.context
+            val density = ctx.resources.displayMetrics.density
+            val dark = (ctx.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
             val glassEnabled = ArkReaderApp.instance.prefs.glassMaterial
-            b.tvTitle.visibility = if (onlyShowCover) View.GONE else View.VISIBLE
-            b.tvTitle.maxLines = if (doubleLineTitle) 2 else 1
-            if (glassEnabled) {
-                b.tvTitle.applyCoverCaptionLiquidGlass(null, 11f)
-            } else {
-                b.tvTitle.detachLiquidGlass()
-                b.tvTitle.setBackgroundColor(b.root.context.getColor(R.color.surface_card))
+
+            // Configure showcase card chrome (Glass overlay vs Classic below-cover) only when mode changes
+            if (holder.boundGlassMode != glassEnabled) {
+                holder.boundGlassMode = glassEnabled
+                val lp = b.captionBox.layoutParams as ConstraintLayout.LayoutParams
+                if (glassEnabled) {
+                    b.root.strokeWidth = (1.2f * density).toInt().coerceAtLeast(1)
+                    b.root.strokeColor = if (dark) 0x60FFFFFF else 0xECFFFFFF.toInt()
+                    b.root.cardElevation = 3f * density
+                    b.viewTopGlint.visibility = View.VISIBLE
+                    lp.topToBottom = ConstraintLayout.LayoutParams.UNSET
+                    lp.bottomToBottom = R.id.ivCover
+                    val m = (6 * density).toInt()
+                    lp.setMargins(m, 0, m, m)
+                    b.captionBox.setPadding((9 * density).toInt(), (6 * density).toInt(), (9 * density).toInt(), (6 * density).toInt())
+                } else {
+                    b.root.applyGlassCardStyle(16f)
+                    b.viewTopGlint.visibility = View.GONE
+                    b.captionBox.detachLiquidGlass()
+                    b.captionBox.background = null
+                    b.captionBox.elevation = 0f
+                    lp.bottomToBottom = ConstraintLayout.LayoutParams.UNSET
+                    lp.topToBottom = R.id.ivCover
+                    lp.setMargins(0, 0, 0, 0)
+                    b.captionBox.setPadding((10 * density).toInt(), (8 * density).toInt(), (10 * density).toInt(), (9 * density).toInt())
+                }
+                b.captionBox.layoutParams = lp
             }
-            val onCoverReady: ((Bitmap?) -> Unit)? = if (glassEnabled) {
-                { bmp -> b.tvTitle.applyCoverCaptionLiquidGlass(bmp, 11f) }
+
+            b.captionBox.visibility = if (onlyShowCover) View.GONE else View.VISIBLE
+            b.tvTitle.maxLines = if (doubleLineTitle || glassEnabled) 2 else 1
+
+            val onCoverReady: ((Bitmap?) -> Unit)? = if (glassEnabled && !onlyShowCover) {
+                { bmp -> b.captionBox.applyCoverCaptionLiquidGlass(bmp, 12.5f) }
             } else null
+
             when (wrapped) {
                 is DisplayComicItem.Local -> {
                     val item = wrapped.comic
                     b.tvTitle.text = item.title
-                    if (item.totalChapters > 1) {
+                    val sub = when {
+                        item.totalChapters > 1 -> "${item.totalChapters} 话"
+                        item.format != ComicFormat.ONLINE -> item.format.name
+                        else -> ""
+                    }
+                    b.tvSubTitle.text = sub
+                    b.tvSubTitle.visibility = if (sub.isNotBlank()) View.VISIBLE else View.GONE
+                    b.tvFavBadge.visibility = if (!hideFavBadge && item.isFavorite) View.VISIBLE else View.GONE
+                    val badgeText = when {
+                        item.format == ComicFormat.ONLINE -> {
+                            val srcKey = item.sourceUri.removePrefix("venera://").substringBefore("/")
+                            sourceNames[srcKey] ?: srcKey
+                        }
+                        item.totalChapters > 1 -> "${item.totalChapters}章"
+                        else -> item.format.name
+                    }
+                    if (badgeText.isNotBlank()) {
                         b.tvBadge.visibility = View.VISIBLE
-                        b.tvBadge.text = "${item.totalChapters}章"
-                    } else if (item.isFavorite) {
-                        b.tvBadge.visibility = View.VISIBLE
-                        b.tvBadge.text = "收藏"
+                        b.tvBadge.text = badgeText
                     } else {
                         b.tvBadge.visibility = View.GONE
                     }
@@ -1454,7 +1802,18 @@ private class ComicAdapter(
                 is DisplayComicItem.Online -> {
                     val remote = wrapped.remote
                     b.tvTitle.text = remote.title
-                    b.tvBadge.visibility = View.GONE
+                    val sub = remote.subTitle.ifBlank { remote.tags.take(2).joinToString(" · ") }
+                    b.tvSubTitle.text = sub
+                    b.tvSubTitle.visibility = if (sub.isNotBlank()) View.VISIBLE else View.GONE
+                    val isFav = "venera://${remote.sourceKey}/${remote.id}" in favoriteOnlineUris
+                    b.tvFavBadge.visibility = if (!hideFavBadge && isFav) View.VISIBLE else View.GONE
+                    val srcLabel = sourceNames[remote.sourceKey] ?: remote.sourceKey
+                    if (srcLabel.isNotBlank()) {
+                        b.tvBadge.visibility = View.VISIBLE
+                        b.tvBadge.text = srcLabel
+                    } else {
+                        b.tvBadge.visibility = View.GONE
+                    }
                     loadOnlineCover(remote.cover, remote.headers, b.ivCover, onCoverReady)
                 }
                 else -> return
@@ -1463,6 +1822,7 @@ private class ComicAdapter(
             b.root.setOnLongClickListener { onLongClick(wrapped); true }
         } else if (holder is ListVH) {
             val b = holder.binding
+            b.root.applyGlassCardStyle(14f)
             when (wrapped) {
                 is DisplayComicItem.Local -> {
                     val item = wrapped.comic
@@ -1488,7 +1848,9 @@ private class ComicAdapter(
         }
     }
 
-    class GridVH(val binding: ItemComicCardBinding) : RecyclerView.ViewHolder(binding.root)
+    class GridVH(val binding: ItemComicCardBinding) : RecyclerView.ViewHolder(binding.root) {
+        var boundGlassMode: Boolean? = null
+    }
     class ListVH(val binding: ItemComicListBinding) : RecyclerView.ViewHolder(binding.root)
     class SectionVH(row: View, val title: TextView, val more: MaterialButton) : RecyclerView.ViewHolder(row)
     class PageActionVH(val button: MaterialButton) : RecyclerView.ViewHolder(button)

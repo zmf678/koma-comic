@@ -1,4 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <item name="tag_liquid_glass_binder" type="id" />
+    <item name="tag_caption_slice_bmp" type="id" />
+    <item name="tag_glass_scrollbar" type="id" />
 </resources>

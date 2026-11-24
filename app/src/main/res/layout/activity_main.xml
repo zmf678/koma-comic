@@ -13,53 +13,109 @@
         android:importantForAccessibility="no"
         android:scaleType="centerCrop" />
 
-    <LinearLayout
+    <FrameLayout
+        android:id="@+id/contentHost"
         android:layout_width="match_parent"
-        android:layout_height="match_parent"
-        android:orientation="vertical">
+        android:layout_height="match_parent">
 
         <FrameLayout
+            android:id="@+id/panelComics"
             android:layout_width="match_parent"
-            android:layout_height="0dp"
-            android:layout_weight="1">
+            android:layout_height="match_parent">
 
-            <LinearLayout
-                android:id="@+id/panelComics"
+            <androidx.recyclerview.widget.RecyclerView
+                android:id="@+id/rvComics"
                 android:layout_width="match_parent"
                 android:layout_height="match_parent"
-                android:orientation="vertical">
+                android:clipToPadding="false"
+                android:paddingHorizontal="10dp"
+                android:paddingTop="116dp"
+                android:paddingBottom="104dp" />
 
-                <!-- Top search bar -->
+            <LinearLayout
+                android:id="@+id/emptyStateBox"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_gravity="center"
+                android:gravity="center"
+                android:orientation="vertical"
+                android:paddingHorizontal="24dp">
+
+                <TextView
+                    android:id="@+id/tvEmpty"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:accessibilityLiveRegion="polite"
+                    android:gravity="center"
+                    android:lineSpacingExtra="6dp"
+                    android:text="@string/empty_comics_tip"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="15sp"
+                    android:visibility="gone" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnOnlineRetry"
+                    style="@style/Widget.Material3.Button.OutlinedButton"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="12dp"
+                    android:minHeight="48dp"
+                    android:text="重试"
+                    android:visibility="gone" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnShelfUnlock"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="12dp"
+                    android:minHeight="48dp"
+                    android:text="输入密码解锁"
+                    android:visibility="gone" />
+            </LinearLayout>
+
+            <!-- Floating glass header over full-bleed comic grid -->
+            <LinearLayout
+                android:id="@+id/floatingHeader"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_gravity="top"
+                android:clipChildren="false"
+                android:clipToPadding="false"
+                android:orientation="vertical"
+                android:paddingHorizontal="14dp"
+                android:paddingTop="10dp"
+                android:paddingBottom="6dp">
+
+                <!-- Top Search + Quick Action Glass Pills -->
                 <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
+                    android:clipChildren="false"
+                    android:clipToPadding="false"
                     android:gravity="center_vertical"
-                    android:orientation="horizontal"
-                    android:paddingHorizontal="16dp"
-                    android:paddingTop="10dp"
-                    android:paddingBottom="6dp">
+                    android:orientation="horizontal">
 
                     <ImageButton
                         android:id="@+id/profileButton"
-                        android:layout_width="48dp"
-                        android:layout_height="48dp"
-                        android:layout_marginEnd="12dp"
+                        android:layout_width="46dp"
+                        android:layout_height="46dp"
+                        android:layout_marginEnd="10dp"
                         android:contentDescription="打开个人页"
                         android:src="@drawable/ic_profile" />
 
                     <LinearLayout
                         android:id="@+id/searchPill"
                         android:layout_width="0dp"
-                        android:layout_height="46dp"
+                        android:layout_height="44dp"
                         android:layout_weight="1"
                         android:background="@drawable/bg_search_pill"
                         android:gravity="center_vertical"
                         android:orientation="horizontal"
-                        android:paddingHorizontal="14dp">
+                        android:paddingHorizontal="12dp">
 
                         <ImageView
-                            android:layout_width="20dp"
-                            android:layout_height="20dp"
+                            android:layout_width="18dp"
+                            android:layout_height="18dp"
                             android:src="@drawable/ic_search"
                             app:tint="@color/text_secondary" />
 
@@ -67,7 +123,7 @@
                             android:id="@+id/etSearch"
                             android:layout_width="0dp"
                             android:layout_height="match_parent"
-                            android:layout_marginHorizontal="10dp"
+                            android:layout_marginHorizontal="8dp"
                             android:layout_weight="1"
                             android:background="@null"
                             android:hint="@string/search_hint"
@@ -76,40 +132,114 @@
                             android:maxLines="1"
                             android:textColor="@color/text_primary"
                             android:textColorHint="@color/text_secondary"
-                            android:textSize="15sp" />
+                            android:textSize="14sp" />
 
                         <ImageButton
                             android:id="@+id/btnFilterSort"
-                            android:layout_width="36dp"
-                            android:layout_height="36dp"
+                            android:layout_width="34dp"
+                            android:layout_height="34dp"
                             android:background="?attr/selectableItemBackgroundBorderless"
                             android:contentDescription="排序与显示"
                             android:src="@drawable/ic_tune"
                             app:tint="@color/text_primary" />
                     </LinearLayout>
+
+                    <ImageButton
+                        android:id="@+id/btnTopRefresh"
+                        android:layout_width="40dp"
+                        android:layout_height="40dp"
+                        android:layout_marginStart="8dp"
+                        android:contentDescription="刷新"
+                        android:padding="9dp"
+                        android:scaleType="fitCenter"
+                        android:src="@drawable/ic_refresh"
+                        app:tint="@color/text_primary" />
+
+                    <ImageButton
+                        android:id="@+id/btnTopGrid"
+                        android:layout_width="40dp"
+                        android:layout_height="40dp"
+                        android:layout_marginStart="6dp"
+                        android:contentDescription="切换网格密度"
+                        android:padding="9dp"
+                        android:scaleType="fitCenter"
+                        android:src="@drawable/ic_grid_view"
+                        app:tint="@color/text_primary" />
                 </LinearLayout>
 
+                <!-- Local Shelf title & subtitle (visible in Local Shelf tab, matching Windows PC) -->
                 <LinearLayout
+                    android:id="@+id/localShelfHeader"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:orientation="vertical"
+                    android:paddingHorizontal="2dp"
+                    android:visibility="gone">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="本地书架"
+                        android:textColor="@color/text_primary"
+                        android:textSize="20sp"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="2dp"
+                        android:text="导入本机漫画文件夹与压缩包，分组整理并可设置隐私锁"
+                        android:textColor="@color/text_secondary"
+                        android:textSize="11.5sp" />
+                </LinearLayout>
+
+                <!-- Unified Single-Row Liquid Glass Browse Bar -->
+                <LinearLayout
+                    android:id="@+id/browseBar"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
                     android:gravity="center_vertical"
+                    android:minHeight="46dp"
                     android:orientation="horizontal"
-                    android:paddingHorizontal="16dp">
+                    android:paddingStart="10dp"
+                    android:paddingEnd="4dp"
+                    android:paddingVertical="3dp">
+
                     <HorizontalScrollView
                         android:id="@+id/chipScroll"
                         android:layout_width="0dp"
-                        android:layout_weight="1"
                         android:layout_height="wrap_content"
+                        android:layout_weight="1"
                         android:scrollbars="none">
 
-                        <com.google.android.material.chip.ChipGroup
-                            android:id="@+id/chipGroupHome"
+                        <LinearLayout
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:paddingEnd="8dp"
-                            app:selectionRequired="true"
-                            app:singleLine="true"
-                            app:singleSelection="true" />
+                            android:gravity="center_vertical"
+                            android:orientation="horizontal">
+
+                            <com.google.android.material.chip.ChipGroup
+                                android:id="@+id/chipGroupHome"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                app:selectionRequired="true"
+                                app:singleLine="true"
+                                app:singleSelection="true" />
+
+                            <View
+                                android:id="@+id/browseDivider"
+                                android:layout_width="1dp"
+                                android:layout_height="20dp"
+                                android:layout_marginHorizontal="8dp"
+                                android:background="@color/surface_border"
+                                android:visibility="gone" />
+
+                            <include
+                                android:id="@+id/browseControls"
+                                layout="@layout/panel_source_browse" />
+                        </LinearLayout>
                     </HorizontalScrollView>
 
                     <TextView
@@ -119,91 +249,53 @@
                         android:layout_weight="1"
                         android:ellipsize="end"
                         android:maxLines="1"
-                        android:textAppearance="?attr/textAppearanceTitleLarge"
+                        android:paddingHorizontal="6dp"
                         android:textColor="@color/text_primary"
+                        android:textSize="16sp"
+                        android:textStyle="bold"
                         android:visibility="gone" />
 
                     <ImageButton
                         android:id="@+id/btnMore"
-                        android:layout_width="48dp"
-                        android:layout_height="48dp"
+                        android:layout_width="40dp"
+                        android:layout_height="40dp"
                         android:background="?attr/selectableItemBackgroundBorderless"
                         android:contentDescription="更多操作"
                         android:src="@drawable/ic_more_vert"
                         app:tint="@color/text_primary" />
                 </LinearLayout>
-
-                <include
-                    android:id="@+id/browseControls"
-                    layout="@layout/panel_source_browse" />
-
-                <FrameLayout
-                    android:layout_width="match_parent"
-                    android:layout_height="0dp"
-                    android:layout_weight="1">
-
-                    <androidx.recyclerview.widget.RecyclerView
-                        android:id="@+id/rvComics"
-                        android:layout_width="match_parent"
-                        android:layout_height="match_parent"
-                        android:clipToPadding="false"
-                        android:paddingHorizontal="12dp"
-                        android:paddingBottom="88dp" />
-
-                    <LinearLayout
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:layout_gravity="center"
-                        android:gravity="center"
-                        android:orientation="vertical"
-                        android:paddingHorizontal="24dp">
-
-                        <TextView
-                            android:id="@+id/tvEmpty"
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:gravity="center"
-                            android:lineSpacingExtra="6dp"
-                            android:accessibilityLiveRegion="polite"
-                            android:text="@string/empty_comics_tip"
-                            android:textColor="@color/text_secondary"
-                            android:textSize="15sp"
-                            android:visibility="gone" />
-
-                        <com.google.android.material.button.MaterialButton
-                            android:id="@+id/btnOnlineRetry"
-                            style="@style/Widget.Material3.Button.OutlinedButton"
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:layout_marginTop="12dp"
-                            android:minHeight="48dp"
-                            android:text="重试"
-                            android:visibility="gone" />
-                    </LinearLayout>
-                </FrameLayout>
             </LinearLayout>
-
-            <include
-                android:id="@+id/panelWarehouse"
-                layout="@layout/panel_main_warehouse"
-                android:layout_width="match_parent"
-                android:layout_height="match_parent"
-                android:visibility="gone" />
-
-            <include
-                android:id="@+id/panelSettings"
-                layout="@layout/panel_main_settings"
-                android:layout_width="match_parent"
-                android:layout_height="match_parent"
-                android:visibility="gone" />
         </FrameLayout>
 
-        <com.google.android.material.bottomnavigation.BottomNavigationView
-            android:id="@+id/bottomNav"
+        <include
+            android:id="@+id/panelWarehouse"
+            layout="@layout/panel_main_warehouse"
             android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            app:menu="@menu/nav_main" />
-    </LinearLayout>
+            android:layout_height="match_parent"
+            android:visibility="gone" />
+
+        <include
+            android:id="@+id/panelSettings"
+            layout="@layout/panel_main_settings"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:visibility="gone" />
+    </FrameLayout>
+
+    <!-- Floating Rounded Liquid Glass Bottom Navigation Dock -->
+    <com.google.android.material.bottomnavigation.BottomNavigationView
+        android:id="@+id/bottomNav"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom"
+        android:layout_marginHorizontal="14dp"
+        android:layout_marginBottom="10dp"
+        android:background="@android:color/transparent"
+        android:clipToOutline="true"
+        app:elevation="0dp"
+        app:itemActiveIndicatorStyle="@style/Widget.Material3.BottomNavigationView.ActiveIndicator"
+        app:labelVisibilityMode="labeled"
+        app:menu="@menu/nav_main" />
 
     <com.google.android.material.floatingactionbutton.FloatingActionButton
         android:id="@+id/fabContinue"
@@ -211,7 +303,7 @@
         android:layout_height="wrap_content"
         android:layout_gravity="bottom|end"
         android:layout_marginEnd="20dp"
-        android:layout_marginBottom="92dp"
+        android:layout_marginBottom="96dp"
         android:contentDescription="@string/continue_reading"
         app:srcCompat="@drawable/ic_play" />
 
