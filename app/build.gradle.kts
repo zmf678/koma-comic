@@ -11,8 +11,8 @@ android {
         applicationId = "com.arkreader.comic"
         minSdk = 28
         targetSdk = 34
-        versionCode = 15
-        versionName = "1.5.5"
+        versionCode = 16
+        versionName = "1.5.6"
     }
 
     buildTypes {

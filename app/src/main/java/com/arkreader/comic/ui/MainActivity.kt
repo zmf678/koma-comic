@@ -142,8 +142,8 @@ class MainActivity : AppCompatActivity() {
                 else -> Unit
             }
         },
-        loadLocalCover = { key, iv -> loadLocalCoverAsync(key, iv) },
-        loadOnlineCover = { url, headers, iv -> loadOnlineCoverAsync(url, headers, iv) }
+        loadLocalCover = { key, iv, onReady -> loadLocalCoverAsync(key, iv, onReady) },
+        loadOnlineCover = { url, headers, iv, onReady -> loadOnlineCoverAsync(url, headers, iv, onReady) }
     )
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -1276,27 +1276,38 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun loadLocalCoverAsync(cacheKey: String, imageView: ImageView) {
+    private fun loadLocalCoverAsync(cacheKey: String, imageView: ImageView, onReady: ((Bitmap?) -> Unit)? = null) {
         imageView.tag = "local:$cacheKey"
         imageView.showCoverLoading(cacheKey.isNotBlank())
-        if (cacheKey.isBlank()) return
+        if (cacheKey.isBlank()) {
+            onReady?.invoke(null)
+            return
+        }
         lifecycleScope.launch {
             val bmp: Bitmap? = withContext(Dispatchers.IO) {
                 app.coverCache.getCover(cacheKey)
             }
-            if (imageView.tag == "local:$cacheKey") imageView.finishCover(bmp)
+            if (imageView.tag == "local:$cacheKey") imageView.finishCover(bmp, onReady)
         }
     }
 
-    private fun loadOnlineCoverAsync(url: String, headers: Map<String, String>, imageView: ImageView) {
+    private fun loadOnlineCoverAsync(
+        url: String,
+        headers: Map<String, String>,
+        imageView: ImageView,
+        onReady: ((Bitmap?) -> Unit)? = null
+    ) {
         imageView.tag = "url:$url"
         imageView.showCoverLoading(url.isNotBlank())
-        if (url.isBlank()) return
+        if (url.isBlank()) {
+            onReady?.invoke(null)
+            return
+        }
         lifecycleScope.launch {
             val (_, bmp) = withContext(Dispatchers.IO) {
                 app.coverCache.getOrDownloadHttpCover(url, headers)
             }
-            if (imageView.tag == "url:$url") imageView.finishCover(bmp)
+            if (imageView.tag == "url:$url") imageView.finishCover(bmp, onReady)
         }
     }
 
@@ -1318,8 +1329,8 @@ class MainActivity : AppCompatActivity() {
 private class ComicAdapter(
     private val onClick: (DisplayComicItem) -> Unit,
     private val onLongClick: (DisplayComicItem) -> Unit,
-    private val loadLocalCover: (String, ImageView) -> Unit,
-    private val loadOnlineCover: (String, Map<String, String>, ImageView) -> Unit
+    private val loadLocalCover: (String, ImageView, ((Bitmap?) -> Unit)?) -> Unit,
+    private val loadOnlineCover: (String, Map<String, String>, ImageView, ((Bitmap?) -> Unit)?) -> Unit
 ) : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
 
     private val items = mutableListOf<DisplayComicItem>()
@@ -1413,8 +1424,18 @@ private class ComicAdapter(
             holder.button.setOnClickListener { onClick(wrapped) }
         } else if (holder is GridVH) {
             val b = holder.binding
+            val glassEnabled = ArkReaderApp.instance.prefs.glassMaterial
             b.tvTitle.visibility = if (onlyShowCover) View.GONE else View.VISIBLE
             b.tvTitle.maxLines = if (doubleLineTitle) 2 else 1
+            if (glassEnabled) {
+                b.tvTitle.applyCoverCaptionLiquidGlass(null, 11f)
+            } else {
+                b.tvTitle.detachLiquidGlass()
+                b.tvTitle.setBackgroundColor(b.root.context.getColor(R.color.surface_card))
+            }
+            val onCoverReady: ((Bitmap?) -> Unit)? = if (glassEnabled) {
+                { bmp -> b.tvTitle.applyCoverCaptionLiquidGlass(bmp, 11f) }
+            } else null
             when (wrapped) {
                 is DisplayComicItem.Local -> {
                     val item = wrapped.comic
@@ -1428,13 +1449,13 @@ private class ComicAdapter(
                     } else {
                         b.tvBadge.visibility = View.GONE
                     }
-                    loadLocalCover(item.coverCacheKey, b.ivCover)
+                    loadLocalCover(item.coverCacheKey, b.ivCover, onCoverReady)
                 }
                 is DisplayComicItem.Online -> {
                     val remote = wrapped.remote
                     b.tvTitle.text = remote.title
                     b.tvBadge.visibility = View.GONE
-                    loadOnlineCover(remote.cover, remote.headers, b.ivCover)
+                    loadOnlineCover(remote.cover, remote.headers, b.ivCover, onCoverReady)
                 }
                 else -> return
             }
@@ -1448,7 +1469,7 @@ private class ComicAdapter(
                     b.tvTitle.text = item.title
                     val readInfo = if (item.lastReadAt > 0L) "最近: ${dateFormat.format(Date(item.lastReadAt))}" else "未读"
                     b.tvSub.text = "${item.format.name} · ${item.totalChapters} 章节 · $readInfo"
-                    loadLocalCover(item.coverCacheKey, b.ivCover)
+                    loadLocalCover(item.coverCacheKey, b.ivCover, null)
                 }
                 is DisplayComicItem.Online -> {
                     val remote = wrapped.remote
@@ -1458,7 +1479,7 @@ private class ComicAdapter(
                         remote.tags.take(3).joinToString(" / ").takeIf { it.isNotEmpty() },
                         remote.description.take(40).takeIf { it.isNotEmpty() }
                     ).joinToString(" · ")
-                    loadOnlineCover(remote.cover, remote.headers, b.ivCover)
+                    loadOnlineCover(remote.cover, remote.headers, b.ivCover, null)
                 }
                 else -> return
             }

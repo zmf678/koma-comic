@@ -709,4 +709,202 @@ namespace KomaComic.Windows
             _elasticScale.BeginAnimation(ScaleTransform.ScaleYProperty, new DoubleAnimation(target, d) { EasingFunction = ease });
         }
     }
+
+    /// <summary>
+    /// High-performance GPU Liquid Glass caption pill for scrolling comic showcase cards.
+    /// Samples the card's own frozen cover ImageSource directly via ImageBrush (zero VisualBrush
+    /// overhead and zero scroll thrashing), running the exact same ps_2_0 SDF optical refraction,
+    /// bevel chromatic dispersion, grazing rim, concave depth, and Fresnel highlight shader.
+    /// </summary>
+    internal sealed class LiquidGlassCoverCaption : Grid
+    {
+        private readonly double _cornerRadius;
+        private readonly double _blurPad = 10.0;
+        private readonly Grid _shadowWrapper;
+        private readonly Grid _glassHost;
+        private readonly Grid _blurClip;
+        private readonly Rectangle _coverSliceRect;
+        private readonly ImageBrush _coverBrush;
+        private readonly Border _loadingBackdrop;
+        private readonly LiquidGlassEffect _shaderEffect;
+        private readonly Border _contentHost;
+
+        private ImageSource _coverSource;
+        private double _cardWidth;
+        private double _cardHeight;
+        private double _insetMargin;
+
+        public UIElement Child
+        {
+            get { return _contentHost.Child; }
+            set { _contentHost.Child = value; }
+        }
+
+        public Thickness ContentPadding
+        {
+            get { return _contentHost.Padding; }
+            set { _contentHost.Padding = value; }
+        }
+
+        public LiquidGlassCoverCaption(double cornerRadius = 13.0, double insetMargin = 6.0)
+        {
+            _cornerRadius = cornerRadius;
+            _insetMargin = insetMargin;
+            ClipToBounds = false;
+
+            _coverBrush = new ImageBrush
+            {
+                Stretch = Stretch.Fill,
+                ViewboxUnits = BrushMappingMode.RelativeToBoundingBox,
+                Viewbox = new Rect(0, 0.72, 1, 0.28)
+            };
+
+            _loadingBackdrop = new Border
+            {
+                CornerRadius = new CornerRadius(cornerRadius),
+                IsHitTestVisible = false
+            };
+
+            _coverSliceRect = new Rectangle
+            {
+                Fill = _coverBrush,
+                Margin = new Thickness(-_blurPad),
+                IsHitTestVisible = false,
+                Effect = new BlurEffect { Radius = 4.2, KernelType = KernelType.Gaussian, RenderingBias = RenderingBias.Performance }
+            };
+
+            _blurClip = new Grid
+            {
+                ClipToBounds = true,
+                IsHitTestVisible = false
+            };
+            _blurClip.Children.Add(_loadingBackdrop);
+            _blurClip.Children.Add(_coverSliceRect);
+
+            _shaderEffect = LiquidGlassEffect.IsSupported ? new LiquidGlassEffect() : null;
+
+            _glassHost = new Grid
+            {
+                ClipToBounds = true,
+                IsHitTestVisible = false,
+                SnapsToDevicePixels = false
+            };
+            _glassHost.Children.Add(_blurClip);
+            if (_shaderEffect != null)
+            {
+                _glassHost.Effect = _shaderEffect;
+            }
+
+            _shadowWrapper = new Grid
+            {
+                ClipToBounds = false,
+                IsHitTestVisible = false
+            };
+            _shadowWrapper.Children.Add(_glassHost);
+
+            _contentHost = new Border
+            {
+                CornerRadius = new CornerRadius(cornerRadius),
+                Background = Brushes.Transparent
+            };
+
+            Children.Add(_shadowWrapper);
+            Children.Add(_contentHost);
+
+            SizeChanged += delegate { UpdateMetricsAndSlice(); };
+            Loaded += delegate { UpdateMetricsAndSlice(); };
+
+            ApplyTheme(UiTheme.IsDarkActive);
+        }
+
+        public void SetCoverSource(ImageSource source, double cardWidth, double cardHeight)
+        {
+            _coverSource = source;
+            _cardWidth = cardWidth;
+            _cardHeight = cardHeight;
+            _coverBrush.ImageSource = source;
+            _coverSliceRect.Visibility = source != null ? Visibility.Visible : Visibility.Collapsed;
+            UpdateMetricsAndSlice();
+        }
+
+        public void ApplyTheme(bool dark)
+        {
+            _loadingBackdrop.Background = new SolidColorBrush(dark
+                ? Color.FromArgb(196, 20, 30, 48)
+                : Color.FromArgb(196, 232, 240, 252));
+
+            _shadowWrapper.Effect = new DropShadowEffect
+            {
+                Color = dark ? Color.FromRgb(2, 6, 14) : Color.FromRgb(24, 48, 92),
+                BlurRadius = 14,
+                ShadowDepth = 3,
+                Direction = 270,
+                Opacity = dark ? 0.45 : 0.20
+            };
+
+            if (_shaderEffect == null) return;
+
+            // High-contrast readable center with vivid curved cover refraction & chromatic edge glow
+            double refraction = 22.0;
+            double chroma = 3.2;
+            double boost = dark ? 1.14 : 1.06;
+            double contrast = 1.0 + 0.14 * boost;
+            double bias = 0.5 - 0.5 * contrast + (dark ? 0.025 : 0.030) * boost;
+
+            Color tint = dark ? Color.FromArgb(142, 16, 25, 44) : Color.FromArgb(148, 248, 251, 255);
+            Color specular = Color.FromArgb(252, 255, 255, 255);
+            Color secondary = dark ? Color.FromArgb(182, 110, 194, 255) : Color.FromArgb(204, 98, 168, 255);
+            double outerDarkLip = dark ? 0.12 : 0.24;
+            double innerShadow = dark ? 0.22 : 0.16;
+            double rimIntensity = dark ? 1.24 : 1.32;
+            double sheenStrength = dark ? 0.22 : 0.34;
+
+            _shaderEffect.OpticalParams = new Point4D(refraction, chroma, contrast, bias);
+            _shaderEffect.LightParams = new Point4D(-0.68, -0.73, rimIntensity, innerShadow);
+            _shaderEffect.TintColorVec = LiquidGlassEffect.ToVec(tint);
+            _shaderEffect.SpecularColorVec = LiquidGlassEffect.ToPremulVec(specular, sheenStrength);
+            _shaderEffect.SecondaryRimColorVec = LiquidGlassEffect.ToPremulVec(secondary, outerDarkLip);
+        }
+
+        private void UpdateMetricsAndSlice()
+        {
+            double w = ActualWidth;
+            double h = ActualHeight;
+            if (w < 4 || h < 4) return;
+
+            double clampedR = Math.Min(_cornerRadius, Math.Min(w, h) * 0.5);
+            double bevel = Math.Max(12.0, Math.Min(Math.Min(w, h) * 0.44, 18.0));
+            _blurClip.Clip = new RectangleGeometry(new Rect(0, 0, w, h));
+            _glassHost.Clip = new RectangleGeometry(new Rect(0, 0, w, h), clampedR, clampedR);
+
+            if (_shaderEffect != null)
+            {
+                _shaderEffect.ElementMetrics = new Point4D(w, h, clampedR, 1.0 / bevel);
+                _shaderEffect.Precomp = new Point4D(1.0 / w, 1.0 / h, w * 0.5 - clampedR, h * 0.5 - clampedR);
+            }
+
+            if (_coverSource == null || _cardWidth < 4 || _cardHeight < 4) return;
+            double imgW = _coverSource.Width;
+            double imgH = _coverSource.Height;
+            if (imgW < 2 || imgH < 2) return;
+
+            // Compute exact UniformToFill mapping of the card's full-bleed cover so the glass slab aligns 1:1 with the artwork underneath
+            double scale = Math.Max(_cardWidth / imgW, _cardHeight / imgH);
+            double drawnW = imgW * scale;
+            double drawnH = imgH * scale;
+            double offX = (drawnW - _cardWidth) * 0.5;
+            double offY = (drawnH - _cardHeight) * 0.5;
+
+            double capLeft = _insetMargin - _blurPad;
+            double capTop = (_cardHeight - _insetMargin - h) - _blurPad;
+            double capW = w + _blurPad * 2.0;
+            double capH = h + _blurPad * 2.0;
+
+            double vx = Math.Max(0.0, Math.Min(0.95, (offX + capLeft) / drawnW));
+            double vy = Math.Max(0.0, Math.Min(0.95, (offY + capTop) / drawnH));
+            double vw = Math.Max(0.04, Math.Min(1.0 - vx, capW / drawnW));
+            double vh = Math.Max(0.04, Math.Min(1.0 - vy, capH / drawnH));
+            _coverBrush.Viewbox = new Rect(vx, vy, vw, vh);
+        }
+    }
 }

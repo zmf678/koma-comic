@@ -38,7 +38,8 @@ internal enum class LiquidGlassPreset {
     READER_CAPSULE,
     READER_DRAWER,
     CLEAR_LENS,
-    SUBTLE_PILL
+    SUBTLE_PILL,
+    CARD_CAPTION
 }
 
 /**
@@ -442,6 +443,17 @@ internal class LiquidGlassDrawable(
                     specularColor = if (dark) 0xF0FFFFFF.toInt() else 0xFFFFFFFF.toInt(),
                     secondaryRimColor = if (dark) 0xB470C0FF.toInt() else 0xD062A8FF.toInt()
                 )
+                LiquidGlassPreset.CARD_CAPTION -> GlassTuning(
+                    refractionPx = 19.0f * density,
+                    chromaticPx = 2.8f * density,
+                    opticalBoost = if (dark) 1.14f else 1.06f,
+                    rimIntensity = if (dark) 1.24f else 1.32f,
+                    innerShadowOpacity = if (dark) 0.22f else 0.16f,
+                    outerDarkLipOpacity = if (dark) 0.12f else 0.24f,
+                    tintColor = if (dark) 0x8E10192C.toInt() else 0x94F8FBFF.toInt(),
+                    specularColor = 0xFCFFFFFF.toInt(),
+                    secondaryRimColor = if (dark) 0xB66EC2FF.toInt() else 0xCC62A8FF.toInt()
+                )
             }
         }
 
@@ -717,6 +729,7 @@ internal class LiquidGlassBinder(
                 LiquidGlassPreset.FROSTED_BAR -> 5
                 LiquidGlassPreset.READER_CAPSULE -> 6
                 LiquidGlassPreset.READER_DRAWER -> 8
+                LiquidGlassPreset.CARD_CAPTION -> 4
             }
             if (blurRadius > 0) {
                 fastBoxBlur(bmp, blurRadius)
@@ -772,6 +785,8 @@ internal class LiquidGlassBinder(
     }
 
     companion object {
+        internal fun blurBitmapInPlace(bitmap: Bitmap, radius: Int) = fastBoxBlur(bitmap, radius)
+
         // Zero-allocation separable 2-pass box blur on compact downsampled backdrop bitmap
         private fun fastBoxBlur(bitmap: Bitmap, radius: Int) {
             val w = bitmap.width
@@ -934,4 +949,44 @@ internal fun View.detachLiquidGlass() {
 
 internal fun View.refreshLiquidGlassBackdrop() {
     (getTag(R.id.tag_liquid_glass_binder) as? LiquidGlassBinder)?.captureNow(force = true)
+}
+
+/**
+ * Applies zero-overhead Liquid Glass caption backdrop directly from a comic card's cover Bitmap
+ * (bottom 30% slice, lightly blurred, passed straight into GPU AGSL / SDF mesh LiquidGlassDrawable).
+ */
+internal fun View.applyCoverCaptionLiquidGlass(coverBitmap: Bitmap?, cornerRadiusDp: Float = 12f) {
+    detachLiquidGlass()
+    val dark = (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
+    val existing = background as? LiquidGlassDrawable
+    val drawable = if (existing != null) {
+        existing.setDarkMode(dark)
+        existing
+    } else {
+        LiquidGlassDrawable(
+            density = resources.displayMetrics.density,
+            preset = LiquidGlassPreset.CARD_CAPTION,
+            cornerRadiusDp = cornerRadiusDp,
+            dark = dark,
+            forceDark = false
+        ).also { background = it }
+    }
+    if (coverBitmap == null || coverBitmap.isRecycled || coverBitmap.width < 4 || coverBitmap.height < 8) {
+        drawable.updateBackdrop(null)
+        return
+    }
+    val sliceH = (coverBitmap.height * 0.30f).toInt().coerceAtLeast(4)
+    val startY = (coverBitmap.height - sliceH).coerceAtLeast(0)
+    val targetW = 96
+    val targetH = 34
+    val slice = Bitmap.createBitmap(targetW, targetH, Bitmap.Config.ARGB_8888)
+    val canvas = Canvas(slice)
+    canvas.drawBitmap(
+        coverBitmap,
+        Rect(0, startY, coverBitmap.width, coverBitmap.height),
+        Rect(0, 0, targetW, targetH),
+        Paint(Paint.FILTER_BITMAP_FLAG)
+    )
+    LiquidGlassBinder.blurBitmapInPlace(slice, 3)
+    drawable.updateBackdrop(slice)
 }

@@ -65,6 +65,11 @@ class ComicDetailActivity : AppCompatActivity() {
         binding.toolbar.setNavigationOnClickListener { finish() }
         binding.rvChapters.layoutManager = LinearLayoutManager(this)
         binding.rvChapters.adapter = chapterAdapter
+        applyLibraryMaterial(binding.root, binding.detailBackdrop, binding.detailContentRoot)
+        if (app.prefs.glassMaterial) {
+            binding.detailHeroCard.applyLiquidGlass(binding.detailBackdrop, LiquidGlassPreset.FROSTED_BAR, 20f, elevationDp = 5f)
+            binding.detailChapterCard.applyLiquidGlass(binding.detailBackdrop, LiquidGlassPreset.FROSTED_BAR, 18f, elevationDp = 4f)
+        }
 
         binding.btnRead.setOnClickListener {
             val c = comic ?: return@setOnClickListener

@@ -91,7 +91,7 @@ namespace KomaComic.Windows
 
     internal static class Program
     {
-        internal const string AppVersion = "1.5.5";
+        internal const string AppVersion = "1.5.6";
         internal const string GithubRepoSlug = "zmf678/koma-comic";
 
         [STAThread]
@@ -5019,94 +5019,188 @@ namespace KomaComic.Windows
 
         private Border BuildComicCardElement(ComicCardModel card, double cardW, double coverH)
         {
+            bool glassCard = _services.GlassMaterial;
+            double radius = glassCard ? 16.0 : 14.0;
+            double totalGlassH = coverH + 58.0;
+
+            ScaleTransform hoverScale = new ScaleTransform(1.0, 1.0);
             Border outer = new Border
             {
                 Width = cardW,
                 Margin = new Thickness(0, 0, 14, 16),
-                CornerRadius = new CornerRadius(14),
-                BorderThickness = new Thickness(1),
-                ClipToBounds = true,
-                Cursor = Cursors.Hand
+                CornerRadius = new CornerRadius(radius),
+                BorderThickness = new Thickness(glassCard ? 1.25 : 1.0),
+                ClipToBounds = false,
+                Cursor = Cursors.Hand,
+                RenderTransformOrigin = new Point(0.5, 0.5),
+                RenderTransform = hoverScale
             };
             outer.SetResourceReference(Border.BackgroundProperty, "Brush.CardSurface");
-            outer.SetResourceReference(Border.BorderBrushProperty, "Brush.Border");
-            outer.Effect = UiTheme.CreateGlassShadow(UiTheme.IsDarkActive, true);
+            outer.SetResourceReference(Border.BorderBrushProperty, glassCard ? "Brush.NavGlassRim" : "Brush.Border");
+            outer.Effect = UiTheme.CreateGlassShadow(UiTheme.IsDarkActive, !glassCard);
+
             outer.MouseEnter += delegate (object s, MouseEventArgs e)
             {
                 outer.SetResourceReference(Border.BorderBrushProperty, "Brush.AccentBorder");
+                if (glassCard && SystemParameters.ClientAreaAnimation)
+                {
+                    Duration d = new Duration(TimeSpan.FromMilliseconds(160));
+                    CubicEase ease = new CubicEase { EasingMode = EasingMode.EaseOut };
+                    hoverScale.BeginAnimation(ScaleTransform.ScaleXProperty, new DoubleAnimation(1.028, d) { EasingFunction = ease });
+                    hoverScale.BeginAnimation(ScaleTransform.ScaleYProperty, new DoubleAnimation(1.028, d) { EasingFunction = ease });
+                }
             };
             outer.MouseLeave += delegate (object s, MouseEventArgs e)
             {
-                outer.SetResourceReference(Border.BorderBrushProperty, "Brush.Border");
+                outer.SetResourceReference(Border.BorderBrushProperty, glassCard ? "Brush.NavGlassRim" : "Brush.Border");
+                if (glassCard && SystemParameters.ClientAreaAnimation)
+                {
+                    Duration d = new Duration(TimeSpan.FromMilliseconds(200));
+                    CubicEase ease = new CubicEase { EasingMode = EasingMode.EaseOut };
+                    hoverScale.BeginAnimation(ScaleTransform.ScaleXProperty, new DoubleAnimation(1.0, d) { EasingFunction = ease });
+                    hoverScale.BeginAnimation(ScaleTransform.ScaleYProperty, new DoubleAnimation(1.0, d) { EasingFunction = ease });
+                }
             };
 
-            StackPanel stack = new StackPanel();
-            Grid imgBox = new Grid { Height = coverH, ClipToBounds = true };
-            imgBox.SetResourceReference(Panel.BackgroundProperty, "Brush.Surface");
             Image coverImg = new Image { Stretch = Stretch.UniformToFill };
             RenderOptions.SetBitmapScalingMode(coverImg, BitmapScalingMode.HighQuality);
-            TextBlock coverStatus = new TextBlock { Text = card.IsLocal || !string.IsNullOrEmpty(card.CoverUrl) ? "加载中" : "暂无封面",
-                HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
+            TextBlock coverStatus = new TextBlock
+            {
+                Text = card.IsLocal || !string.IsNullOrEmpty(card.CoverUrl) ? "加载中" : "暂无封面",
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center
+            };
             coverStatus.SetResourceReference(TextBlock.ForegroundProperty, "Brush.TextMuted");
-            imgBox.Children.Add(coverStatus);
-            imgBox.Children.Add(coverImg);
 
             Border favBadge = new Border
             {
-                CornerRadius = new CornerRadius(8),
+                CornerRadius = new CornerRadius(10),
                 Background = new SolidColorBrush(Color.FromArgb(215, 245, 158, 11)),
-                BorderBrush = new SolidColorBrush(Color.FromArgb(140, 255, 255, 255)),
+                BorderBrush = new SolidColorBrush(Color.FromArgb(185, 255, 255, 255)),
                 BorderThickness = new Thickness(1),
-                Padding = new Thickness(6, 2, 6, 2),
+                Padding = new Thickness(7, 2.5, 7, 2.5),
                 HorizontalAlignment = HorizontalAlignment.Left,
                 VerticalAlignment = VerticalAlignment.Top,
-                Margin = new Thickness(7, 7, 0, 0),
+                Margin = new Thickness(8, 8, 0, 0),
                 Visibility = (IsFavorite(card) && _services.ActiveHomeMode != "fav") ? Visibility.Visible : Visibility.Collapsed
             };
             favBadge.Child = new TextBlock { Text = "★", Foreground = Brushes.White, FontSize = 10.5, FontWeight = FontWeights.Bold };
-            imgBox.Children.Add(favBadge);
 
+            Border sourceBadge = null;
             if (!string.IsNullOrEmpty(card.Badge) && card.SourceKey != _services.ActiveHomeMode)
             {
-                Border badge = new Border
+                sourceBadge = new Border
                 {
-                    CornerRadius = new CornerRadius(8),
-                    Background = new SolidColorBrush(Color.FromArgb(190, 12, 18, 28)),
-                    BorderBrush = new SolidColorBrush(Color.FromArgb(75, 255, 255, 255)),
+                    CornerRadius = new CornerRadius(10),
+                    Background = new SolidColorBrush(Color.FromArgb(172, 14, 22, 38)),
+                    BorderBrush = new SolidColorBrush(Color.FromArgb(130, 255, 255, 255)),
                     BorderThickness = new Thickness(1),
-                    Padding = new Thickness(7, 2, 7, 2),
+                    Padding = new Thickness(8, 2.5, 8, 2.5),
                     HorizontalAlignment = HorizontalAlignment.Right,
                     VerticalAlignment = VerticalAlignment.Top,
-                    Margin = new Thickness(0, 7, 7, 0)
+                    Margin = new Thickness(0, 8, 8, 0)
                 };
-                badge.Child = new TextBlock { Text = card.Badge, Foreground = Brushes.White, FontSize = 10.5, FontWeight = FontWeights.SemiBold };
-                imgBox.Children.Add(badge);
+                sourceBadge.Child = new TextBlock { Text = card.Badge, Foreground = Brushes.White, FontSize = 10.5, FontWeight = FontWeights.SemiBold };
             }
-            stack.Children.Add(imgBox);
 
-            StackPanel meta = new StackPanel { Margin = new Thickness(10, 9, 10, 10) };
-            TextBlock titleTb = new TextBlock
+            LiquidGlassCoverCaption glassCaption = null;
+
+            if (glassCard)
             {
-                Text = card.Title,
-                FontSize = 13,
-                FontWeight = FontWeights.Bold,
-                TextTrimming = TextTrimming.CharacterEllipsis,
-                MaxHeight = 36,
-                TextWrapping = TextWrapping.Wrap
-            };
-            titleTb.SetResourceReference(TextBlock.ForegroundProperty, "Brush.Text");
-            TextBlock subTb = new TextBlock
+                // Full-bleed Apple Liquid Glass Media Card:
+                // Cover art fills the entire rounded card; floating GPU Liquid Glass caption slab at bottom refracts the cover itself!
+                outer.Height = totalGlassH;
+                Grid cardCanvas = new Grid
+                {
+                    Width = cardW - 2.5,
+                    Height = totalGlassH - 2.5,
+                    Clip = new RectangleGeometry(new Rect(0, 0, cardW - 2.5, totalGlassH - 2.5), radius - 1.0, radius - 1.0)
+                };
+                cardCanvas.SetResourceReference(Panel.BackgroundProperty, "Brush.Surface");
+                cardCanvas.Children.Add(coverStatus);
+                cardCanvas.Children.Add(coverImg);
+
+                // Subtle top specular glass sheen across the upper bevel of the card
+                Border topGlint = new Border
+                {
+                    Height = 36,
+                    VerticalAlignment = VerticalAlignment.Top,
+                    IsHitTestVisible = false,
+                    Background = new LinearGradientBrush(Color.FromArgb(62, 255, 255, 255), Color.FromArgb(0, 255, 255, 255), 90)
+                };
+                cardCanvas.Children.Add(topGlint);
+                cardCanvas.Children.Add(favBadge);
+                if (sourceBadge != null) cardCanvas.Children.Add(sourceBadge);
+
+                StackPanel meta = new StackPanel();
+                TextBlock titleTb = new TextBlock
+                {
+                    Text = card.Title,
+                    FontSize = 12.8,
+                    FontWeight = FontWeights.Bold,
+                    TextTrimming = TextTrimming.CharacterEllipsis,
+                    MaxHeight = 35,
+                    TextWrapping = TextWrapping.Wrap
+                };
+                titleTb.SetResourceReference(TextBlock.ForegroundProperty, "Brush.Text");
+                TextBlock subTb = new TextBlock
+                {
+                    Text = card.SubTitle ?? "",
+                    FontSize = 11,
+                    TextTrimming = TextTrimming.CharacterEllipsis,
+                    Margin = new Thickness(0, 2, 0, 0),
+                    Opacity = 0.86
+                };
+                subTb.SetResourceReference(TextBlock.ForegroundProperty, "Brush.Text");
+                meta.Children.Add(titleTb);
+                if (!string.IsNullOrWhiteSpace(card.SubTitle)) meta.Children.Add(subTb);
+
+                glassCaption = new LiquidGlassCoverCaption(12.5, 6.0)
+                {
+                    VerticalAlignment = VerticalAlignment.Bottom,
+                    Margin = new Thickness(6, 0, 6, 6),
+                    ContentPadding = new Thickness(9, 7, 9, 7),
+                    Child = meta
+                };
+                cardCanvas.Children.Add(glassCaption);
+                outer.Child = cardCanvas;
+            }
+            else
             {
-                Text = card.SubTitle ?? "",
-                FontSize = 11.5,
-                TextTrimming = TextTrimming.CharacterEllipsis,
-                Margin = new Thickness(0, 3, 0, 0)
-            };
-            subTb.SetResourceReference(TextBlock.ForegroundProperty, "Brush.TextMuted");
-            meta.Children.Add(titleTb);
-            meta.Children.Add(subTb);
-            stack.Children.Add(meta);
-            outer.Child = stack;
+                outer.ClipToBounds = true;
+                StackPanel stack = new StackPanel();
+                Grid imgBox = new Grid { Height = coverH, ClipToBounds = true };
+                imgBox.SetResourceReference(Panel.BackgroundProperty, "Brush.Surface");
+                imgBox.Children.Add(coverStatus);
+                imgBox.Children.Add(coverImg);
+                imgBox.Children.Add(favBadge);
+                if (sourceBadge != null) imgBox.Children.Add(sourceBadge);
+                stack.Children.Add(imgBox);
+
+                StackPanel meta = new StackPanel { Margin = new Thickness(10, 9, 10, 10) };
+                TextBlock titleTb = new TextBlock
+                {
+                    Text = card.Title,
+                    FontSize = 13,
+                    FontWeight = FontWeights.Bold,
+                    TextTrimming = TextTrimming.CharacterEllipsis,
+                    MaxHeight = 36,
+                    TextWrapping = TextWrapping.Wrap
+                };
+                titleTb.SetResourceReference(TextBlock.ForegroundProperty, "Brush.Text");
+                TextBlock subTb = new TextBlock
+                {
+                    Text = card.SubTitle ?? "",
+                    FontSize = 11.5,
+                    TextTrimming = TextTrimming.CharacterEllipsis,
+                    Margin = new Thickness(0, 3, 0, 0)
+                };
+                subTb.SetResourceReference(TextBlock.ForegroundProperty, "Brush.TextMuted");
+                meta.Children.Add(titleTb);
+                meta.Children.Add(subTb);
+                stack.Children.Add(meta);
+                outer.Child = stack;
+            }
 
             ContextMenu actions = new ContextMenu();
             MenuItem favoriteAction = new MenuItem();
@@ -5123,7 +5217,7 @@ namespace KomaComic.Windows
             outer.ContextMenu = actions;
 
             // Asynchronous image load without blocking WPF UI thread
-            LoadCardThumbnailAsync(card, coverImg, coverStatus);
+            LoadCardThumbnailAsync(card, coverImg, coverStatus, glassCaption, cardW - 2.5, totalGlassH - 2.5);
 
             outer.MouseLeftButtonUp += delegate (object s, MouseButtonEventArgs e)
             {
@@ -5133,7 +5227,13 @@ namespace KomaComic.Windows
             return outer;
         }
 
-        private async void LoadCardThumbnailAsync(ComicCardModel card, Image targetImg, TextBlock status)
+        private async void LoadCardThumbnailAsync(
+            ComicCardModel card,
+            Image targetImg,
+            TextBlock status,
+            LiquidGlassCoverCaption glassCaption = null,
+            double cardW = 0,
+            double cardH = 0)
         {
             BitmapImage bmp = card.IsLocal
                 ? await _services.LoadLocalPageBitmapAsync(card.Id, 0, 340)
@@ -5142,6 +5242,10 @@ namespace KomaComic.Windows
             {
                 targetImg.Source = bmp;
                 status.Visibility = Visibility.Collapsed;
+                if (glassCaption != null)
+                {
+                    glassCaption.SetCoverSource(bmp, cardW, cardH);
+                }
                 if (SystemParameters.ClientAreaAnimation)
                     targetImg.BeginAnimation(UIElement.OpacityProperty, new System.Windows.Media.Animation.DoubleAnimation(0.55, 1, TimeSpan.FromMilliseconds(180)));
             }
@@ -5715,20 +5819,42 @@ namespace KomaComic.Windows
                     }
                 if (!string.IsNullOrEmpty(detail.CoverUrl)) card.CoverUrl = detail.CoverUrl;
                 _services.SaveState();
+                Grid detailLayer = new Grid();
+                Grid detailBackdrop = new Grid { IsHitTestVisible = false };
+                detailBackdrop.SetResourceReference(Panel.BackgroundProperty, "Brush.Bg");
+                Image detailBgImg = new Image
+                {
+                    Stretch = Stretch.UniformToFill,
+                    Opacity = UiTheme.IsDarkActive ? 0.34 : 0.28,
+                    Effect = new System.Windows.Media.Effects.BlurEffect { Radius = 24 }
+                };
+                if (_services.GlassMaterial)
+                {
+                    detailBackdrop.Children.Add(BuildAmbientOrbLayer());
+                    detailBackdrop.Children.Add(detailBgImg);
+                }
+                detailLayer.Children.Add(detailBackdrop);
+
                 DockPanel root = new DockPanel { Margin = new Thickness(18) };
 
                 // Hero section
-                Grid hero = new Grid { Margin = new Thickness(0, 0, 0, 14) };
-                DockPanel.SetDock(hero, Dock.Top);
+                Grid hero = new Grid();
                 hero.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(160) });
                 hero.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
 
-                Border coverBorder = new Border { Width = 146, Height = 202, CornerRadius = new CornerRadius(10), ClipToBounds = true, Background = new SolidColorBrush(Color.FromRgb(22, 27, 36)) };
+                Border coverBorder = new Border
+                {
+                    Width = 146, Height = 202, CornerRadius = new CornerRadius(12), ClipToBounds = true,
+                    Background = new SolidColorBrush(Color.FromRgb(22, 27, 36)),
+                    BorderThickness = new Thickness(1)
+                };
+                coverBorder.SetResourceReference(Border.BorderBrushProperty, "Brush.NavGlassRim");
+                coverBorder.Effect = UiTheme.CreateGlassShadow(UiTheme.IsDarkActive, true);
                 Image coverImg = new Image { Stretch = Stretch.UniformToFill };
                 coverBorder.Child = coverImg;
                 hero.Children.Add(coverBorder);
 
-                LoadDetailCoverAsync(detail.CoverUrl, card.CoverUrl, detail.Headers, coverImg);
+                LoadDetailCoverAsync(detail.CoverUrl, card.CoverUrl, detail.Headers, coverImg, _services.GlassMaterial ? detailBgImg : null);
 
                 StackPanel infoStack = new StackPanel { Margin = new Thickness(14, 0, 0, 0) };
                 Grid.SetColumn(infoStack, 1);
@@ -5762,7 +5888,24 @@ namespace KomaComic.Windows
                     AddBrowseButton(actionRow, "打开原作品", delegate { OpenComicWebsite(card.OfficialUrl); });
                 infoStack.Children.Add(actionRow);
                 hero.Children.Add(infoStack);
-                root.Children.Add(hero);
+
+                if (_services.GlassMaterial)
+                {
+                    LiquidGlassSurface heroGlass = new LiquidGlassSurface(detailBackdrop, LiquidGlassPreset.FrostedBar, 20, false, false)
+                    {
+                        Margin = new Thickness(0, 0, 0, 14),
+                        ContentPadding = new Thickness(14, 14, 14, 14),
+                        Child = hero
+                    };
+                    DockPanel.SetDock(heroGlass, Dock.Top);
+                    root.Children.Add(heroGlass);
+                }
+                else
+                {
+                    hero.Margin = new Thickness(0, 0, 0, 14);
+                    DockPanel.SetDock(hero, Dock.Top);
+                    root.Children.Add(hero);
+                }
 
                 ScrollViewer chScroll = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
                 WrapPanel chWrap = new WrapPanel();
@@ -5781,8 +5924,21 @@ namespace KomaComic.Windows
                     chWrap.Children.Add(cb);
                 }
                 chScroll.Content = chWrap;
-                root.Children.Add(chScroll);
-                dlg.Content = root;
+                if (_services.GlassMaterial)
+                {
+                    LiquidGlassSurface chGlass = new LiquidGlassSurface(detailBackdrop, LiquidGlassPreset.FrostedBar, 18, false, false)
+                    {
+                        ContentPadding = new Thickness(12, 12, 6, 10),
+                        Child = chScroll
+                    };
+                    root.Children.Add(chGlass);
+                }
+                else
+                {
+                    root.Children.Add(chScroll);
+                }
+                detailLayer.Children.Add(root);
+                dlg.Content = detailLayer;
             }
             catch (Exception ex)
             {
@@ -5832,11 +5988,15 @@ namespace KomaComic.Windows
             }
         }
 
-        private async void LoadDetailCoverAsync(string primaryUrl, string fallbackUrl, Dictionary<string, string> headers, Image img)
+        private async void LoadDetailCoverAsync(string primaryUrl, string fallbackUrl, Dictionary<string, string> headers, Image img, Image backdropImg = null)
         {
             string u = !string.IsNullOrEmpty(primaryUrl) ? primaryUrl : fallbackUrl;
             BitmapImage bmp = await _services.LoadComicImageAsync(u, headers, 320);
-            if (bmp != null) img.Source = bmp;
+            if (bmp != null)
+            {
+                img.Source = bmp;
+                if (backdropImg != null) backdropImg.Source = bmp;
+            }
         }
 
         private bool IsFavorite(ComicCardModel card)
@@ -5954,20 +6114,31 @@ namespace KomaComic.Windows
             DockPanel.SetDock(btns, Dock.Right);
 
             Button btnAddFolder = UiTheme.MakeButton("+ 添加本地文件夹", true, false);
-            Button btnImportArc = UiTheme.MakeButton("+ 导入压缩包", false, false);
-            Button btnRescan = UiTheme.MakeButton("↻ 重新扫描", false, false);
-            Button btnNew = UiTheme.MakeButton("+ 新建作品集", false, false);
-            Button btnManage = UiTheme.MakeButton("管理当前作品集", false, false);
             btnAddFolder.Margin = new Thickness(0, 0, 8, 6);
-            btnImportArc.Margin = new Thickness(0, 0, 8, 6);
-            btnRescan.Margin = new Thickness(0, 0, 8, 6);
-            btnNew.Margin = new Thickness(0, 0, 8, 6);
-            btnManage.Margin = new Thickness(0, 0, 0, 6);
-
             btnAddFolder.Click += delegate { AddLocalFolderAction(); };
-            btnImportArc.Click += delegate { ImportLocalArchiveAction(); };
-            btnRescan.Click += delegate { RescanLocalLibraryAction(); };
-            btnNew.Click += delegate (object s, RoutedEventArgs e)
+            btns.Children.Add(btnAddFolder);
+
+            Func<string, Action, Thickness, LiquidGlassSurface> makeGlassPillAction = delegate (string label, Action act, Thickness margin)
+            {
+                Button b = new Button
+                {
+                    Content = label, FontSize = 13, FontWeight = FontWeights.SemiBold,
+                    Padding = new Thickness(14, 7, 14, 7), Background = Brushes.Transparent, BorderThickness = new Thickness(0),
+                    Cursor = Cursors.Hand, FocusVisualStyle = null,
+                    Template = UiTheme.CreateRoundedButtonTemplate(16, "Brush.NavGlassSelected")
+                };
+                b.SetResourceReference(Control.ForegroundProperty, "Brush.Text");
+                b.Click += delegate { act(); };
+                return new LiquidGlassSurface(_backdropStage, LiquidGlassPreset.SubtlePill, 16, false, true)
+                {
+                    Margin = margin,
+                    Child = b
+                };
+            };
+
+            btns.Children.Add(makeGlassPillAction("+ 导入压缩包", ImportLocalArchiveAction, new Thickness(0, 0, 8, 6)));
+            btns.Children.Add(makeGlassPillAction("↻ 重新扫描", RescanLocalLibraryAction, new Thickness(0, 0, 8, 6)));
+            btns.Children.Add(makeGlassPillAction("+ 新建作品集", delegate
             {
                 string name = PromptStringDialog("新建作品集", "请输入新作品集名称：", "");
                 if (!string.IsNullOrWhiteSpace(name))
@@ -5978,13 +6149,8 @@ namespace KomaComic.Windows
                     _services.SaveState();
                     RenderCollectionsView();
                 }
-            };
-            btnManage.Click += delegate (object s, RoutedEventArgs e) { OpenManageCollectionDialog(); };
-            btns.Children.Add(btnAddFolder);
-            btns.Children.Add(btnImportArc);
-            btns.Children.Add(btnRescan);
-            btns.Children.Add(btnNew);
-            btns.Children.Add(btnManage);
+            }, new Thickness(0, 0, 8, 6)));
+            btns.Children.Add(makeGlassPillAction("管理当前作品集", OpenManageCollectionDialog, new Thickness(0, 0, 0, 6)));
             header.Children.Add(btns);
 
             StackPanel titles = new StackPanel();
@@ -6566,7 +6732,14 @@ namespace KomaComic.Windows
             WrapPanel materials = new WrapPanel { Margin = new Thickness(0, 12, 0, 0) };
             CheckBox glass = new CheckBox { Content = "液态玻璃", IsChecked = _services.GlassMaterial, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 14, 4) };
             glass.SetResourceReference(Control.ForegroundProperty, "Brush.Text");
-            glass.Click += delegate { _services.GlassMaterial = glass.IsChecked == true; _services.SaveState(); ApplyLibraryMaterial(); };
+            glass.Click += delegate
+            {
+                _services.GlassMaterial = glass.IsChecked == true;
+                _services.SaveState();
+                ApplyLibraryMaterial();
+                RenderCollectionsView();
+                if (_viewHome != null) LoadActiveFeedAsync(1);
+            };
             materials.Children.Add(glass);
             AddBrowseButton(materials, "选择背景壁纸", ChooseWallpaper);
             AddBrowseButton(materials, "关闭壁纸", delegate { _services.WallpaperEnabled = false; _services.SaveState(); ApplyLibraryMaterial(); });
@@ -7074,16 +7247,16 @@ namespace KomaComic.Windows
                         source.CreateOptions = BitmapCreateOptions.IgnoreImageCache;
                         source.EndInit();
                         source.Freeze();
-                        double op = UiTheme.IsDarkActive ? 0.34 : 0.42;
+                        double op = UiTheme.IsDarkActive ? 0.62 : 0.86;
                         _wallpaper.Source = source;
                         _wallpaper.Opacity = op;
-                        // Keep gentle softness so underlying wallpaper details still refract visibly through Liquid Glass rims
-                        if (_services.GlassMaterial) _wallpaper.Effect = new System.Windows.Media.Effects.BlurEffect { Radius = 10 };
+                        // Keep custom wallpaper razor-sharp (zero blur); only Liquid Glass buttons/surfaces blur & refract locally
+                        _wallpaper.Effect = null;
                         if (_homeWallpaper != null)
                         {
                             _homeWallpaper.Source = source;
                             _homeWallpaper.Opacity = op;
-                            if (_services.GlassMaterial) _homeWallpaper.Effect = new System.Windows.Media.Effects.BlurEffect { Radius = 10 };
+                            _homeWallpaper.Effect = null;
                         }
                     }
                     catch (Exception ex) { ShowToast("无法读取壁纸：" + ex.Message); }

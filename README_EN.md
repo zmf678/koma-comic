@@ -96,7 +96,7 @@ powershell -ExecutionPolicy Bypass -File windows/build-windows.ps1
 gradle assembleWindows
 ```
 Portable output: `build/windows/KomaComic-windows-x64/KomaComic.exe`  
-Release archive: `build/release/KomaComic-v1.5.5-windows-x64.zip`
+Release archive: `build/release/KomaComic-v1.5.6-windows-x64.zip`
 
 ---
 

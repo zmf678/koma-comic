@@ -71,23 +71,12 @@ internal fun applyLibraryMaterial(root: View, wallpaper: ImageView, surface: Vie
         }
     }
     if (Build.VERSION.SDK_INT >= 31) {
-        // Gentle softness so wallpaper colors and silhouettes visibly refract through curved Liquid Glass rims
-        wallpaper.setRenderEffect(
-            if (prefs.glassMaterial && hasWallpaper) RenderEffect.createBlurEffect(10f, 10f, Shader.TileMode.CLAMP)
-            else null
-        )
+        // Keep custom wallpaper razor-sharp (zero blur); only Liquid Glass buttons/surfaces blur & refract locally
+        wallpaper.setRenderEffect(null)
     }
     val ink = if (dark) 0xFF0E1525.toInt() else 0xFFF4F7FD.toInt()
     surface.background = if (prefs.glassMaterial) {
-        if (hasWallpaper) {
-            GradientDrawable(GradientDrawable.Orientation.TL_BR, intArrayOf(
-                ColorUtils.setAlphaComponent(if (dark) 0xFF10182B.toInt() else 0xFFF2F6FE.toInt(), 184),
-                ColorUtils.setAlphaComponent(if (dark) 0xFF0C1324.toInt() else 0xFFEBF2FC.toInt(), 172),
-                ColorUtils.setAlphaComponent(if (dark) 0xFF131A2F.toInt() else 0xFFF4F0FC.toInt(), 184)
-            ))
-        } else {
-            null
-        }
+        null
     } else if (hasWallpaper) GradientDrawable().apply { setColor(ColorUtils.setAlphaComponent(ink, 218)) }
     else null
 }
@@ -96,13 +85,15 @@ internal fun ImageView.showCoverLoading(loading: Boolean) {
     setImageDrawable(CoverStatusDrawable(context, if (loading) "加载中" else "暂无封面"))
 }
 
-internal fun ImageView.finishCover(bitmap: Bitmap?) {
+internal fun ImageView.finishCover(bitmap: Bitmap?, onReady: ((Bitmap?) -> Unit)? = null) {
     if (bitmap == null) {
         showCoverLoading(false)
+        onReady?.invoke(null)
         return
     }
     val transition = drawable is CoverStatusDrawable
     setImageBitmap(bitmap)
+    onReady?.invoke(bitmap)
     if (transition && android.animation.ValueAnimator.areAnimatorsEnabled()) {
         animate().cancel()
         alpha = 0.64f
