@@ -461,6 +461,7 @@ namespace KomaComic.Windows
             double rimIntensity;
             double innerShadow;
             double sheenStrength;
+            double outerDarkLip;
             Color tint;
             Color specular;
             Color secondary;
@@ -469,86 +470,93 @@ namespace KomaComic.Windows
             {
                 case LiquidGlassPreset.ClearLens:
                     // High-clarity optical glass lens (translation ball / floating orb)
-                    refraction = 19.0;
-                    chroma = 3.0;
-                    boost = 1.20;
-                    rimIntensity = 1.28;
+                    refraction = 26.0;
+                    chroma = 3.8;
+                    boost = 1.24;
+                    rimIntensity = 1.32;
                     innerShadow = 0.24;
-                    sheenStrength = 0.26;
-                    tint = Color.FromArgb(98, 26, 48, 82);
-                    specular = Color.FromArgb(248, 255, 255, 255);
-                    secondary = Color.FromArgb(204, 128, 208, 255);
+                    sheenStrength = 0.30;
+                    outerDarkLip = 0.14;
+                    tint = Color.FromArgb(88, 24, 46, 82);
+                    specular = Color.FromArgb(250, 255, 255, 255);
+                    secondary = Color.FromArgb(215, 118, 204, 255);
                     break;
 
                 case LiquidGlassPreset.ReaderCapsule:
-                    refraction = 18.0;
-                    chroma = 2.8;
-                    boost = 1.10;
-                    rimIntensity = 1.18;
-                    innerShadow = 0.22;
-                    sheenStrength = 0.20;
-                    tint = Color.FromArgb(136, 15, 23, 38);
-                    specular = Color.FromArgb(232, 255, 255, 255);
-                    secondary = Color.FromArgb(168, 122, 198, 255);
+                    refraction = 26.0;
+                    chroma = 3.4;
+                    boost = 1.15;
+                    rimIntensity = 1.24;
+                    innerShadow = 0.24;
+                    sheenStrength = 0.24;
+                    outerDarkLip = 0.12;
+                    tint = Color.FromArgb(118, 14, 22, 38);
+                    specular = Color.FromArgb(242, 255, 255, 255);
+                    secondary = Color.FromArgb(184, 110, 194, 255);
                     break;
 
                 case LiquidGlassPreset.ReaderDrawer:
-                    refraction = 14.0;
-                    chroma = 2.0;
-                    boost = 0.95;
-                    rimIntensity = 0.96;
-                    innerShadow = 0.16;
-                    sheenStrength = 0.14;
-                    tint = Color.FromArgb(178, 14, 21, 35);
-                    specular = Color.FromArgb(204, 255, 255, 255);
-                    secondary = Color.FromArgb(136, 118, 186, 255);
+                    refraction = 18.0;
+                    chroma = 2.4;
+                    boost = 1.00;
+                    rimIntensity = 1.05;
+                    innerShadow = 0.18;
+                    sheenStrength = 0.16;
+                    outerDarkLip = 0.10;
+                    tint = Color.FromArgb(166, 14, 21, 35);
+                    specular = Color.FromArgb(216, 255, 255, 255);
+                    secondary = Color.FromArgb(152, 112, 184, 255);
                     break;
 
                 case LiquidGlassPreset.FloatingDock:
-                    refraction = 17.0;
-                    chroma = 2.6;
-                    boost = 1.12;
-                    rimIntensity = dark ? 1.18 : 1.28;
-                    innerShadow = dark ? 0.18 : 0.10;
-                    sheenStrength = dark ? 0.20 : 0.34;
-                    tint = dark ? Color.FromArgb(116, 18, 29, 50) : Color.FromArgb(134, 246, 251, 255);
-                    specular = dark ? Color.FromArgb(234, 255, 255, 255) : Color.FromArgb(252, 255, 255, 255);
-                    secondary = dark ? Color.FromArgb(166, 118, 194, 255) : Color.FromArgb(182, 142, 196, 255);
+                    // Ultra-translucent curved Liquid Glass capsule (unmistakable in BOTH Light & Dark mode)
+                    refraction = 28.0;
+                    chroma = 3.6;
+                    boost = dark ? 1.16 : 1.10;
+                    rimIntensity = dark ? 1.26 : 1.35;
+                    innerShadow = dark ? 0.22 : 0.18;
+                    sheenStrength = dark ? 0.24 : 0.42;
+                    outerDarkLip = dark ? 0.10 : 0.26;
+                    tint = dark ? Color.FromArgb(88, 18, 30, 54) : Color.FromArgb(62, 242, 249, 255);
+                    specular = dark ? Color.FromArgb(244, 255, 255, 255) : Color.FromArgb(255, 255, 255, 255);
+                    secondary = dark ? Color.FromArgb(188, 108, 192, 255) : Color.FromArgb(214, 96, 166, 255);
                     break;
 
                 case LiquidGlassPreset.SubtlePill:
-                    refraction = 12.0;
-                    chroma = 2.0;
-                    boost = 1.08;
-                    rimIntensity = 1.08;
-                    innerShadow = dark ? 0.15 : 0.08;
-                    sheenStrength = dark ? 0.16 : 0.26;
-                    tint = dark ? Color.FromArgb(128, 18, 26, 44) : Color.FromArgb(146, 248, 252, 255);
-                    specular = Color.FromArgb(224, 255, 255, 255);
-                    secondary = Color.FromArgb(152, 126, 196, 255);
+                    refraction = 22.0;
+                    chroma = 3.0;
+                    boost = 1.12;
+                    rimIntensity = dark ? 1.18 : 1.30;
+                    innerShadow = dark ? 0.18 : 0.16;
+                    sheenStrength = dark ? 0.20 : 0.36;
+                    outerDarkLip = dark ? 0.10 : 0.24;
+                    tint = dark ? Color.FromArgb(98, 18, 28, 48) : Color.FromArgb(66, 244, 250, 255);
+                    specular = Color.FromArgb(248, 255, 255, 255);
+                    secondary = dark ? Color.FromArgb(176, 114, 194, 255) : Color.FromArgb(204, 102, 170, 255);
                     break;
 
-                default: // FrostedBar (search bar, unified browse bar)
-                    refraction = 15.5;
-                    chroma = 2.4;
-                    boost = 1.08;
-                    rimIntensity = dark ? 1.12 : 1.24;
-                    innerShadow = dark ? 0.15 : 0.08;
-                    sheenStrength = dark ? 0.18 : 0.30;
-                    tint = dark ? Color.FromArgb(124, 18, 28, 48) : Color.FromArgb(144, 248, 251, 255);
-                    specular = dark ? Color.FromArgb(222, 255, 255, 255) : Color.FromArgb(250, 255, 255, 255);
-                    secondary = dark ? Color.FromArgb(156, 122, 194, 255) : Color.FromArgb(174, 146, 200, 255);
+                default: // FrostedBar (floating search bar & unified browse bar)
+                    refraction = 26.0;
+                    chroma = 3.4;
+                    boost = dark ? 1.14 : 1.08;
+                    rimIntensity = dark ? 1.22 : 1.32;
+                    innerShadow = dark ? 0.20 : 0.17;
+                    sheenStrength = dark ? 0.22 : 0.38;
+                    outerDarkLip = dark ? 0.10 : 0.25;
+                    tint = dark ? Color.FromArgb(96, 18, 29, 50) : Color.FromArgb(68, 244, 250, 255);
+                    specular = dark ? Color.FromArgb(240, 255, 255, 255) : Color.FromArgb(255, 255, 255, 255);
+                    secondary = dark ? Color.FromArgb(180, 112, 192, 255) : Color.FromArgb(208, 98, 168, 255);
                     break;
             }
 
-            double contrast = 1.0 + 0.14 * boost;
-            double bias = 0.5 - 0.5 * contrast + 0.035 * boost;
+            double contrast = 1.0 + 0.16 * boost;
+            double bias = 0.5 - 0.5 * contrast + (dark ? 0.035 : 0.020) * boost;
             _shaderEffect.OpticalParams = new Point4D(refraction, chroma, contrast, bias);
             Point lightDir = ComputeLightDirection(_lightU, _lightV);
             _shaderEffect.LightParams = new Point4D(lightDir.X, lightDir.Y, rimIntensity, innerShadow);
             _shaderEffect.TintColorVec = LiquidGlassEffect.ToVec(tint);
             _shaderEffect.SpecularColorVec = LiquidGlassEffect.ToPremulVec(specular, sheenStrength);
-            _shaderEffect.SecondaryRimColorVec = LiquidGlassEffect.ToPremulVec(secondary, 0.0);
+            _shaderEffect.SecondaryRimColorVec = LiquidGlassEffect.ToPremulVec(secondary, outerDarkLip);
         }
 
         private static Point ComputeLightDirection(double u, double v)
@@ -602,12 +610,12 @@ namespace KomaComic.Windows
             switch (preset)
             {
                 case LiquidGlassPreset.ClearLens: return 0.0;      // Crystal-clear refractive glass (no frost!)
-                case LiquidGlassPreset.SubtlePill: return 4.5;
-                case LiquidGlassPreset.FloatingDock: return 7.5;
-                case LiquidGlassPreset.FrostedBar: return 7.0;
-                case LiquidGlassPreset.ReaderCapsule: return 8.0;
-                case LiquidGlassPreset.ReaderDrawer: return 11.0;
-                default: return 7.0;
+                case LiquidGlassPreset.SubtlePill: return 2.2;
+                case LiquidGlassPreset.FloatingDock: return 3.6;
+                case LiquidGlassPreset.FrostedBar: return 3.2;
+                case LiquidGlassPreset.ReaderCapsule: return 4.8;
+                case LiquidGlassPreset.ReaderDrawer: return 7.5;
+                default: return 3.2;
             }
         }
 
@@ -617,13 +625,13 @@ namespace KomaComic.Windows
             switch (preset)
             {
                 case LiquidGlassPreset.ClearLens:
-                    return Math.Max(10.0, Math.Min(minDim * 0.44, 22.0));
+                    return Math.Max(12.0, Math.Min(minDim * 0.46, 24.0));
                 case LiquidGlassPreset.ReaderDrawer:
-                    return 22.0;
+                    return 24.0;
                 case LiquidGlassPreset.SubtlePill:
-                    return Math.Max(8.0, Math.Min(minDim * 0.36, 15.0));
+                    return Math.Max(10.0, Math.Min(minDim * 0.42, 18.0));
                 default:
-                    return Math.Max(11.0, Math.Min(minDim * 0.34, Math.Max(18.0, radius * 0.62)));
+                    return Math.Max(14.0, Math.Min(minDim * 0.42, Math.Max(20.0, radius * 0.72)));
             }
         }
 
@@ -632,11 +640,11 @@ namespace KomaComic.Windows
             bool elevated = preset == LiquidGlassPreset.FloatingDock || preset == LiquidGlassPreset.ReaderCapsule || preset == LiquidGlassPreset.ClearLens;
             return new DropShadowEffect
             {
-                Color = dark ? Color.FromRgb(2, 6, 14) : Color.FromRgb(42, 72, 118),
-                BlurRadius = elevated ? 28 : 18,
-                ShadowDepth = elevated ? 7 : 4,
+                Color = dark ? Color.FromRgb(2, 6, 14) : Color.FromRgb(28, 56, 108),
+                BlurRadius = elevated ? 26 : 18,
+                ShadowDepth = elevated ? 6 : 4,
                 Direction = 270,
-                Opacity = dark ? (elevated ? 0.50 : 0.34) : (elevated ? 0.16 : 0.10)
+                Opacity = dark ? (elevated ? 0.54 : 0.36) : (elevated ? 0.24 : 0.16)
             };
         }
 

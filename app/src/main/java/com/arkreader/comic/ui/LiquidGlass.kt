@@ -192,6 +192,7 @@ internal class LiquidGlassDrawable(
         shader.setFloatUniform("lightPos", lightU, lightV)
         shader.setFloatUniform("rimIntensity", spec.rimIntensity)
         shader.setFloatUniform("innerShadowOpacity", spec.innerShadowOpacity)
+        shader.setFloatUniform("outerDarkLipOpacity", spec.outerDarkLipOpacity)
         shader.setColorUniform("tintColor", spec.tintColor)
         shader.setColorUniform("specularColor", spec.specularColor)
         shader.setColorUniform("secondaryRimColor", spec.secondaryRimColor)
@@ -345,6 +346,7 @@ internal class LiquidGlassDrawable(
         val opticalBoost: Float,
         val rimIntensity: Float,
         val innerShadowOpacity: Float,
+        val outerDarkLipOpacity: Float,
         val tintColor: Int,
         val specularColor: Int,
         val secondaryRimColor: Int
@@ -362,76 +364,83 @@ internal class LiquidGlassDrawable(
         ): GlassTuning {
             if (selected) {
                 return GlassTuning(
-                    refractionPx = 11f * density,
-                    chromaticPx = 2.0f * density,
-                    opticalBoost = 1.15f,
-                    rimIntensity = 1.25f,
-                    innerShadowOpacity = if (dark) 0.14f else 0.08f,
-                    tintColor = if (dark) 0x8C3A9BFF.toInt() else 0xB8CBE8FF.toInt(),
-                    specularColor = 0xF5FFFFFF.toInt(),
-                    secondaryRimColor = 0xB88CCBFF.toInt()
+                    refractionPx = 14f * density,
+                    chromaticPx = 2.4f * density,
+                    opticalBoost = 1.16f,
+                    rimIntensity = 1.28f,
+                    innerShadowOpacity = if (dark) 0.16f else 0.14f,
+                    outerDarkLipOpacity = if (dark) 0.10f else 0.22f,
+                    tintColor = if (dark) 0x783A9BFF else 0x86CBE8FF.toInt(),
+                    specularColor = 0xFAFFFFFF.toInt(),
+                    secondaryRimColor = 0xC87AC4FF.toInt()
                 )
             }
             return when (preset) {
                 LiquidGlassPreset.CLEAR_LENS -> GlassTuning(
-                    refractionPx = 15.0f * density,
-                    chromaticPx = 2.8f * density,
-                    opticalBoost = 1.20f,
-                    rimIntensity = 1.30f,
+                    refractionPx = 22.0f * density,
+                    chromaticPx = 3.4f * density,
+                    opticalBoost = 1.24f,
+                    rimIntensity = 1.32f,
                     innerShadowOpacity = 0.24f,
-                    tintColor = 0x641A3052,
-                    specularColor = 0xF8FFFFFF.toInt(),
-                    secondaryRimColor = 0xC480D0FF.toInt()
+                    outerDarkLipOpacity = 0.14f,
+                    tintColor = 0x58182E52,
+                    specularColor = 0xFAFFFFFF.toInt(),
+                    secondaryRimColor = 0xD676CCFF.toInt()
                 )
                 LiquidGlassPreset.READER_CAPSULE -> GlassTuning(
-                    refractionPx = 14.5f * density,
-                    chromaticPx = 2.3f * density,
-                    opticalBoost = 1.10f,
-                    rimIntensity = 1.18f,
-                    innerShadowOpacity = 0.22f,
-                    tintColor = 0x94101828.toInt(),
-                    specularColor = 0xE6FFFFFF.toInt(),
-                    secondaryRimColor = 0x9E78C2FF.toInt()
+                    refractionPx = 22.0f * density,
+                    chromaticPx = 3.0f * density,
+                    opticalBoost = 1.15f,
+                    rimIntensity = 1.24f,
+                    innerShadowOpacity = 0.24f,
+                    outerDarkLipOpacity = 0.12f,
+                    tintColor = 0x760E1626,
+                    specularColor = 0xF2FFFFFF.toInt(),
+                    secondaryRimColor = 0xB86EC2FF.toInt()
                 )
                 LiquidGlassPreset.READER_DRAWER -> GlassTuning(
-                    refractionPx = 11.5f * density,
-                    chromaticPx = 1.8f * density,
-                    opticalBoost = 0.95f,
-                    rimIntensity = 0.96f,
-                    innerShadowOpacity = 0.16f,
-                    tintColor = 0xBA0E1523.toInt(),
-                    specularColor = 0xC8FFFFFF.toInt(),
-                    secondaryRimColor = 0x8076BAFF.toInt()
+                    refractionPx = 16.0f * density,
+                    chromaticPx = 2.2f * density,
+                    opticalBoost = 1.00f,
+                    rimIntensity = 1.05f,
+                    innerShadowOpacity = 0.18f,
+                    outerDarkLipOpacity = 0.10f,
+                    tintColor = 0xA60E1523.toInt(),
+                    specularColor = 0xD8FFFFFF.toInt(),
+                    secondaryRimColor = 0x9870B8FF.toInt()
                 )
                 LiquidGlassPreset.FLOATING_DOCK -> GlassTuning(
-                    refractionPx = 13.5f * density,
-                    chromaticPx = 2.2f * density,
-                    opticalBoost = 1.12f,
-                    rimIntensity = if (dark) 1.16f else 1.26f,
-                    innerShadowOpacity = if (dark) 0.18f else 0.09f,
-                    tintColor = if (dark) 0x7A141F34 else 0x8EF6FBFF.toInt(),
-                    specularColor = if (dark) 0xE6FFFFFF.toInt() else 0xFAFFFFFF.toInt(),
-                    secondaryRimColor = if (dark) 0x9C76C0FF.toInt() else 0xB094C8FF.toInt()
+                    refractionPx = 24.0f * density,
+                    chromaticPx = 3.2f * density,
+                    opticalBoost = if (dark) 1.16f else 1.10f,
+                    rimIntensity = if (dark) 1.26f else 1.35f,
+                    innerShadowOpacity = if (dark) 0.22f else 0.18f,
+                    outerDarkLipOpacity = if (dark) 0.10f else 0.26f,
+                    tintColor = if (dark) 0x58121E36 else 0x3EF2F9FF,
+                    specularColor = if (dark) 0xF4FFFFFF.toInt() else 0xFFFFFFFF.toInt(),
+                    secondaryRimColor = if (dark) 0xBC6CC0FF.toInt() else 0xD660A6FF.toInt()
                 )
                 LiquidGlassPreset.SUBTLE_PILL -> GlassTuning(
-                    refractionPx = 10.0f * density,
-                    chromaticPx = 1.7f * density,
-                    opticalBoost = 1.08f,
-                    rimIntensity = 1.06f,
-                    innerShadowOpacity = if (dark) 0.16f else 0.07f,
-                    tintColor = if (dark) 0x86121A2C.toInt() else 0x96F8FCFF.toInt(),
-                    specularColor = 0xDCFFFFFF.toInt(),
-                    secondaryRimColor = 0x927EC4FF.toInt()
+                    refractionPx = 18.0f * density,
+                    chromaticPx = 2.6f * density,
+                    opticalBoost = 1.12f,
+                    rimIntensity = if (dark) 1.18f else 1.30f,
+                    innerShadowOpacity = if (dark) 0.18f else 0.16f,
+                    outerDarkLipOpacity = if (dark) 0.10f else 0.24f,
+                    tintColor = if (dark) 0x62121C30 else 0x42F4FAFF,
+                    specularColor = 0xF8FFFFFF.toInt(),
+                    secondaryRimColor = if (dark) 0xB072C2FF.toInt() else 0xCC66AAFF.toInt()
                 )
                 LiquidGlassPreset.FROSTED_BAR -> GlassTuning(
-                    refractionPx = 12.5f * density,
-                    chromaticPx = 2.0f * density,
-                    opticalBoost = 1.08f,
-                    rimIntensity = if (dark) 1.10f else 1.22f,
-                    innerShadowOpacity = if (dark) 0.15f else 0.07f,
-                    tintColor = if (dark) 0x84141E32.toInt() else 0x98F8FBFF.toInt(),
-                    specularColor = if (dark) 0xD8FFFFFF.toInt() else 0xF8FFFFFF.toInt(),
-                    secondaryRimColor = if (dark) 0x907CC0FF.toInt() else 0xA898CAFF.toInt()
+                    refractionPx = 22.0f * density,
+                    chromaticPx = 3.0f * density,
+                    opticalBoost = if (dark) 1.14f else 1.08f,
+                    rimIntensity = if (dark) 1.22f else 1.32f,
+                    innerShadowOpacity = if (dark) 0.20f else 0.17f,
+                    outerDarkLipOpacity = if (dark) 0.10f else 0.25f,
+                    tintColor = if (dark) 0x60121D32 else 0x44F4FAFF,
+                    specularColor = if (dark) 0xF0FFFFFF.toInt() else 0xFFFFFFFF.toInt(),
+                    secondaryRimColor = if (dark) 0xB470C0FF.toInt() else 0xD062A8FF.toInt()
                 )
             }
         }
@@ -504,6 +513,7 @@ internal class LiquidGlassDrawable(
             uniform float2 lightPos;
             uniform float rimIntensity;
             uniform float innerShadowOpacity;
+            uniform float outerDarkLipOpacity;
             layout(color) uniform half4 tintColor;
             layout(color) uniform half4 specularColor;
             layout(color) uniform half4 secondaryRimColor;
@@ -558,18 +568,17 @@ internal class LiquidGlassDrawable(
                 half b = backdrop.eval(clamp(refractPos - chromaOff, float2(0.0), size)).b;
                 half3 baseRgb = applyOpticalTone(half3(r, g, b), opticalBoost);
 
-                half tintFactor = clamp(tintColor.a * half(1.0 - 0.22 * meniscus), half(0.0), half(1.0));
+                half tintFactor = clamp(tintColor.a * half(1.0 - 0.45 * meniscus), half(0.0), half(1.0));
                 half3 glassRgb = mix(baseRgb, tintColor.rgb, tintFactor);
 
                 float2 uv = fragCoord / size;
-                float bottomShade = smoothstep(0.35, 1.0, uv.y) * (0.28 + 0.72 * meniscus);
-                glassRgb *= half(1.0 - innerShadowOpacity * bottomShade);
-
-                float topSheen = pow(clamp(1.0 - uv.y * 1.65, 0.0, 1.0), 2.2) * (0.14 + 0.10 * (1.0 - edgeT));
-                glassRgb += specularColor.rgb * half(topSheen * float(specularColor.a) * rimIntensity);
-
                 float outerRim = smoothstep(bevel * 0.36, 0.0, distIn);
                 float crispRim = smoothstep(2.2, 0.0, distIn);
+                float depthShade = innerShadowOpacity * (uv.y * 0.52 + meniscus * 0.52) + outerDarkLipOpacity * crispRim;
+                glassRgb *= half(clamp(1.0 - depthShade, 0.0, 1.0));
+
+                float topSheen = pow(clamp(1.0 - uv.y * 1.9, 0.0, 1.0), 2.0) * (0.20 + 0.12 * (1.0 - edgeT));
+                glassRgb += specularColor.rgb * half(topSheen * float(specularColor.a) * rimIntensity);
 
                 float2 lightDir = normalize((lightPos - 0.5) * size - p + float2(-0.001, -0.001));
                 float2 keyLight = normalize(mix(normalize(float2(-0.68, -0.73)), lightDir, 0.45));
@@ -840,21 +849,21 @@ internal class AmbientGlassCanvasDrawable(private val dark: Boolean) : Drawable(
             Shader.TileMode.CLAMP
         )
         orb1Paint.shader = RadialGradient(
-            w * 0.12f, h * 0.14f, max(w, h) * 0.45f,
-            if (dark) 0x483898FF else 0x3858A8FF,
-            0x003898FF,
+            w * 0.10f, h * 0.12f, max(w, h) * 0.48f,
+            if (dark) 0x723A9EFF else 0x6C3A9EFF,
+            0x003A9EFF,
             Shader.TileMode.CLAMP
         )
         orb2Paint.shader = RadialGradient(
-            w * 0.16f, h * 0.88f, max(w, h) * 0.42f,
-            if (dark) 0x3A866CFF else 0x2E9B84FF,
-            0x00866CFF,
+            w * 0.12f, h * 0.68f, max(w, h) * 0.44f,
+            if (dark) 0x648A6EFF else 0x5E8A6EFF,
+            0x008A6EFF,
             Shader.TileMode.CLAMP
         )
         orb3Paint.shader = RadialGradient(
-            w * 0.88f, h * 0.18f, max(w, h) * 0.48f,
-            if (dark) 0x3438BDF8 else 0x2C4BC4FA,
-            0x0038BDF8,
+            w * 0.88f, h * 0.16f, max(w, h) * 0.50f,
+            if (dark) 0x5E22C5F6 else 0x5822C5F6,
+            0x0022C5F6,
             Shader.TileMode.CLAMP
         )
     }

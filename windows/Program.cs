@@ -91,7 +91,7 @@ namespace KomaComic.Windows
 
     internal static class Program
     {
-        internal const string AppVersion = "1.5.4";
+        internal const string AppVersion = "1.5.5";
         internal const string GithubRepoSlug = "zmf678/koma-comic";
 
         [STAThread]
@@ -469,7 +469,7 @@ namespace KomaComic.Windows
             app.Resources["Brush.GlassSheen"] = sheen;
 
             SolidColorBrush cardSurface = new SolidColorBrush(glass
-                ? (dark ? Color.FromArgb(184, 22, 30, 46) : Color.FromArgb(218, 255, 255, 255))
+                ? (dark ? Color.FromArgb(164, 20, 29, 46) : Color.FromArgb(204, 255, 255, 255))
                 : (dark ? Color.FromRgb(23, 29, 39) : Color.FromRgb(255, 255, 255)));
             cardSurface.Freeze();
             app.Resources["Brush.CardSurface"] = cardSurface;
@@ -483,6 +483,116 @@ namespace KomaComic.Windows
             SolidColorBrush favActiveFg = new SolidColorBrush(dark ? Color.FromRgb(255, 210, 102) : Color.FromRgb(194, 106, 0));
             favActiveFg.Freeze();
             app.Resources["Brush.FavActiveFg"] = favActiveFg;
+
+            ApplyGlassScrollBarResources(app, dark, glass);
+        }
+
+        private static void ApplyGlassScrollBarResources(Application app, bool dark, bool glass)
+        {
+            // Floating frameless Liquid Glass ScrollBar thumb brushes (no boxy Win95 gutter or arrow buttons)
+            LinearGradientBrush thumbIdle = new LinearGradientBrush { StartPoint = new Point(0, 0), EndPoint = new Point(1, 1) };
+            LinearGradientBrush thumbHover = new LinearGradientBrush { StartPoint = new Point(0, 0), EndPoint = new Point(1, 1) };
+            LinearGradientBrush thumbRim = new LinearGradientBrush { StartPoint = new Point(0, 0), EndPoint = new Point(1, 1) };
+
+            if (dark)
+            {
+                thumbIdle.GradientStops.Add(new GradientStop(Color.FromArgb(glass ? (byte)172 : (byte)132, 178, 214, 255), 0.0));
+                thumbIdle.GradientStops.Add(new GradientStop(Color.FromArgb(glass ? (byte)122 : (byte)98, 96, 148, 224), 1.0));
+                thumbHover.GradientStops.Add(new GradientStop(Color.FromArgb(236, 158, 212, 255), 0.0));
+                thumbHover.GradientStops.Add(new GradientStop(Color.FromArgb(216, 64, 152, 255), 1.0));
+                thumbRim.GradientStops.Add(new GradientStop(Color.FromArgb(210, 255, 255, 255), 0.0));
+                thumbRim.GradientStops.Add(new GradientStop(Color.FromArgb(128, 118, 194, 255), 1.0));
+            }
+            else
+            {
+                thumbIdle.GradientStops.Add(new GradientStop(Color.FromArgb(glass ? (byte)176 : (byte)138, 134, 176, 232), 0.0));
+                thumbIdle.GradientStops.Add(new GradientStop(Color.FromArgb(glass ? (byte)136 : (byte)106, 78, 128, 198), 1.0));
+                thumbHover.GradientStops.Add(new GradientStop(Color.FromArgb(232, 74, 160, 255), 0.0));
+                thumbHover.GradientStops.Add(new GradientStop(Color.FromArgb(214, 38, 118, 228), 1.0));
+                thumbRim.GradientStops.Add(new GradientStop(Color.FromArgb(248, 255, 255, 255), 0.0));
+                thumbRim.GradientStops.Add(new GradientStop(Color.FromArgb(182, 84, 148, 232), 1.0));
+            }
+            thumbIdle.Freeze();
+            thumbHover.Freeze();
+            thumbRim.Freeze();
+            app.Resources["Brush.ScrollThumb"] = thumbIdle;
+            app.Resources["Brush.ScrollThumbHover"] = thumbHover;
+            app.Resources["Brush.ScrollThumbRim"] = thumbRim;
+
+            if (!app.Resources.Contains(typeof(ScrollBar)))
+            {
+                const string sbXaml =
+                    "<Style xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation' " +
+                    "xmlns:x='http://schemas.microsoft.com/winfx/2006/xaml' TargetType='{x:Type ScrollBar}'>" +
+                    "<Setter Property='SnapsToDevicePixels' Value='True'/>" +
+                    "<Setter Property='OverridesDefaultStyle' Value='True'/>" +
+                    "<Setter Property='Background' Value='Transparent'/>" +
+                    "<Setter Property='BorderThickness' Value='0'/>" +
+                    "<Style.Triggers>" +
+                    "<Trigger Property='Orientation' Value='Vertical'>" +
+                    "<Setter Property='Width' Value='14'/>" +
+                    "<Setter Property='MinWidth' Value='14'/>" +
+                    "<Setter Property='Margin' Value='0,8,4,8'/>" +
+                    "<Setter Property='Template'><Setter.Value>" +
+                    "<ControlTemplate TargetType='{x:Type ScrollBar}'>" +
+                    "<Grid x:Name='Bg' Background='Transparent'>" +
+                    "<Border x:Name='trackGlass' Width='8' HorizontalAlignment='Right' Margin='0,0,2,0' CornerRadius='4' Background='#144A78B8' Opacity='0'/>" +
+                    "<Track x:Name='PART_Track' IsDirectionReversed='True'>" +
+                    "<Track.DecreaseRepeatButton><RepeatButton Command='ScrollBar.PageUpCommand' Opacity='0' Focusable='False'/></Track.DecreaseRepeatButton>" +
+                    "<Track.IncreaseRepeatButton><RepeatButton Command='ScrollBar.PageDownCommand' Opacity='0' Focusable='False'/></Track.IncreaseRepeatButton>" +
+                    "<Track.Thumb><Thumb Cursor='Hand' MinHeight='40'>" +
+                    "<Thumb.Template><ControlTemplate TargetType='{x:Type Thumb}'>" +
+                    "<Border x:Name='pill' Width='7.5' HorizontalAlignment='Right' Margin='0,2,2,2' CornerRadius='3.75' " +
+                    "Background='{DynamicResource Brush.ScrollThumb}' BorderBrush='{DynamicResource Brush.ScrollThumbRim}' BorderThickness='1'>" +
+                    "<Border.Effect><DropShadowEffect Color='#1A3868' BlurRadius='9' ShadowDepth='1.5' Opacity='0.28'/></Border.Effect>" +
+                    "<Border CornerRadius='3' Margin='0.5,0.5,0.5,0' VerticalAlignment='Top' Height='14' IsHitTestVisible='False'>" +
+                    "<Border.Background><LinearGradientBrush StartPoint='0.5,0' EndPoint='0.5,1'>" +
+                    "<GradientStop Color='#70FFFFFF' Offset='0'/><GradientStop Color='#00FFFFFF' Offset='1'/>" +
+                    "</LinearGradientBrush></Border.Background></Border>" +
+                    "</Border>" +
+                    "<ControlTemplate.Triggers>" +
+                    "<Trigger Property='IsMouseOver' Value='True'>" +
+                    "<Setter TargetName='pill' Property='Width' Value='10'/>" +
+                    "<Setter TargetName='pill' Property='CornerRadius' Value='5'/>" +
+                    "<Setter TargetName='pill' Property='Background' Value='{DynamicResource Brush.ScrollThumbHover}'/>" +
+                    "</Trigger>" +
+                    "<Trigger Property='IsDragging' Value='True'>" +
+                    "<Setter TargetName='pill' Property='Width' Value='10.5'/>" +
+                    "<Setter TargetName='pill' Property='CornerRadius' Value='5.25'/>" +
+                    "<Setter TargetName='pill' Property='Background' Value='{DynamicResource Brush.ScrollThumbHover}'/>" +
+                    "</Trigger>" +
+                    "</ControlTemplate.Triggers></ControlTemplate></Thumb.Template></Thumb></Track.Thumb>" +
+                    "</Track></Grid>" +
+                    "<ControlTemplate.Triggers>" +
+                    "<Trigger Property='IsMouseOver' Value='True'>" +
+                    "<Setter TargetName='trackGlass' Property='Opacity' Value='1'/>" +
+                    "</Trigger>" +
+                    "</ControlTemplate.Triggers></ControlTemplate></Setter.Value></Setter></Trigger>" +
+                    "<Trigger Property='Orientation' Value='Horizontal'>" +
+                    "<Setter Property='Height' Value='11'/>" +
+                    "<Setter Property='MinHeight' Value='11'/>" +
+                    "<Setter Property='Margin' Value='4,0,4,2'/>" +
+                    "<Setter Property='Template'><Setter.Value>" +
+                    "<ControlTemplate TargetType='{x:Type ScrollBar}'>" +
+                    "<Grid x:Name='Bg' Background='Transparent'>" +
+                    "<Track x:Name='PART_Track' IsDirectionReversed='False'>" +
+                    "<Track.DecreaseRepeatButton><RepeatButton Command='ScrollBar.PageLeftCommand' Opacity='0' Focusable='False'/></Track.DecreaseRepeatButton>" +
+                    "<Track.IncreaseRepeatButton><RepeatButton Command='ScrollBar.PageRightCommand' Opacity='0' Focusable='False'/></Track.IncreaseRepeatButton>" +
+                    "<Track.Thumb><Thumb Cursor='Hand' MinWidth='36'>" +
+                    "<Thumb.Template><ControlTemplate TargetType='{x:Type Thumb}'>" +
+                    "<Border x:Name='hpill' Height='6' VerticalAlignment='Bottom' Margin='2,0,2,1.5' CornerRadius='3' " +
+                    "Background='{DynamicResource Brush.ScrollThumb}' BorderBrush='{DynamicResource Brush.ScrollThumbRim}' BorderThickness='1'/>" +
+                    "<ControlTemplate.Triggers>" +
+                    "<Trigger Property='IsMouseOver' Value='True'>" +
+                    "<Setter TargetName='hpill' Property='Height' Value='8.5'/>" +
+                    "<Setter TargetName='hpill' Property='CornerRadius' Value='4.25'/>" +
+                    "<Setter TargetName='hpill' Property='Background' Value='{DynamicResource Brush.ScrollThumbHover}'/>" +
+                    "</Trigger>" +
+                    "</ControlTemplate.Triggers></ControlTemplate></Thumb.Template></Thumb></Track.Thumb>" +
+                    "</Track></Grid></ControlTemplate></Setter.Value></Setter></Trigger>" +
+                    "</Style.Triggers></Style>";
+                app.Resources[typeof(ScrollBar)] = (Style)System.Windows.Markup.XamlReader.Parse(sbXaml);
+            }
         }
 
         public static DropShadowEffect CreateGlassShadow(bool dark, bool subtle = false)
@@ -3701,35 +3811,44 @@ namespace KomaComic.Windows
             Content = outer;
         }
 
-        private static Grid BuildAmbientOrbLayer()
+        private static Grid BuildAmbientOrbLayer(double offsetX = 0)
         {
             Grid g = new Grid { IsHitTestVisible = false, ClipToBounds = true };
-            // Subtle luminous ambient gradients so Liquid Glass refraction always has soft light transitions even without custom wallpaper
-            RadialGradientBrush orb1 = new RadialGradientBrush(Color.FromArgb(68, 56, 152, 255), Color.FromArgb(0, 56, 152, 255));
+            // Luminous Apple-style ambient mesh orbs aligned seamlessly across the full window width
+            RadialGradientBrush orb1 = new RadialGradientBrush(Color.FromArgb(148, 58, 158, 255), Color.FromArgb(0, 58, 158, 255));
             orb1.Freeze();
             g.Children.Add(new System.Windows.Shapes.Ellipse
             {
-                Width = 460, Height = 460, Fill = orb1,
+                Width = 520, Height = 520, Fill = orb1,
                 HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Top,
-                Margin = new Thickness(-140, -110, 0, 0)
+                Margin = new Thickness(-150 - offsetX, -120, 0, 0)
             });
 
-            RadialGradientBrush orb2 = new RadialGradientBrush(Color.FromArgb(52, 134, 108, 255), Color.FromArgb(0, 134, 108, 255));
+            RadialGradientBrush orb2 = new RadialGradientBrush(Color.FromArgb(136, 138, 110, 255), Color.FromArgb(0, 138, 110, 255));
             orb2.Freeze();
             g.Children.Add(new System.Windows.Shapes.Ellipse
             {
-                Width = 420, Height = 420, Fill = orb2,
-                HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Bottom,
-                Margin = new Thickness(-90, 0, 0, -130)
+                Width = 480, Height = 480, Fill = orb2,
+                HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(-140 - offsetX, 110, 0, 0)
             });
 
-            RadialGradientBrush orb3 = new RadialGradientBrush(Color.FromArgb(46, 56, 189, 248), Color.FromArgb(0, 56, 189, 248));
+            RadialGradientBrush orb3 = new RadialGradientBrush(Color.FromArgb(128, 34, 197, 246), Color.FromArgb(0, 34, 197, 246));
             orb3.Freeze();
             g.Children.Add(new System.Windows.Shapes.Ellipse
             {
-                Width = 520, Height = 520, Fill = orb3,
+                Width = 560, Height = 560, Fill = orb3,
                 HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Top,
-                Margin = new Thickness(0, -160, -120, 0)
+                Margin = new Thickness(0, -170, -100, 0)
+            });
+
+            RadialGradientBrush orb4 = new RadialGradientBrush(Color.FromArgb(108, 196, 132, 252), Color.FromArgb(0, 196, 132, 252));
+            orb4.Freeze();
+            g.Children.Add(new System.Windows.Shapes.Ellipse
+            {
+                Width = 520, Height = 520, Fill = orb4,
+                HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Bottom,
+                Margin = new Thickness(0, 0, -120, -150)
             });
             return g;
         }
@@ -3856,7 +3975,7 @@ namespace KomaComic.Windows
             // Zero nested VisualBrush: floating Search Bar & Unified Browse Bar sample this stage directly (depth-1).
             Grid homeBackdrop = new Grid();
             homeBackdrop.SetResourceReference(Panel.BackgroundProperty, "Brush.Bg");
-            _homeAmbientOrbLayer = BuildAmbientOrbLayer();
+            _homeAmbientOrbLayer = BuildAmbientOrbLayer(96);
             homeBackdrop.Children.Add(_homeAmbientOrbLayer);
             _homeWallpaper = new Image { Stretch = Stretch.UniformToFill, IsHitTestVisible = false };
             homeBackdrop.Children.Add(_homeWallpaper);
@@ -3961,18 +4080,41 @@ namespace KomaComic.Windows
 
             StackPanel rightBtns = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(12, 0, 0, 0) };
             Grid.SetColumn(rightBtns, 1);
-            Button btnRefresh = UiTheme.MakeButton("↻ 刷新", false, false);
-            btnRefresh.Margin = new Thickness(0, 0, 8, 0);
+            Button btnRefresh = new Button
+            {
+                Content = "↻ 刷新", FontSize = 13, FontWeight = FontWeights.SemiBold,
+                Padding = new Thickness(14, 7, 14, 7), Background = Brushes.Transparent, BorderThickness = new Thickness(0),
+                Cursor = Cursors.Hand, FocusVisualStyle = null,
+                Template = UiTheme.CreateRoundedButtonTemplate(18, "Brush.NavGlassSelected")
+            };
+            btnRefresh.SetResourceReference(Control.ForegroundProperty, "Brush.Text");
             btnRefresh.Click += delegate (object s, RoutedEventArgs e) { LoadActiveFeedAsync(1); };
-            Button btnDensity = UiTheme.MakeButton("⊞ 网格", false, false);
+            LiquidGlassSurface refreshGlass = new LiquidGlassSurface(homeBackdrop, LiquidGlassPreset.SubtlePill, 18, false, true)
+            {
+                Margin = new Thickness(0, 0, 8, 0),
+                Child = btnRefresh
+            };
+
+            Button btnDensity = new Button
+            {
+                Content = "⊞ 网格", FontSize = 13, FontWeight = FontWeights.SemiBold,
+                Padding = new Thickness(14, 7, 14, 7), Background = Brushes.Transparent, BorderThickness = new Thickness(0),
+                Cursor = Cursors.Hand, FocusVisualStyle = null,
+                Template = UiTheme.CreateRoundedButtonTemplate(18, "Brush.NavGlassSelected")
+            };
+            btnDensity.SetResourceReference(Control.ForegroundProperty, "Brush.Text");
             btnDensity.Click += delegate (object s, RoutedEventArgs e)
             {
                 _services.GridCompact = !_services.GridCompact;
                 _services.SaveState();
                 LoadActiveFeedAsync(1);
             };
-            rightBtns.Children.Add(btnRefresh);
-            rightBtns.Children.Add(btnDensity);
+            LiquidGlassSurface densityGlass = new LiquidGlassSurface(homeBackdrop, LiquidGlassPreset.SubtlePill, 18, false, true)
+            {
+                Child = btnDensity
+            };
+            rightBtns.Children.Add(refreshGlass);
+            rightBtns.Children.Add(densityGlass);
             toolbar.Children.Add(rightBtns);
             floatingHeader.Children.Add(toolbar);
 
@@ -6909,12 +7051,12 @@ namespace KomaComic.Windows
             if (_ambientOrbLayer != null)
             {
                 _ambientOrbLayer.Visibility = (_services.GlassMaterial && !hasCustomWall) ? Visibility.Visible : Visibility.Collapsed;
-                _ambientOrbLayer.Opacity = UiTheme.IsDarkActive ? 0.85 : 0.55;
+                _ambientOrbLayer.Opacity = UiTheme.IsDarkActive ? 0.88 : 0.78;
             }
             if (_homeAmbientOrbLayer != null)
             {
                 _homeAmbientOrbLayer.Visibility = (_services.GlassMaterial && !hasCustomWall) ? Visibility.Visible : Visibility.Collapsed;
-                _homeAmbientOrbLayer.Opacity = UiTheme.IsDarkActive ? 0.85 : 0.55;
+                _homeAmbientOrbLayer.Opacity = UiTheme.IsDarkActive ? 0.88 : 0.78;
             }
             if (_wallpaper != null)
             {
