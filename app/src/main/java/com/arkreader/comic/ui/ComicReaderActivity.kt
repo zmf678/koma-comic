@@ -271,13 +271,53 @@ class ComicReaderActivity : AppCompatActivity() {
 
     private fun setupOverlayControls() {
         if (app.prefs.glassMaterial) {
-            binding.bottomCapsuleCard.background = android.graphics.drawable.GradientDrawable(
-                android.graphics.drawable.GradientDrawable.Orientation.TL_BR,
-                intArrayOf(0xE41B263B.toInt(), 0xD80E1524.toInt())
-            ).apply {
-                cornerRadius = 26 * resources.displayMetrics.density
-                setStroke((resources.displayMetrics.density).toInt().coerceAtLeast(1), 0x74FFFFFF)
+            val readerBackdrop: () -> View? = {
+                if (binding.rvVertical.visibility == View.VISIBLE) binding.rvVertical else binding.vpHorizontal
             }
+            binding.bottomCapsuleCard.applyLiquidGlass(
+                backdropProvider = readerBackdrop,
+                preset = LiquidGlassPreset.READER_CAPSULE,
+                cornerRadiusDp = 26f,
+                forceDark = true,
+                elevationDp = 8f
+            )
+            binding.translationBall.applyLiquidGlass(
+                backdropProvider = readerBackdrop,
+                preset = LiquidGlassPreset.CLEAR_LENS,
+                cornerRadiusDp = 24f,
+                forceDark = true,
+                interactiveElastic = true,
+                elevationDp = 8f
+            )
+            binding.btnSpreadMatch.applyLiquidGlass(
+                backdropProvider = readerBackdrop,
+                preset = LiquidGlassPreset.SUBTLE_PILL,
+                cornerRadiusDp = 18f,
+                forceDark = true,
+                interactiveElastic = true,
+                elevationDp = 5f
+            )
+            binding.tvPageIndicator.applyLiquidGlass(
+                backdropProvider = readerBackdrop,
+                preset = LiquidGlassPreset.SUBTLE_PILL,
+                cornerRadiusDp = 14f,
+                forceDark = true,
+                elevationDp = 3f
+            )
+            binding.tvTranslationState.applyLiquidGlass(
+                backdropProvider = readerBackdrop,
+                preset = LiquidGlassPreset.SUBTLE_PILL,
+                cornerRadiusDp = 16f,
+                forceDark = true,
+                elevationDp = 5f
+            )
+            binding.readerSettingsPanel.applyLiquidGlass(
+                backdropProvider = readerBackdrop,
+                preset = LiquidGlassPreset.READER_DRAWER,
+                cornerRadiusDp = 20f,
+                forceDark = true,
+                elevationDp = 10f
+            )
         }
         binding.btnBack.setOnClickListener { finish() }
         binding.btnReaderMore.setOnClickListener { openReaderSettingsPanel() }

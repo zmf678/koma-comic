@@ -1,5 +1,5 @@
 ﻿param(
-    [string]$Version = "1.5.3",
+    [string]$Version = "1.5.4",
     [switch]$SkipArchive
 )
 
@@ -63,6 +63,97 @@ New-Item -ItemType Directory -Path $OutAppDir -Force | Out-Null
 New-Item -ItemType Directory -Path (Join-Path $OutAppDir "assets") -Force | Out-Null
 New-Item -ItemType Directory -Path (Join-Path $OutAppDir "data") -Force | Out-Null
 
+Write-Host "==> [3.5/5] 编译 DirectX HLSL 液态玻璃像素着色器 (通用 ps_2_0)..."
+$HlslPath = Join-Path $ScriptDir "LiquidGlass.hlsl"
+$ShaderOutDir = Join-Path $RepoRoot "build\windows\shaders"
+if (-not (Test-Path $ShaderOutDir)) { New-Item -ItemType Directory -Path $ShaderOutDir -Force | Out-Null }
+$Ps2Path = Join-Path $ShaderOutDir "LiquidGlass_ps2.ps"
+
+Add-Type -TypeDefinition @"
+using System;
+using System.IO;
+using System.Runtime.InteropServices;
+using System.Text;
+
+public static class HlslCompilerHelper
+{
+    [DllImport("d3dcompiler_47.dll", CallingConvention = CallingConvention.StdCall)]
+    private static extern int D3DCompile(
+        byte[] pSrcData,
+        IntPtr SrcDataSize,
+        [MarshalAs(UnmanagedType.LPStr)] string pSourceName,
+        IntPtr pDefines,
+        IntPtr pInclude,
+        [MarshalAs(UnmanagedType.LPStr)] string pEntrypoint,
+        [MarshalAs(UnmanagedType.LPStr)] string pTarget,
+        uint Flags1,
+        uint Flags2,
+        out IntPtr ppCode,
+        out IntPtr ppErrorMsgs);
+
+    [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+    private delegate IntPtr GetBufferPointerDelegate(IntPtr self);
+
+    [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+    private delegate IntPtr GetBufferSizeDelegate(IntPtr self);
+
+    [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+    private delegate uint ReleaseDelegate(IntPtr self);
+
+    public static void CompileToFile(string hlslPath, string entryPoint, string profile, string outPath)
+    {
+        byte[] src = File.ReadAllBytes(hlslPath);
+        IntPtr codePtr, errPtr;
+        int hr = D3DCompile(src, (IntPtr)src.Length, Path.GetFileName(hlslPath), IntPtr.Zero, IntPtr.Zero,
+            entryPoint, profile, 1u << 15, 0u, out codePtr, out errPtr);
+        if (hr != 0)
+        {
+            string msg = "HRESULT 0x" + hr.ToString("X8");
+            if (errPtr != IntPtr.Zero)
+            {
+                IntPtr vt = Marshal.ReadIntPtr(errPtr);
+                var getPtr = (GetBufferPointerDelegate)Marshal.GetDelegateForFunctionPointer(Marshal.ReadIntPtr(vt, IntPtr.Size * 3), typeof(GetBufferPointerDelegate));
+                var getSize = (GetBufferSizeDelegate)Marshal.GetDelegateForFunctionPointer(Marshal.ReadIntPtr(vt, IntPtr.Size * 4), typeof(GetBufferSizeDelegate));
+                var release = (ReleaseDelegate)Marshal.GetDelegateForFunctionPointer(Marshal.ReadIntPtr(vt, IntPtr.Size * 2), typeof(ReleaseDelegate));
+                int len = (int)getSize(errPtr);
+                byte[] buf = new byte[len];
+                Marshal.Copy(getPtr(errPtr), buf, 0, len);
+                msg = Encoding.UTF8.GetString(buf);
+                release(errPtr);
+            }
+            throw new InvalidOperationException("HLSL compile failed (" + entryPoint + "/" + profile + "): " + msg);
+        }
+        try
+        {
+            IntPtr vt = Marshal.ReadIntPtr(codePtr);
+            var getPtr = (GetBufferPointerDelegate)Marshal.GetDelegateForFunctionPointer(Marshal.ReadIntPtr(vt, IntPtr.Size * 3), typeof(GetBufferPointerDelegate));
+            var getSize = (GetBufferSizeDelegate)Marshal.GetDelegateForFunctionPointer(Marshal.ReadIntPtr(vt, IntPtr.Size * 4), typeof(GetBufferSizeDelegate));
+            int len = (int)getSize(codePtr);
+            byte[] bytecode = new byte[len];
+            Marshal.Copy(getPtr(codePtr), bytecode, 0, len);
+            File.WriteAllBytes(outPath, bytecode);
+        }
+        finally
+        {
+            if (codePtr != IntPtr.Zero)
+            {
+                IntPtr vt = Marshal.ReadIntPtr(codePtr);
+                var release = (ReleaseDelegate)Marshal.GetDelegateForFunctionPointer(Marshal.ReadIntPtr(vt, IntPtr.Size * 2), typeof(ReleaseDelegate));
+                release(codePtr);
+            }
+            if (errPtr != IntPtr.Zero)
+            {
+                IntPtr vt = Marshal.ReadIntPtr(errPtr);
+                var release = (ReleaseDelegate)Marshal.GetDelegateForFunctionPointer(Marshal.ReadIntPtr(vt, IntPtr.Size * 2), typeof(ReleaseDelegate));
+                release(errPtr);
+            }
+        }
+    }
+}
+"@
+
+[HlslCompilerHelper]::CompileToFile($HlslPath, "main_ps2", "ps_2_0", $Ps2Path)
+
 Write-Host "==> [4/5] 编译原生 WPF 高清版 KomaComic.exe (Per-Monitor V2 DPI)..."
 $ExePath = Join-Path $OutAppDir "KomaComic.exe"
 $ProgramCs = Join-Path $ScriptDir "Program.cs"
@@ -75,6 +166,7 @@ $cscArgs = @(
     "/utf8output",
     "/win32icon:$IconPath",
     "/win32manifest:$ManifestPath",
+    "/resource:$Ps2Path,LiquidGlass_ps2.ps",
     "/out:$ExePath",
     "/r:System.dll",
     "/r:System.Core.dll",
@@ -92,6 +184,7 @@ $cscArgs = @(
     "/r:$($CoreDll.FullName)",
     "/r:$($WinFormsDll.FullName)",
     $ProgramCs,
+    (Join-Path $ScriptDir "LiquidGlass.cs"),
     (Join-Path $ScriptDir "DirectMangaTranslation.cs"),
     (Join-Path $ScriptDir "LightBalloonFinder.cs"),
     (Join-Path $ScriptDir "TranslationRequestQueue.cs"),

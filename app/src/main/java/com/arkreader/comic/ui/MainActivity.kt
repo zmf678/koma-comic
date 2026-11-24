@@ -209,7 +209,8 @@ class MainActivity : AppCompatActivity() {
         syncNavigationSelection(currentNavMode)
         applyGridLayoutManager()
         applyLibraryMaterial(binding.root, binding.libraryWallpaper, binding.panelComics)
-        binding.navRail?.let { rail -> applyFloatingDock(rail, binding.btnRailSettings) }
+        binding.navRail?.let { rail -> applyFloatingDock(rail, binding.btnRailSettings, binding.libraryWallpaper) }
+        applyMainGlassChrome(binding.libraryWallpaper, binding.searchPill, binding.bottomNav, binding.profileButton)
         relockQuickShelvesIfNeeded()
         applyNavModePanels(currentNavMode)
         when (currentNavMode) {
@@ -241,6 +242,7 @@ class MainActivity : AppCompatActivity() {
         binding.navRail?.setItemActiveIndicatorEnabled(!settings)
         if (!settings) binding.navRail?.menu?.findItem(selected)?.isChecked = true
         binding.btnRailSettings?.isSelected = settings
+        (binding.btnRailSettings?.background as? LiquidGlassDrawable)?.setSelectedGlow(settings)
         binding.bottomNav?.menu?.findItem(selected)?.isChecked = true
     }
 

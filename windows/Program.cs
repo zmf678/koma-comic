@@ -91,7 +91,7 @@ namespace KomaComic.Windows
 
     internal static class Program
     {
-        internal const string AppVersion = "1.5.3";
+        internal const string AppVersion = "1.5.4";
         internal const string GithubRepoSlug = "zmf678/koma-comic";
 
         [STAThread]
@@ -3409,13 +3409,17 @@ namespace KomaComic.Windows
         private TextBox _searchBox;
         private Button _btnSearch;
         private StackPanel _chipsPanel;
-        private Border _browseBar;
+        private LiquidGlassSurface _browseBar;
         private TextBlock _sourceHeading;
         private StackPanel _channelTabs;
         private Button _sourceActionsButton;
         private Grid _viewProfile;
         private StackPanel _profileBody;
         private Button _profileDockButton;
+        private Grid _backdropStage;
+        private Grid _ambientOrbLayer;
+        private Grid _homeAmbientOrbLayer;
+        private Image _homeWallpaper;
         private DispatcherTimer _readingTimer;
         private readonly Stopwatch _readingStopwatch = new Stopwatch();
         private DateTimeOffset _readingStartedAt;
@@ -3531,18 +3535,18 @@ namespace KomaComic.Windows
         private Button _btnSpreadPairShift;
         private Button _btnDrawerSpreadEven;
         private Button _btnDrawerSpreadOdd;
-        private Border _readerBottomCapsule;
+        private LiquidGlassSurface _readerBottomCapsule;
         private Slider _readerSeekSlider;
         private TextBlock _readerSeekText;
-        private Border _readerPageBadge;
+        private LiquidGlassSurface _readerPageBadge;
         private TextBlock _readerPageBadgeText;
-        private Border _readerLoadingBox;
+        private LiquidGlassSurface _readerLoadingBox;
         private TextBlock _readerLoadMessage;
         private Button _readerRetryButton;
         private Action _readerRetry;
         private int _readerChapterRequest;
         private int _readerRenderRequest;
-        private Border _readerDrawer;
+        private LiquidGlassSurface _readerDrawer;
         private Slider _drawerBrightnessSlider;
         private TextBlock _drawerBrightnessText;
         private Button _btnModeLtr, _btnModeRtl, _btnModeScroll;
@@ -3579,7 +3583,7 @@ namespace KomaComic.Windows
         private WindowStyle _prevWinStyle = WindowStyle.SingleBorderWindow;
 
         // Toast
-        private Border _toastBorder;
+        private LiquidGlassSurface _toastBorder;
         private TextBlock _toastText;
         private System.Windows.Threading.DispatcherTimer _toastTimer;
 
@@ -3641,21 +3645,23 @@ namespace KomaComic.Windows
         private void BuildRootLayout()
         {
             Grid outer = new Grid();
-            _wallpaper = new Image { Stretch = Stretch.UniformToFill, IsHitTestVisible = false };
-            outer.Children.Add(_wallpaper);
 
-            // Subtle 1x1 hidden WebView2 container inside outer root
+            // Stage 1: Backdrop Layer (Background + Ambient Luminous Orbs + Wallpaper)
+            // Sampled directly (depth-1, zero nested VisualBrush) by Floating Left Dock & Toast.
+            _backdropStage = new Grid { IsHitTestVisible = false };
+            _backdropStage.SetResourceReference(Panel.BackgroundProperty, "Brush.Bg");
+
+            _ambientOrbLayer = BuildAmbientOrbLayer();
+            _backdropStage.Children.Add(_ambientOrbLayer);
+
+            _wallpaper = new Image { Stretch = Stretch.UniformToFill, IsHitTestVisible = false };
+            _backdropStage.Children.Add(_wallpaper);
+
+            outer.Children.Add(_backdropStage);
             outer.Children.Add(_jsRunner.CreateHiddenHost());
 
-            // Main Shell: Left Rail + Right Content
-            Grid shell = new Grid();
-            shell.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(96) });
-            shell.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-
-            shell.Children.Add(BuildLeftRail());
-
-            Grid contentHost = new Grid();
-            Grid.SetColumn(contentHost, 1);
+            // Stage 2: Right Content Host
+            Grid contentHost = new Grid { Margin = new Thickness(96, 0, 0, 0) };
             _viewHome = BuildHomeView();
             _viewCollections = BuildCollectionsView();
             _viewWarehouse = BuildWarehouseView();
@@ -3667,33 +3673,65 @@ namespace KomaComic.Windows
             contentHost.Children.Add(_viewWarehouse);
             contentHost.Children.Add(_viewSettings);
             contentHost.Children.Add(_viewProfile);
-            shell.Children.Add(contentHost);
+            outer.Children.Add(contentHost);
 
-            outer.Children.Add(shell);
+            // Stage 3: Floating Left Rail Overlay (samples _backdropStage directly — depth-1 GPU Liquid Glass)
+            Grid railOverlay = new Grid { HorizontalAlignment = HorizontalAlignment.Left, Width = 96 };
+            railOverlay.Children.Add(BuildLeftRail());
+            outer.Children.Add(railOverlay);
 
-            // Reader Overlay
+            // Stage 4: Reader Overlay
             _readerOverlay = BuildReaderOverlay();
             _readerOverlay.Visibility = Visibility.Collapsed;
             outer.Children.Add(_readerOverlay);
 
-            // Toast Notification
-            _toastBorder = new Border
+            // Stage 5: Liquid Glass Toast Notification
+            _toastText = new TextBlock { Foreground = Brushes.White, FontSize = 13 };
+            _toastBorder = new LiquidGlassSurface(_backdropStage, LiquidGlassPreset.SubtlePill, 14, true, false)
             {
-                CornerRadius = new CornerRadius(12),
-                Padding = new Thickness(16, 10, 16, 10),
-                Background = new SolidColorBrush(Color.FromArgb(238, 22, 28, 38)),
-                BorderBrush = new SolidColorBrush(Color.FromArgb(40, 255, 255, 255)),
-                BorderThickness = new Thickness(1),
+                ContentPadding = new Thickness(16, 10, 16, 10),
                 HorizontalAlignment = HorizontalAlignment.Right,
                 VerticalAlignment = VerticalAlignment.Bottom,
                 Margin = new Thickness(0, 0, 26, 26),
-                Visibility = Visibility.Collapsed
+                Visibility = Visibility.Collapsed,
+                Child = _toastText
             };
-            _toastText = new TextBlock { Foreground = Brushes.White, FontSize = 13 };
-            _toastBorder.Child = _toastText;
             outer.Children.Add(_toastBorder);
 
             Content = outer;
+        }
+
+        private static Grid BuildAmbientOrbLayer()
+        {
+            Grid g = new Grid { IsHitTestVisible = false, ClipToBounds = true };
+            // Subtle luminous ambient gradients so Liquid Glass refraction always has soft light transitions even without custom wallpaper
+            RadialGradientBrush orb1 = new RadialGradientBrush(Color.FromArgb(68, 56, 152, 255), Color.FromArgb(0, 56, 152, 255));
+            orb1.Freeze();
+            g.Children.Add(new System.Windows.Shapes.Ellipse
+            {
+                Width = 460, Height = 460, Fill = orb1,
+                HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Top,
+                Margin = new Thickness(-140, -110, 0, 0)
+            });
+
+            RadialGradientBrush orb2 = new RadialGradientBrush(Color.FromArgb(52, 134, 108, 255), Color.FromArgb(0, 134, 108, 255));
+            orb2.Freeze();
+            g.Children.Add(new System.Windows.Shapes.Ellipse
+            {
+                Width = 420, Height = 420, Fill = orb2,
+                HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Bottom,
+                Margin = new Thickness(-90, 0, 0, -130)
+            });
+
+            RadialGradientBrush orb3 = new RadialGradientBrush(Color.FromArgb(46, 56, 189, 248), Color.FromArgb(0, 56, 189, 248));
+            orb3.Freeze();
+            g.Children.Add(new System.Windows.Shapes.Ellipse
+            {
+                Width = 520, Height = 520, Fill = orb3,
+                HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Top,
+                Margin = new Thickness(0, -160, -120, 0)
+            });
+            return g;
         }
 
         private UIElement BuildLeftRail()
@@ -3701,23 +3739,25 @@ namespace KomaComic.Windows
             Grid rail = new Grid { Margin = new Thickness(8, 14, 8, 12) };
             _profileDockButton = new Button
             {
-                Width = 48, Height = 48, VerticalAlignment = VerticalAlignment.Top, HorizontalAlignment = HorizontalAlignment.Center,
-                BorderThickness = new Thickness(1), Padding = new Thickness(0), ToolTip = "个人", Cursor = Cursors.Hand,
-                FocusVisualStyle = null,
+                Width = 48, Height = 48,
+                Background = Brushes.Transparent, BorderThickness = new Thickness(0), Padding = new Thickness(0),
+                ToolTip = "个人", Cursor = Cursors.Hand, FocusVisualStyle = null,
                 Template = UiTheme.CreateRoundedButtonTemplate(24, "Brush.NavGlassSelected")
             };
-            _profileDockButton.SetResourceReference(Control.BackgroundProperty, "Brush.NavGlass");
-            _profileDockButton.SetResourceReference(Control.BorderBrushProperty, "Brush.NavGlassRim");
-            _profileDockButton.Effect = UiTheme.CreateGlassShadow(UiTheme.IsDarkActive, true);
             System.Windows.Automation.AutomationProperties.SetName(_profileDockButton, "打开个人页");
             _profileDockButton.Content = BuildAvatar(44);
             _profileDockButton.Click += delegate { SwitchMainTab(5); };
-            rail.Children.Add(_profileDockButton);
+            LiquidGlassSurface profilePlate = MakeDockPlate(_profileDockButton, 24, true);
+            profilePlate.Width = 50;
+            profilePlate.Height = 50;
+            profilePlate.VerticalAlignment = VerticalAlignment.Top;
+            profilePlate.HorizontalAlignment = HorizontalAlignment.Center;
+            rail.Children.Add(profilePlate);
 
             StackPanel dock = new StackPanel { VerticalAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.Center };
             StackPanel destinations = new StackPanel();
-            Border capsule = MakeDockPlate(destinations, 34);
-            capsule.Padding = new Thickness(6, 7, 6, 7);
+            LiquidGlassSurface capsule = MakeDockPlate(destinations, 34, false);
+            capsule.ContentPadding = new Thickness(6, 7, 6, 7);
             dock.Children.Add(capsule);
 
             string[] icons = new string[] { "\uE80F", "\uE8A5", "\uEB51", "\uE713" };
@@ -3750,7 +3790,7 @@ namespace KomaComic.Windows
                 _railButtons[index] = button;
                 if (settings)
                 {
-                    Border plate = MakeDockPlate(button, 28);
+                    LiquidGlassSurface plate = MakeDockPlate(button, 28, true);
                     plate.HorizontalAlignment = HorizontalAlignment.Center;
                     plate.Margin = new Thickness(0, 12, 0, 0);
                     dock.Children.Add(plate);
@@ -3761,29 +3801,12 @@ namespace KomaComic.Windows
             return rail;
         }
 
-        private static Border MakeDockPlate(UIElement content, double radius)
+        private LiquidGlassSurface MakeDockPlate(UIElement content, double radius, bool elastic)
         {
-            Grid layers = new Grid();
-            Border sheen = new Border
+            return new LiquidGlassSurface(_backdropStage, LiquidGlassPreset.FloatingDock, radius, false, elastic)
             {
-                CornerRadius = new CornerRadius(radius),
-                IsHitTestVisible = false
+                Child = content
             };
-            sheen.SetResourceReference(Border.BackgroundProperty, "Brush.GlassSheen");
-            layers.Children.Add(sheen);
-            layers.Children.Add(content);
-
-            Border plate = new Border
-            {
-                Child = layers,
-                CornerRadius = new CornerRadius(radius),
-                BorderThickness = new Thickness(1),
-                ClipToBounds = false
-            };
-            plate.SetResourceReference(Border.BackgroundProperty, "Brush.NavGlass");
-            plate.SetResourceReference(Border.BorderBrushProperty, "Brush.NavGlassRim");
-            plate.Effect = UiTheme.CreateGlassShadow(UiTheme.IsDarkActive, false);
-            return plate;
         }
 
         private void SwitchMainTab(int idx)
@@ -3828,24 +3851,77 @@ namespace KomaComic.Windows
         private Grid BuildHomeView()
         {
             Grid g = new Grid();
-            g.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); // Search toolbar
-            g.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); // Unified Source + Channel + Category Glass Bar
-            g.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) }); // Feed
+
+            // Layer 0: Full-bleed Home Backdrop Stage (direct background + shared frozen wallpaper + live scrolling comic feed)
+            // Zero nested VisualBrush: floating Search Bar & Unified Browse Bar sample this stage directly (depth-1).
+            Grid homeBackdrop = new Grid();
+            homeBackdrop.SetResourceReference(Panel.BackgroundProperty, "Brush.Bg");
+            _homeAmbientOrbLayer = BuildAmbientOrbLayer();
+            homeBackdrop.Children.Add(_homeAmbientOrbLayer);
+            _homeWallpaper = new Image { Stretch = Stretch.UniformToFill, IsHitTestVisible = false };
+            homeBackdrop.Children.Add(_homeWallpaper);
+
+            _homeFeedScroll = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Padding = new Thickness(20, 6, 20, 24) };
+            StackPanel feedStack = new StackPanel { Margin = new Thickness(0, 126, 0, 0) };
+
+            _statusBanner = new TextBlock
+            {
+                FontSize = 13,
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 0, 0, 10),
+                Visibility = Visibility.Collapsed
+            };
+            _statusBanner.SetResourceReference(TextBlock.ForegroundProperty, "Brush.Accent");
+            feedStack.Children.Add(_statusBanner);
+            _retryFeedButton = UiTheme.MakeButton("重试", false, false);
+            _retryFeedButton.HorizontalAlignment = HorizontalAlignment.Left;
+            _retryFeedButton.Visibility = Visibility.Collapsed;
+            _retryFeedButton.Click += delegate { LoadActiveFeedAsync(_currentPage); };
+            feedStack.Children.Add(_retryFeedButton);
+
+            _comicGrid = new StackPanel();
+            feedStack.Children.Add(_comicGrid);
+
+            _emptyFeedText = new TextBlock
+            {
+                TextWrapping = TextWrapping.Wrap,
+                FontSize = 14,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                Margin = new Thickness(0, 64, 0, 0),
+                Visibility = Visibility.Collapsed
+            };
+            _emptyFeedText.SetResourceReference(TextBlock.ForegroundProperty, "Brush.TextMuted");
+            feedStack.Children.Add(_emptyFeedText);
+
+            _paginationBar = new Grid { Margin = new Thickness(0, 14, 0, 8), HorizontalAlignment = HorizontalAlignment.Center, Visibility = Visibility.Collapsed };
+            ProgressBar more = new ProgressBar { Width = 96, Height = 3, IsIndeterminate = true };
+            _paginationBar.Children.Add(more);
+            feedStack.Children.Add(_paginationBar);
+            _homeFeedScroll.ScrollChanged += delegate { QueueNextSourcePage(); };
+
+            _homeFeedScroll.Content = feedStack;
+            homeBackdrop.Children.Add(_homeFeedScroll);
+            g.Children.Add(homeBackdrop);
+
+            // Layer 1: Floating Liquid Glass Header (Search Bar + Unified Browse Bar)
+            StackPanel floatingHeader = new StackPanel { VerticalAlignment = VerticalAlignment.Top };
+            floatingHeader.SizeChanged += delegate
+            {
+                if (floatingHeader.ActualHeight > 20)
+                {
+                    feedStack.Margin = new Thickness(0, floatingHeader.ActualHeight + 2, 0, 0);
+                }
+            };
 
             // Row 0: Search Toolbar
             Grid toolbar = new Grid { Margin = new Thickness(20, 14, 20, 10) };
             toolbar.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             toolbar.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
-            Border searchBorder = new Border
+            LiquidGlassSurface searchBorder = new LiquidGlassSurface(homeBackdrop, LiquidGlassPreset.FrostedBar, 22, false, false)
             {
-                CornerRadius = new CornerRadius(22),
-                BorderThickness = new Thickness(1),
-                Padding = new Thickness(14, 4, 6, 4)
+                ContentPadding = new Thickness(14, 4, 6, 4)
             };
-            searchBorder.SetResourceReference(Border.BackgroundProperty, "Brush.BgElevated");
-            searchBorder.SetResourceReference(Border.BorderBrushProperty, "Brush.Border");
-            searchBorder.Effect = UiTheme.CreateGlassShadow(UiTheme.IsDarkActive, true);
 
             DockPanel searchDock = new DockPanel();
             _btnSearch = UiTheme.MakeButton("搜索", true, false);
@@ -3898,25 +3974,14 @@ namespace KomaComic.Windows
             rightBtns.Children.Add(btnRefresh);
             rightBtns.Children.Add(btnDensity);
             toolbar.Children.Add(rightBtns);
-            g.Children.Add(toolbar);
+            floatingHeader.Children.Add(toolbar);
 
             // Row 1: Unified Single-Row Liquid Glass Source + Channel + Category Bar
-            _browseBar = new Border
+            _browseBar = new LiquidGlassSurface(homeBackdrop, LiquidGlassPreset.FrostedBar, 20, false, false)
             {
-                CornerRadius = new CornerRadius(20),
-                BorderThickness = new Thickness(1),
-                Padding = new Thickness(10, 6, 10, 6),
+                ContentPadding = new Thickness(10, 6, 10, 6),
                 Margin = new Thickness(20, 0, 20, 10)
             };
-            _browseBar.SetResourceReference(Border.BackgroundProperty, "Brush.BgElevated");
-            _browseBar.SetResourceReference(Border.BorderBrushProperty, "Brush.Border");
-            _browseBar.Effect = UiTheme.CreateGlassShadow(UiTheme.IsDarkActive, true);
-            Grid.SetRow(_browseBar, 1);
-
-            Grid browseLayers = new Grid();
-            Border barSheen = new Border { CornerRadius = new CornerRadius(20), IsHitTestVisible = false };
-            barSheen.SetResourceReference(Border.BackgroundProperty, "Brush.GlassSheen");
-            browseLayers.Children.Add(barSheen);
 
             DockPanel unifiedRow = new DockPanel { LastChildFill = true };
 
@@ -3948,52 +4013,10 @@ namespace KomaComic.Windows
             };
             unifiedRow.Children.Add(channelScroll);
 
-            browseLayers.Children.Add(unifiedRow);
-            _browseBar.Child = browseLayers;
-            g.Children.Add(_browseBar);
+            _browseBar.Child = unifiedRow;
+            floatingHeader.Children.Add(_browseBar);
+            g.Children.Add(floatingHeader);
 
-            // Row 2: Comic Feed ScrollViewer
-            _homeFeedScroll = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Padding = new Thickness(20, 6, 20, 24) };
-            Grid.SetRow(_homeFeedScroll, 2);
-            StackPanel feedStack = new StackPanel();
-
-            _statusBanner = new TextBlock
-            {
-                FontSize = 13,
-                TextWrapping = TextWrapping.Wrap,
-                Margin = new Thickness(0, 0, 0, 10),
-                Visibility = Visibility.Collapsed
-            };
-            _statusBanner.SetResourceReference(TextBlock.ForegroundProperty, "Brush.Accent");
-            feedStack.Children.Add(_statusBanner);
-            _retryFeedButton = UiTheme.MakeButton("重试", false, false);
-            _retryFeedButton.HorizontalAlignment = HorizontalAlignment.Left;
-            _retryFeedButton.Visibility = Visibility.Collapsed;
-            _retryFeedButton.Click += delegate { LoadActiveFeedAsync(_currentPage); };
-            feedStack.Children.Add(_retryFeedButton);
-
-            _comicGrid = new StackPanel();
-            feedStack.Children.Add(_comicGrid);
-
-            _emptyFeedText = new TextBlock
-            {
-                TextWrapping = TextWrapping.Wrap,
-                FontSize = 14,
-                HorizontalAlignment = HorizontalAlignment.Center,
-                Margin = new Thickness(0, 64, 0, 0),
-                Visibility = Visibility.Collapsed
-            };
-            _emptyFeedText.SetResourceReference(TextBlock.ForegroundProperty, "Brush.TextMuted");
-            feedStack.Children.Add(_emptyFeedText);
-
-            _paginationBar = new Grid { Margin = new Thickness(0, 14, 0, 8), HorizontalAlignment = HorizontalAlignment.Center, Visibility = Visibility.Collapsed };
-            ProgressBar more = new ProgressBar { Width = 96, Height = 3, IsIndeterminate = true };
-            _paginationBar.Children.Add(more);
-            feedStack.Children.Add(_paginationBar);
-            _homeFeedScroll.ScrollChanged += delegate { QueueNextSourcePage(); };
-
-            _homeFeedScroll.Content = feedStack;
-            g.Children.Add(_homeFeedScroll);
             return g;
         }
 
@@ -6882,24 +6905,49 @@ namespace KomaComic.Windows
             UiTheme.ApplyTheme(Application.Current, _services.ThemeMode, _services.GlassMaterial);
             IntPtr hwnd = new WindowInteropHelper(this).Handle;
             if (hwnd != IntPtr.Zero) NativeMethods.ApplyDarkTitleBar(hwnd, UiTheme.IsDarkActive);
-            if (_wallpaper == null) return;
-            _wallpaper.Source = null;
-            _wallpaper.Effect = null;
-            if (!_services.WallpaperEnabled || !File.Exists(_services.WallpaperPath)) return;
-            try
+            bool hasCustomWall = _services.WallpaperEnabled && File.Exists(_services.WallpaperPath);
+            if (_ambientOrbLayer != null)
             {
-                BitmapImage source = new BitmapImage();
-                source.BeginInit();
-                source.CacheOption = BitmapCacheOption.OnLoad;
-                source.UriSource = new Uri(_services.WallpaperPath);
-                source.CreateOptions = BitmapCreateOptions.IgnoreImageCache;
-                source.EndInit();
-                source.Freeze();
-                _wallpaper.Source = source;
-                _wallpaper.Opacity = UiTheme.IsDarkActive ? 0.26 : 0.32;
-                if (_services.GlassMaterial) _wallpaper.Effect = new System.Windows.Media.Effects.BlurEffect { Radius = 22 };
+                _ambientOrbLayer.Visibility = (_services.GlassMaterial && !hasCustomWall) ? Visibility.Visible : Visibility.Collapsed;
+                _ambientOrbLayer.Opacity = UiTheme.IsDarkActive ? 0.85 : 0.55;
             }
-            catch (Exception ex) { ShowToast("无法读取壁纸：" + ex.Message); }
+            if (_homeAmbientOrbLayer != null)
+            {
+                _homeAmbientOrbLayer.Visibility = (_services.GlassMaterial && !hasCustomWall) ? Visibility.Visible : Visibility.Collapsed;
+                _homeAmbientOrbLayer.Opacity = UiTheme.IsDarkActive ? 0.85 : 0.55;
+            }
+            if (_wallpaper != null)
+            {
+                _wallpaper.Source = null;
+                _wallpaper.Effect = null;
+                if (_homeWallpaper != null) { _homeWallpaper.Source = null; _homeWallpaper.Effect = null; }
+                if (hasCustomWall)
+                {
+                    try
+                    {
+                        BitmapImage source = new BitmapImage();
+                        source.BeginInit();
+                        source.CacheOption = BitmapCacheOption.OnLoad;
+                        source.UriSource = new Uri(_services.WallpaperPath);
+                        source.CreateOptions = BitmapCreateOptions.IgnoreImageCache;
+                        source.EndInit();
+                        source.Freeze();
+                        double op = UiTheme.IsDarkActive ? 0.34 : 0.42;
+                        _wallpaper.Source = source;
+                        _wallpaper.Opacity = op;
+                        // Keep gentle softness so underlying wallpaper details still refract visibly through Liquid Glass rims
+                        if (_services.GlassMaterial) _wallpaper.Effect = new System.Windows.Media.Effects.BlurEffect { Radius = 10 };
+                        if (_homeWallpaper != null)
+                        {
+                            _homeWallpaper.Source = source;
+                            _homeWallpaper.Opacity = op;
+                            if (_services.GlassMaterial) _homeWallpaper.Effect = new System.Windows.Media.Effects.BlurEffect { Radius = 10 };
+                        }
+                    }
+                    catch (Exception ex) { ShowToast("无法读取壁纸：" + ex.Message); }
+                }
+            }
+            LiquidGlassRegistry.RefreshAll(UiTheme.IsDarkActive, _services.GlassMaterial);
         }
 
         private void ChooseWallpaper()
@@ -7202,7 +7250,7 @@ namespace KomaComic.Windows
             _readerGhostTransformGroup.Children.Add(_readerGhostAnimScale);
             _readerGhostTransformGroup.Children.Add(_readerGhostSlideTransform);
 
-            _readerViewport = new Grid { Background = Brushes.Transparent, ClipToBounds = true };
+            _readerViewport = new Grid { Background = new SolidColorBrush(Color.FromRgb(7, 9, 13)), ClipToBounds = true };
 
             // Outgoing Ghost Layer (for zero-allocation smooth page-turn transitions)
             _readerGhostGrid = new Grid
@@ -7351,17 +7399,6 @@ namespace KomaComic.Windows
             overlay.Children.Add(_readerTranslationBall);
 
             // Loading Box
-            _readerLoadingBox = new Border
-            {
-                CornerRadius = new CornerRadius(16),
-                Background = new SolidColorBrush(Color.FromArgb(228, 18, 24, 36)),
-                BorderBrush = new SolidColorBrush(Color.FromArgb(65, 255, 255, 255)),
-                BorderThickness = new Thickness(1),
-                Padding = new Thickness(20, 13, 20, 13),
-                HorizontalAlignment = HorizontalAlignment.Center,
-                VerticalAlignment = VerticalAlignment.Center,
-                Visibility = Visibility.Collapsed
-            };
             StackPanel loading = new StackPanel();
             _readerLoadMessage = new TextBlock { Text = "正在加载章节…", Foreground = Brushes.White, FontSize = 13.5, TextWrapping = TextWrapping.Wrap, MaxWidth = 420 };
             _readerRetryButton = UiTheme.MakeButton("重试", true, false);
@@ -7370,24 +7407,27 @@ namespace KomaComic.Windows
             _readerRetryButton.Click += delegate { if (_readerRetry != null) _readerRetry(); };
             loading.Children.Add(_readerLoadMessage);
             loading.Children.Add(_readerRetryButton);
-            _readerLoadingBox.Child = loading;
+            _readerLoadingBox = new LiquidGlassSurface(_readerViewport, LiquidGlassPreset.SubtlePill, 16, true, false)
+            {
+                ContentPadding = new Thickness(20, 13, 20, 13),
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center,
+                Visibility = Visibility.Collapsed,
+                Child = loading
+            };
             overlay.Children.Add(_readerLoadingBox);
 
             // Corner Page Badge
-            _readerPageBadge = new Border
+            _readerPageBadgeText = new TextBlock { Foreground = new SolidColorBrush(Color.FromRgb(225, 234, 248)), FontSize = 12 };
+            _readerPageBadge = new LiquidGlassSurface(_readerViewport, LiquidGlassPreset.SubtlePill, 14, true, false)
             {
-                CornerRadius = new CornerRadius(99),
-                Background = new SolidColorBrush(Color.FromArgb(175, 14, 19, 29)),
-                BorderBrush = new SolidColorBrush(Color.FromArgb(46, 255, 255, 255)),
-                BorderThickness = new Thickness(1),
-                Padding = new Thickness(12, 4, 12, 4),
+                ContentPadding = new Thickness(12, 4, 12, 4),
                 HorizontalAlignment = HorizontalAlignment.Right,
                 VerticalAlignment = VerticalAlignment.Bottom,
                 Margin = new Thickness(0, 0, 18, 14),
-                IsHitTestVisible = false
+                IsHitTestVisible = false,
+                Child = _readerPageBadgeText
             };
-            _readerPageBadgeText = new TextBlock { Foreground = new SolidColorBrush(Color.FromRgb(215, 224, 238)), FontSize = 12 };
-            _readerPageBadge.Child = _readerPageBadgeText;
             overlay.Children.Add(_readerPageBadge);
 
             // Top Chrome Bar (slides down smoothly)
@@ -7447,39 +7487,17 @@ namespace KomaComic.Windows
 
             // Floating Liquid Glass Capsule Bottom Menu (slides smoothly from bottom)
             _readerBottomTranslate = new TranslateTransform(0, 96);
-            LinearGradientBrush hudGlassBg = new LinearGradientBrush { StartPoint = new Point(0, 0), EndPoint = new Point(1, 1) };
-            hudGlassBg.GradientStops.Add(new GradientStop(Color.FromArgb(228, 24, 33, 50), 0.0));
-            hudGlassBg.GradientStops.Add(new GradientStop(Color.FromArgb(218, 13, 18, 29), 1.0));
-            hudGlassBg.Freeze();
-
-            LinearGradientBrush hudGlassRim = new LinearGradientBrush { StartPoint = new Point(0, 0), EndPoint = new Point(1, 1) };
-            hudGlassRim.GradientStops.Add(new GradientStop(Color.FromArgb(115, 255, 255, 255), 0.0));
-            hudGlassRim.GradientStops.Add(new GradientStop(Color.FromArgb(30, 255, 255, 255), 0.45));
-            hudGlassRim.GradientStops.Add(new GradientStop(Color.FromArgb(72, 125, 196, 255), 1.0));
-            hudGlassRim.Freeze();
-
-            LinearGradientBrush hudSheen = new LinearGradientBrush { StartPoint = new Point(0.5, 0), EndPoint = new Point(0.5, 1) };
-            hudSheen.GradientStops.Add(new GradientStop(Color.FromArgb(46, 255, 255, 255), 0.0));
-            hudSheen.GradientStops.Add(new GradientStop(Color.FromArgb(0, 255, 255, 255), 0.55));
-            hudSheen.Freeze();
-
-            _readerBottomCapsule = new Border
+            _readerBottomCapsule = new LiquidGlassSurface(_readerViewport, LiquidGlassPreset.ReaderCapsule, 28, true, false)
             {
                 Width = 600,
                 VerticalAlignment = VerticalAlignment.Bottom,
                 HorizontalAlignment = HorizontalAlignment.Center,
                 Margin = new Thickness(0, 0, 0, 22),
-                CornerRadius = new CornerRadius(28),
-                Background = hudGlassBg,
-                BorderBrush = hudGlassRim,
-                BorderThickness = new Thickness(1),
                 RenderTransform = _readerBottomTranslate,
                 Opacity = 0,
-                Visibility = Visibility.Collapsed,
-                Effect = new DropShadowEffect { Color = Colors.Black, BlurRadius = 30, ShadowDepth = 8, Direction = 270, Opacity = 0.52 }
+                Visibility = Visibility.Collapsed
             };
             Grid hudLayers = new Grid();
-            hudLayers.Children.Add(new Border { CornerRadius = new CornerRadius(28), Background = hudSheen, IsHitTestVisible = false });
 
             StackPanel capStack = new StackPanel { Margin = new Thickness(20, 12, 20, 10) };
             Grid progGrid = new Grid();
@@ -7614,21 +7632,13 @@ namespace KomaComic.Windows
             }
         }
 
-        private Border BuildReaderSettingsDrawer()
+        private LiquidGlassSurface BuildReaderSettingsDrawer()
         {
-            LinearGradientBrush drawerBg = new LinearGradientBrush { StartPoint = new Point(0, 0), EndPoint = new Point(1, 1) };
-            drawerBg.GradientStops.Add(new GradientStop(Color.FromArgb(242, 19, 27, 42), 0.0));
-            drawerBg.GradientStops.Add(new GradientStop(Color.FromArgb(242, 12, 17, 28), 1.0));
-            drawerBg.Freeze();
-
-            Border drawer = new Border
+            LiquidGlassSurface drawer = new LiquidGlassSurface(_readerViewport, LiquidGlassPreset.ReaderDrawer, 22, true, false)
             {
                 Width = 356,
                 HorizontalAlignment = HorizontalAlignment.Right,
-                Background = drawerBg,
-                BorderBrush = new SolidColorBrush(Color.FromArgb(56, 255, 255, 255)),
-                BorderThickness = new Thickness(1, 0, 0, 0),
-                Effect = new DropShadowEffect { Color = Colors.Black, BlurRadius = 28, ShadowDepth = 6, Direction = 180, Opacity = 0.52 }
+                Margin = new Thickness(0, 14, 14, 14)
             };
 
             DockPanel dp = new DockPanel();

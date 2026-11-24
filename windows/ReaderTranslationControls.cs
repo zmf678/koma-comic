@@ -16,7 +16,7 @@ namespace KomaComic.Windows
 {
     internal sealed partial class KomaMainWindow
     {
-        private Button _readerTranslationBall;
+        private LiquidGlassSurface _readerTranslationBall;
         private readonly Dictionary<int, ReaderTranslationWork> _readerTranslationWork = new Dictionary<int, ReaderTranslationWork>();
         private int _translationVisibleFirst = -1;
         private int _translationVisibleLast = -1;
@@ -36,41 +36,45 @@ namespace KomaComic.Windows
             public Task<ReaderTranslationResult> Task;
         }
 
-        private Button MakeTranslationBall()
+        private LiquidGlassSurface MakeTranslationBall()
         {
-            var glass = new LinearGradientBrush { StartPoint = new Point(0.12, 0), EndPoint = new Point(0.8, 1) };
-            glass.GradientStops.Add(new GradientStop(Color.FromArgb(246, 114, 151, 191), 0));
-            glass.GradientStops.Add(new GradientStop(Color.FromArgb(239, 52, 76, 111), 0.5));
-            glass.GradientStops.Add(new GradientStop(Color.FromArgb(240, 22, 34, 54), 1));
-            var ball = new Button
+            var ballBtn = new Button
             {
-                Content = "译", Width = 48, Height = 48, Margin = new Thickness(0, 0, 16, 0),
-                HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Center,
+                Content = "译", Width = 50, Height = 50,
+                Background = Brushes.Transparent, BorderThickness = new Thickness(0),
                 Foreground = Brushes.White, FontSize = 19, FontWeight = FontWeights.SemiBold,
                 Cursor = System.Windows.Input.Cursors.Hand, FocusVisualStyle = null,
-                ToolTip = "翻译菜单", Visibility = Visibility.Collapsed
+                ToolTip = "翻译菜单"
             };
-            AutomationProperties.SetName(ball, "翻译菜单");
+            AutomationProperties.SetName(ballBtn, "翻译菜单");
             var surface = new FrameworkElementFactory(typeof(Border));
             surface.Name = "Glass";
-            surface.SetValue(Border.BackgroundProperty, glass);
-            surface.SetValue(Border.BorderBrushProperty, new SolidColorBrush(Color.FromArgb(219, 200, 229, 255)));
-            surface.SetValue(Border.BorderThicknessProperty, new Thickness(1));
-            surface.SetValue(Border.CornerRadiusProperty, new CornerRadius(24));
-            surface.SetValue(Border.EffectProperty, new DropShadowEffect { ShadowDepth = 3, BlurRadius = 13, Direction = 270, Opacity = 0.42 });
+            surface.SetValue(Border.BackgroundProperty, Brushes.Transparent);
+            surface.SetValue(Border.CornerRadiusProperty, new CornerRadius(25));
             var text = new FrameworkElementFactory(typeof(ContentPresenter));
             text.SetValue(ContentPresenter.HorizontalAlignmentProperty, HorizontalAlignment.Center);
             text.SetValue(ContentPresenter.VerticalAlignmentProperty, VerticalAlignment.Center);
+            text.SetValue(UIElement.EffectProperty, new DropShadowEffect { Color = Colors.Black, ShadowDepth = 1, BlurRadius = 5, Opacity = 0.72 });
             surface.AppendChild(text);
             var template = new ControlTemplate(typeof(Button)) { VisualTree = surface };
-            var hover = new Trigger { Property = UIElement.IsMouseOverProperty, Value = true };
-            hover.Setters.Add(new Setter(Border.BorderBrushProperty, Brushes.White, "Glass"));
-            template.Triggers.Add(hover);
-            ball.Template = template;
-            ball.Click += delegate
+            ballBtn.Template = template;
+
+            // High-clarity crystal Liquid Glass lens (ClearLens preset: 0 frost, crisp edge-only SDF refraction + dispersion)
+            var glassOrb = new LiquidGlassSurface(_readerViewport, LiquidGlassPreset.ClearLens, 25, true, true)
+            {
+                Width = 50,
+                Height = 50,
+                Margin = new Thickness(0, 0, 16, 0),
+                HorizontalAlignment = HorizontalAlignment.Right,
+                VerticalAlignment = VerticalAlignment.Center,
+                Visibility = Visibility.Collapsed,
+                Child = ballBtn
+            };
+
+            ballBtn.Click += delegate
             {
                 bool image = _services.TranslationModel.AcceptsPageImage;
-                var menu = new ContextMenu { PlacementTarget = ball, Placement = PlacementMode.Left };
+                var menu = new ContextMenu { PlacementTarget = glassOrb, Placement = PlacementMode.Left };
                 AddTranslationMenuItem(menu, image ? "翻译当前页" : "输入原文", delegate
                 {
                     if (image) { _readerTranslationEpoch++; QueueVisibleTranslation(); }
@@ -79,10 +83,10 @@ namespace KomaComic.Windows
                 AddTranslationMenuItem(menu, "显示原文", ToggleReaderTranslation);
                 AddTranslationMenuItem(menu, "翻译设置", OpenReaderTranslationSettings);
                 AddTranslationMenuItem(menu, "查看 Token 用量", OpenTranslationUsage);
-                ball.ContextMenu = menu;
+                glassOrb.ContextMenu = menu;
                 menu.IsOpen = true;
             };
-            return ball;
+            return glassOrb;
         }
 
         private static void AddTranslationMenuItem(ContextMenu menu, string label, Action action)

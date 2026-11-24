@@ -56,23 +56,37 @@ internal fun applyLibraryMaterial(root: View, wallpaper: ImageView, surface: Vie
     val prefs = ArkReaderApp.instance.prefs
     val file = File(root.context.filesDir, "library-wallpaper.jpg")
     val hasWallpaper = prefs.wallpaperEnabled && file.isFile
-    if (wallpaper.tag != (if (hasWallpaper) file.lastModified() else null)) {
-        wallpaper.tag = if (hasWallpaper) file.lastModified() else null
-        wallpaper.setImageBitmap(if (hasWallpaper) BitmapFactory.decodeFile(file.absolutePath) else null)
-    }
     val dark = root.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK == Configuration.UI_MODE_NIGHT_YES
+    val desiredTag: Any = when {
+        hasWallpaper -> file.lastModified()
+        prefs.glassMaterial -> "ambient-$dark"
+        else -> "none"
+    }
+    if (wallpaper.tag != desiredTag) {
+        wallpaper.tag = desiredTag
+        when {
+            hasWallpaper -> wallpaper.setImageBitmap(BitmapFactory.decodeFile(file.absolutePath))
+            prefs.glassMaterial -> wallpaper.setImageDrawable(AmbientGlassCanvasDrawable(dark))
+            else -> wallpaper.setImageDrawable(null)
+        }
+    }
     if (Build.VERSION.SDK_INT >= 31) {
-        wallpaper.setRenderEffect(if (prefs.glassMaterial && hasWallpaper) RenderEffect.createBlurEffect(20f, 20f, Shader.TileMode.CLAMP) else null)
+        // Gentle softness so wallpaper colors and silhouettes visibly refract through curved Liquid Glass rims
+        wallpaper.setRenderEffect(
+            if (prefs.glassMaterial && hasWallpaper) RenderEffect.createBlurEffect(10f, 10f, Shader.TileMode.CLAMP)
+            else null
+        )
     }
     val ink = if (dark) 0xFF0E1525.toInt() else 0xFFF4F7FD.toInt()
     surface.background = if (prefs.glassMaterial) {
-        GradientDrawable(GradientDrawable.Orientation.TL_BR, intArrayOf(
-            ColorUtils.setAlphaComponent(if (dark) 0xFF141D32.toInt() else 0xFFF2F6FE.toInt(), if (hasWallpaper) 204 else 255),
-            ColorUtils.setAlphaComponent(if (dark) 0xFF0E1629.toInt() else 0xFFEBF2FC.toInt(), if (hasWallpaper) 194 else 255),
-            ColorUtils.setAlphaComponent(if (dark) 0xFF171E35.toInt() else 0xFFF4F0FC.toInt(), if (hasWallpaper) 204 else 255)
-        )).apply {
-            cornerRadius = 22 * root.resources.displayMetrics.density
-            setStroke((root.resources.displayMetrics.density).toInt().coerceAtLeast(1), if (dark) 0x52FFFFFF else 0xE6FFFFFF.toInt())
+        if (hasWallpaper) {
+            GradientDrawable(GradientDrawable.Orientation.TL_BR, intArrayOf(
+                ColorUtils.setAlphaComponent(if (dark) 0xFF10182B.toInt() else 0xFFF2F6FE.toInt(), 184),
+                ColorUtils.setAlphaComponent(if (dark) 0xFF0C1324.toInt() else 0xFFEBF2FC.toInt(), 172),
+                ColorUtils.setAlphaComponent(if (dark) 0xFF131A2F.toInt() else 0xFFF4F0FC.toInt(), 184)
+            ))
+        } else {
+            null
         }
     } else if (hasWallpaper) GradientDrawable().apply { setColor(ColorUtils.setAlphaComponent(ink, 218)) }
     else null
@@ -131,10 +145,26 @@ internal fun Chip.applyGlassChip() {
     chipStrokeColor = ColorStateList.valueOf(if (dark) 0x5EFFFFFF else 0xE6FFFFFF.toInt())
 }
 
-internal fun applyFloatingDock(capsule: View, settings: View?) {
+internal fun applyFloatingDock(capsule: View, settings: View?, backdrop: View? = null) {
     val density = capsule.resources.displayMetrics.density
     val dark = capsule.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK == Configuration.UI_MODE_NIGHT_YES
     val advanced = ArkReaderApp.instance.prefs.glassMaterial
+    if (advanced && backdrop != null) {
+        capsule.applyLiquidGlass(backdrop, LiquidGlassPreset.FLOATING_DOCK, 34f, elevationDp = 7f)
+        if (settings != null) {
+            val orb = settings.applyLiquidGlass(
+                backdrop,
+                LiquidGlassPreset.FLOATING_DOCK,
+                28f,
+                interactiveElastic = true,
+                elevationDp = 7f
+            )
+            orb.setSelectedGlow(settings.isSelected)
+        }
+        return
+    }
+    capsule.detachLiquidGlass()
+    settings?.detachLiquidGlass()
     fun surface(selected: Boolean = false) = GradientDrawable(
         GradientDrawable.Orientation.TL_BR,
         when {
@@ -156,5 +186,31 @@ internal fun applyFloatingDock(capsule: View, settings: View?) {
         }
         settings.background = RippleDrawable(ColorStateList.valueOf(if (dark) 0x3886BDFF else 0x303888E0), plate, null)
         settings.elevation = 6 * density
+    }
+}
+
+internal fun applyMainGlassChrome(
+    backdrop: View,
+    searchPill: View?,
+    bottomNav: View?,
+    profileButton: View?
+) {
+    val enabled = ArkReaderApp.instance.prefs.glassMaterial
+    if (enabled) {
+        searchPill?.applyLiquidGlass(backdrop, LiquidGlassPreset.FROSTED_BAR, 24f, elevationDp = 4f)
+        bottomNav?.applyLiquidGlass(backdrop, LiquidGlassPreset.FLOATING_DOCK, 0f, elevationDp = 8f)
+        profileButton?.applyLiquidGlass(backdrop, LiquidGlassPreset.FLOATING_DOCK, 24f, interactiveElastic = true, elevationDp = 5f)
+    } else {
+        searchPill?.apply {
+            detachLiquidGlass()
+            setBackgroundResource(R.drawable.bg_search_pill)
+            elevation = 0f
+        }
+        bottomNav?.apply {
+            detachLiquidGlass()
+            setBackgroundColor(context.getColor(R.color.surface_bg))
+            elevation = 4f * resources.displayMetrics.density
+        }
+        profileButton?.detachLiquidGlass()
     }
 }

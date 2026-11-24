@@ -91,6 +91,7 @@
                     android:paddingBottom="6dp">
 
                     <LinearLayout
+                        android:id="@+id/searchPill"
                         android:layout_width="0dp"
                         android:layout_height="46dp"
                         android:layout_weight="1"
